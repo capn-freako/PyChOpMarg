@@ -1,0 +1,15 @@
+{
+	"folders":
+	[
+		{
+			"path": ".",
+		},
+	],
+	"build_systems":
+	[
+		{
+			"name": "MyPy",
+			"cmd": "mypy src/",
+		},
+	],
+}
