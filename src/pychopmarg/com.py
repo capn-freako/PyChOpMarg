@@ -42,7 +42,7 @@ def all_combs(xss: list[list[T]]) -> list[list[T]]:
         xss([[T]]): The lists of candidates for each position in the final output.
 
     Returns:
-        [[T]]: All possible combinations of input lists.
+        All possible combinations of input lists.
     """
     if not xss:
         return [[]]
@@ -155,17 +155,39 @@ class COM(HasTraits):
 
     # Reserved functions
 
+    def __init__(self):
+        """
+        Instance creation only! Must still initialize.
+
+        Notes:
+            1. In order to support multi-mode operation (i.e. - library, CLI, and GUI),
+                we have to separate instance *creation* from instance *initialization*.
+                Therefore, at this point you still need to call one of the 3 initializers:
+                    - `init_lib()`,
+                    - `init_cli()`, or
+                    - `init_gui()`.
+                (See their docstrings, below, for more detail.)
+        """
+
+        # Super-class initialization is ABSOLUTELY NECESSARY, in order
+        # to get all the Traits/UI machinery setup correctly.
+        super().__init__()
+
+        self.initialized = False
+
     def __call__(self, do_opt_eq=True, tx_taps: Rvec = None):
         """
         Calculate the COM value.
 
-        KeywordArgs:
+        Keyword Args:
             opt_eq: Perform optimization of linear equalization when True.
                 Default: True
             tx_taps: Used when `do_opt_eq` = False.
                 Default: None
         """
 
+        assert self.initialized, RuntimeError(
+            "You must initialize the instance before you can call it!")
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
             "EQ optimization failed!")
         self.gDC = self.rslts['gDC']
@@ -181,31 +203,31 @@ class COM(HasTraits):
         self.cursor_ix = cursor_ix
         return com
 
-    def __init__(self, params: COMParams, chnl_files: list[str], vic_chnl_ix: int,
-                 zp_sel: int = 1, num_ui: int = 100, gui: bool = True):
+    # Initializers
+
+    def init_lib(self, params: COMParams, chnl_files: list[str], vic_chnl_ix: int,
+                 zp_sel: int = 1, num_ui: int = 100):
         """
-        COM class initializer.
+        COM class initializer for use as a library.
 
         Args:
             params: COM configuration parameters for desired standard.
                 Note: Assumed immutable. ToDo: Can we encode this assumption, using type annotations?
             chnl_files: Touchstone file(s) representing channel, either:
-                1. 8 s4p files: [victim, ], or
+                1. N s4p files: [victim, N-1 aggressors], or
                 2. 1 s32p file, according to VITA 68.2 convention.
-            vic_chnl_ix: Victim channel index (from 1).
+            vic_chnl_ix: Victim channel index (from 1) for option 2.
 
-        KeywordArgs:
+        Keyword Args:
             zp_sel: User selection of package T-line length option (from 1).
                 Default: 1
             num_ui: Number of unit intervals to include in system time vector.
                 Default: 100
-            gui: Set to `False` for script/CLI based usage.
-                Default: True
-        """
 
-        # Super-class initialization is ABSOLUTELY NECESSARY, in order
-        # to get all the Traits/UI machinery setup correctly.
-        super().__init__()
+        Notes:
+            1. Use this initializer when you want to import from *PyChOpMarg*
+                into a larger Python script and/or Jupyter notebook.
+        """
 
         # Set default parameter values, as necessary.
         if 'zc' not in params:
@@ -216,7 +238,7 @@ class COM(HasTraits):
         # Stash function parameters.
         self.params = params
         self.chnl_files = chnl_files
-        self.gui = gui
+        self.gui = False
 
         # Calculate intermediate variable values.
         self.rslts = {}
@@ -309,7 +331,7 @@ class COM(HasTraits):
             c: Value of shunt capacitance (F).
 
         Returns:
-            ntwk: 2-port network equivalent to shunt capacitance, calculated at given frequencies.
+            2-port network equivalent to shunt capacitance, calculated at given frequencies.
 
         Raises:
             None
@@ -331,12 +353,12 @@ class COM(HasTraits):
         Return the 2-port network corresponding to a package transmission line,
         according to (93A-9:14).
 
-        KeywordArgs:
+        Keyword Args:
             zp_opt: Package TL length option (from 1).
                 Default: 1
 
         Returns:
-            ntwk: 2-port network equivalent to package transmission line.
+            2-port network equivalent to package transmission line.
 
         Raises:
             None
@@ -382,14 +404,14 @@ class COM(HasTraits):
         Return the 2-port network corresponding to a complete package model,
         according to (93A-15:16).
 
-        KeywordArgs:
+        Keyword Args:
             zp_opt: Package TL length option (from 1).
                 Default: 1
             isTx: Requesting Tx package when True.
                 Default: True
 
         Returns:
-            ntwk: 2-port network equivalent to complete package model.
+            2-port network equivalent to complete package model.
 
         Raises:
             None
@@ -418,10 +440,8 @@ class COM(HasTraits):
             ValueError: If given network is not two port.
 
         Notes:
-            1. It is at this point in the analysis that the "raw" Touchstone
-                data gets interpolated to our system frequency vector.
-            2. After this step, the package and R0/Rd mismatch have been
-                accounted for, but not the EQ.
+            1. It is at this point in the analysis that the "raw" Touchstone data gets interpolated to our system frequency vector.
+            2. After this step, the package and R0/Rd mismatch have been accounted for, but not the EQ.
         """
 
         assert s2p.s[0].shape == (2, 2), ValueError("I can only convert 2-port networks.")
@@ -471,7 +491,7 @@ class COM(HasTraits):
                 Note: Possitive frequency components only, including fN.
 
         Returns:
-            p: The pulse response corresponding to the given voltage transfer function.
+            The pulse response corresponding to the given voltage transfer function.
 
         Raises:
             ValueError: If the length of the given voltage transfer
@@ -499,7 +519,7 @@ class COM(HasTraits):
         Args:
             tx_taps: Desired Tx tap weights.
 
-        KeywordArgs:
+        Keyword Args:
             apply_eq: Include linear EQ when True; otherwise, exclude it.
                 Default: True
 
@@ -539,12 +559,12 @@ class COM(HasTraits):
             pr_samps: The pulse response samples to filter.
             As: Signal amplitude, as per 93A.1.6.c.
 
-        KeywordArgs:
+        Keyword Args:
             rel_thresh: Filtration threshold (As).
                 Default: 0.001 (i.e. - 0.1%, as per Note 2 of 93A.1.7.1)
 
         Returns:
-            filtered_samps: The subset of `pr_samps` passing filtration.
+            The subset of `pr_samps` passing filtration.
         """
 
         thresh = As * rel_thresh
@@ -559,12 +579,12 @@ class COM(HasTraits):
             As: Signal amplitude, as per 93A.1.6.c.
             cursor_ix: Cursor index.
 
-        KeywordArgs:
+        Keyword Args:
             rel_thresh: Filtration threshold (As).
                 Default: 0.001 (i.e. - 0.1%, as per Note 2 of 93A.1.7.1)
 
         Returns:
-            slopes: The calculated slopes around the valid samples.
+            The calculated slopes around the valid samples.
         """
 
         M = self.params['M']
@@ -583,7 +603,7 @@ class COM(HasTraits):
         Args:
             pulse_resp: The pulse response of interest.
 
-        KeywordArgs:
+        Keyword Args:
             max_range: The search radius, from the peak.
 
         Returns:
@@ -621,17 +641,17 @@ class COM(HasTraits):
 
     def calc_fom(self, tx_taps: Rvec) -> float:
         """
-        Calculate the _figure of merit_ (FOM), given the existing linear EQ settings.
+        Calculate the *figure of merit* (FOM), given the existing linear EQ settings.
 
         Args:
             tx_taps: The Tx FFE tap weights, excepting the cursor.
                 (The cursor takes whatever is left.)
 
         Returns:
-            FOM: The resultant figure of merit.
+            The resultant figure of merit.
 
         Raises:
-            None.
+            None
 
         Notes:
             1. Assumes that `self.gDC` and `self.gDC2` have been set correctly.
@@ -718,14 +738,14 @@ class COM(HasTraits):
         Find the optimum values for the linear equalization parameters:
         c(-2), c(-1), c(1), gDC, and gDC2, as per IEEE 802.3-22 93A.1.6.
 
-        KeywordArgs:
+        Keyword Args:
             do_opt_eq: Perform optimization of linear EQ when True.
                 Default: True
             tx_taps: Used when `do_opt_eq` = False.
                 Default: None
 
         Returns:
-            success: True if no errors encountered; False otherwise.
+            True if no errors encountered; False otherwise.
         """
 
         if do_opt_eq:
@@ -803,27 +823,17 @@ class COM(HasTraits):
         """
         Calculate the interference and noise for COM.
 
-        KeywordArgs:
-            npts: Number of vector points.
-                Default: 2001
-
         Returns:
-            (As, Ani, cursor_ix): Triple containing:
-                - signal amplitude,
-                - noise + interference amplitude (V), and
-                - cursor location within victim pulse response vector.
-
-        Raises:
-            None
-
-        Warns:
-            1. If `2*As/npts` rises above 10 uV, against standard's recommendation.
+            - signal amplitude
+            - noise + interference amplitude (V)
+            - cursor location within victim pulse response vector
 
         Notes:
             1. Assumes the following instance variables have been set:
                 - gDC
                 - gDC2
                 - tx_taps
+            2. Warns if `2*As/npts` rises above 10 uV, against standard's recommendation.
         """
 
         L = self.params['L']

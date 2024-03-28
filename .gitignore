@@ -25,6 +25,8 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.whl
+*.gz
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -164,3 +166,4 @@ cython_debug/
 *.sublime-workspace
 *.html
 chnl_data/example1.s32p
+enable-6.0.0/

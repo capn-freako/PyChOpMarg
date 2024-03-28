@@ -20,10 +20,10 @@ def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Ne
     Args:
         ntwk: 4-port single ended network.
 
-    KeywordArgs:
+    Keyword Args:
         norm: Normalization factor. (Default = 0.5)
         renumber: Automatically detect correct through path when True.
-            Default: False
+                  Default: False
 
     Returns:
         Sdd (2-port).
@@ -43,13 +43,13 @@ def se2mm(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Net
     Args:
         ntwk: 4-port single ended network.
 
-    KeywordArgs:
+    Keyword Args:
         norm: Normalization factor. (Default = 0.5)
         renumber: Automatically detect correct through path when True.
-            Default: False
+                  Default: False
 
     Returns:
-        skrf.Network: Mixed mode equivalent network, in the following format:
+        Mixed mode equivalent network, in the following format:
             Sdd11  Sdd12  Sdc11  Sdc12
             Sdd21  Sdd22  Sdc21  Sdc22
             Scd11  Scd12  Scc11  Scc12
@@ -108,15 +108,15 @@ def import_s32p(filename: str, vic_chnl: int = 1) -> list[tuple[rf.Network, str]
     Args:
         filename: Name of Touchstone file to read in.
 
-    KeywordArgs:
+    Keyword Args:
         vic_chnl: Victim channel number (from 1).
             Default = 1
 
     Returns:
-        [(skrf.Network, str)]: List of 8 pairs, each consisting of:
+        List of 8 pairs, each consisting of:
             - a 2-port network representing a *differential* channel, and
             - the type of that channel, one of: 'THRU', 'NEXT', or 'FEXT.
-            (First element is the victim and the only one of type 'THRU'.)
+                (First element is the victim and the only one of type 'THRU'.)
 
     Raises:
         ValueError: If Touchstone file is not 32-port.
@@ -124,8 +124,8 @@ def import_s32p(filename: str, vic_chnl: int = 1) -> list[tuple[rf.Network, str]
     Notes:
         1. Input Touchstone file is assumed single-ended.
         2. The differential through and xtalk channels are returned.
-        3. Port 2 of all returned channels correspond to the same
-        physical circuit node, typically, the Rx input node.
+        3. Port 2 of all returned channels correspond to the same physical circuit node,
+            typically, the Rx input node.
     """
 
     # Import and sanity check the Touchstone file.
@@ -145,7 +145,7 @@ def import_s32p(filename: str, vic_chnl: int = 1) -> list[tuple[rf.Network, str]
             right(int): Right side channel number (from 1).
 
         Returns:
-            [int]: List of ports (from 0) for desired channel.
+            List of ports (from 0) for desired channel.
         """
         left0 = left - 1     # 0-based
         right0 = right - 1

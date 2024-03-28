@@ -1,0 +1,14 @@
+autodocsumm==0.2.12
+Cython==0.29.37
+matplotlib==3.8.3
+matplotlib-inline==0.1.6
+oldest-supported-numpy==2023.12.21
+PyChOpMarg @ file:///Users/dbanas/prj/PyChOpMarg
+Sphinx==7.2.6
+sphinxcontrib-applehelp==1.0.8
+sphinxcontrib-devhelp==1.0.6
+sphinxcontrib-htmlhelp==2.0.5
+sphinxcontrib-jsmath==1.0.1
+sphinxcontrib-qthelp==1.0.7
+sphinxcontrib-serializinghtml==1.1.10
+swig==3.0.12
