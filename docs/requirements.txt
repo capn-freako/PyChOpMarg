@@ -1,7 +1,10 @@
+click==8.1.7
 Cython==0.29.37
 matplotlib==3.8.3
 matplotlib-inline==0.1.6
 oldest-supported-numpy==2023.12.21
+pyface==8.0.0
+scikit-rf==0.32.0
 Sphinx==7.2.6
 sphinx-rtd-theme
 sphinxcontrib-applehelp==1.0.8
