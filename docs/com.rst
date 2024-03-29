@@ -12,9 +12,7 @@ Functions
 Classes
 ---------
 
-.. autosummary::
-   :toctree: _autosummary
-   :nosignatures:
-   :noinherited:
-
-   pychopmarg.com.COM
+.. autoclass:: pychopmarg.com.COM
+   :members:
+   :undoc-members:
+   :no-inherited-members:
