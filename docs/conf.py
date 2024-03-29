@@ -20,14 +20,17 @@ import sys
 sys.path.insert(0,  os.path.abspath('../src'))
 extensions = [
     'sphinx.ext.autodoc', 
+    'sphinx.ext.coverage',
     'sphinx.ext.napoleon', 
     'sphinx.ext.todo', 
+    'sphinx.ext.autosummary', 
     'sphinx.ext.viewcode', 
-    'autodocsumm', 
-    'sphinx.ext.coverage',
 ]
-auto_doc_default_options = {'autosummary': True}
-
+auto_doc_default_options = {
+   'undoc-members': True,
+   'inherited-members': False,
+   'show-inheritance': True,
+}
 templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 autodoc_mock_imports = ["matplotlib", "enable"]

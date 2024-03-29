@@ -161,12 +161,14 @@ class COM(HasTraits):
 
         Notes:
             1. In order to support multi-mode operation (i.e. - library, CLI, and GUI),
-                we have to separate instance *creation* from instance *initialization*.
-                Therefore, at this point you still need to call one of the 3 initializers:
-                    - `init_lib()`,
-                    - `init_cli()`, or
-                    - `init_gui()`.
-                (See their docstrings, below, for more detail.)
+               we have to separate instance *creation* from instance *initialization*.
+               Therefore, at this point you still need to call one of the 3 initializers:
+
+                   - `init_lib()`,
+                   - `init_cli()`, or
+                   - `init_gui()`.
+                    
+               (See their docstrings, below, for more detail.)
         """
 
         # Super-class initialization is ABSOLUTELY NECESSARY, in order

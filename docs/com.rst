@@ -1,8 +1,20 @@
 pychopmarg.com
 ==============
 
-.. automodule:: pychopmarg.com
-   :members:
-   :autosummary:
-   :undoc-members:
-   :show-inheritance:
+Functions
+---------
+
+.. autofunction:: pychopmarg.com.all_combs
+
+.. autofunction:: pychopmarg.com.calc_Hffe
+
+
+Classes
+---------
+
+.. autosummary::
+   :toctree: _autosummary
+   :nosignatures:
+   :noinherited:
+
+   pychopmarg.com.COM
