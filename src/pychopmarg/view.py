@@ -8,7 +8,7 @@ Original date:   March 26, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from enable.component_editor import ComponentEditor
+# from enable.component_editor import ComponentEditor
 from numpy                   import log10, array
 from pyface.image_resource   import ImageResource
 from traitsui.api import (  # CloseAction,
