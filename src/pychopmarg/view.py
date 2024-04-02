@@ -37,17 +37,289 @@ traits_view = View(
     Group(  # Members correspond to top-level tabs.
         VGroup(  # "Config." tab
             HGroup(
-                Item(
-                    name="ui",
-                    label="UI",
-                    tooltip="Unit Interval (ps)",
-                    show_label=True,
-                    enabled_when="True",
-                    editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                VGroup(
+                    HGroup(
+                        Item(
+                            name="fb",
+                            # label="fb",
+                            tooltip="Baud. rate (GHz)",
+                            # show_label=True,
+                            # enabled_when="True",
+                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                        ),
+                        Item(label="GHz"),
+                    ),
+                    Item(
+                        name="nspui",
+                        # label="nspui",
+                        tooltip="Samples per UI",
+                    ),
+                    HGroup(
+                        Item(
+                            name="tmax",
+                            # label="fb",
+                            tooltip="Maximum simulation time (ns)",
+                            # show_label=True,
+                            # enabled_when="True",
+                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                        ),
+                        Item(label="ns"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="fmax",
+                            # label="fb",
+                            tooltip="Maximum system frequency (GHz)",
+                            # show_label=True,
+                            # enabled_when="True",
+                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                        ),
+                        Item(label="GHz"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="fstep",
+                            # label="fb",
+                            tooltip="System frequency step (MHz)",
+                            # show_label=True,
+                            # enabled_when="True",
+                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                        ),
+                        Item(label="MHz"),
+                    ),
+                    label="Time and Frequency",
+                    show_border=True,
                 ),
-                Item(label="ps")
+                VGroup(
+                    HGroup(
+                        Item(
+                            name="Av",
+                            # label="fb",
+                            tooltip="Victim Tx Vout (V)",
+                            # show_label=True,
+                            # enabled_when="True",
+                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                        ),
+                        Item(label="V"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="Afe",
+                            # label="fb",
+                            tooltip="FEXT Tx Vout (V)",
+                            # show_label=True,
+                            # enabled_when="True",
+                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                        ),
+                        Item(label="V"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="Ane",
+                            # label="fb",
+                            tooltip="NEXT Tx Vout (V)",
+                            # show_label=True,
+                            # enabled_when="True",
+                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                        ),
+                        Item(label="V"),
+                    ),
+                    Item(
+                        name="L",
+                        # label="fb",
+                        tooltip="Modulation levels",
+                        # show_label=True,
+                        # enabled_when="True",
+                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                    ),
+                    Item(
+                        name="fr",
+                        tooltip="AFE corner frequency (fb)",
+                    ),
+                    label="Voltage and Modulation",
+                    show_border=True,
+                ),
+                label="System",
+                show_border=True,
             ),
-            label="Config."
+            HGroup(
+                VGroup(
+                    Item(
+                        name="c0_min",
+                        # label="nspui",
+                        tooltip="Minimum allowed main tap weight.",
+                    ),
+                    Item(
+                        name="tx_taps_min",
+                        label="Min.",
+                        tooltip="Minimum tap weights.",
+                        # show_label=True,
+                        # enabled_when="True",
+                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                    ),
+                    Item(
+                        name="tx_taps_max",
+                        label="Max.",
+                        tooltip="Maximum tap weights.",
+                        # show_label=True,
+                        # enabled_when="True",
+                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                    ),
+                    Item(
+                        name="tx_taps_step",
+                        label="Step",
+                        tooltip="Tap weight steps.",
+                        # show_label=True,
+                        # enabled_when="True",
+                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                    ),
+                    Item(
+                        name="tx_taps",
+                        label="Value",
+                        tooltip="Tap weights.",
+                        # show_label=True,
+                        # enabled_when="True",
+                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                    ),
+                    label="Tx FFE",
+                    show_border=True,
+                ),
+                VGroup(
+                    Item(
+                        name="gDC",
+                        tooltip="CTLE d.c. gain 1 (dB)",
+                        editor=CheckListEditor(values=[(-n, str(n)) for n in range(13)]),
+                    ),
+                    Item(
+                        name="gDC2",
+                        tooltip="CTLE d.c. gain 2 (dB)",
+                        editor=CheckListEditor(values=[(0, "0")]),
+                    ),
+                    HGroup(
+                        Item(
+                            name="fz",
+                            tooltip="CTLE zero frequency (GHz)",
+                        ),
+                        Item(label="GHz"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="fp1",
+                            tooltip="CTLE first pole frequency (GHz)",
+                        ),
+                        Item(label="GHz"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="fp2",
+                            tooltip="CTLE second pole frequency (GHz)",
+                        ),
+                        Item(label="GHz"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="fLF",
+                            tooltip="CTLE low-f corner frequency (MHz)",
+                        ),
+                        Item(label="MHz"),
+                    ),
+                    label="Rx CTLE",
+                    show_border=True,
+                ),
+                label="Equalization",
+                show_border=True,
+            ),
+            HGroup(
+                VGroup(
+                    HGroup(
+                        Item(
+                            name="R0",
+                            tooltip="System reference impedance (Ohms)",
+                        ),
+                        Item(label="Ohms"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="Rd",
+                            tooltip="On-die termination impedance (Ohms)",
+                        ),
+                        Item(label="Ohms"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="Cd",
+                            tooltip="Die parasitic capacitance (pF)",
+                        ),
+                        Item(label="pF"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="Cb",
+                            tooltip="Bumb parasitic capacitance (pF)",
+                        ),
+                        Item(label="pF"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="Cp",
+                            tooltip="Ball parasitic capacitance (pF)",
+                        ),
+                        Item(label="pF"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="zp",
+                            tooltip="Package transmission line length (mm)",
+                            editor=CheckListEditor(values=[(12, "12"), (30, "30")]),
+                        ),
+                        Item(label="mm"),
+                    ),
+                    label="Package and Die",
+                    show_border=True,
+                ),
+                VGroup(
+                    Item(
+                        name="DER0",
+                        tooltip="Detector error rate threshold.",
+                    ),
+                    HGroup(
+                        Item(
+                            name="sigma_Rj",
+                            tooltip="Random noise standard deviation (UI)",
+                        ),
+                        Item(label="UI"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="Add",
+                            tooltip="Deterministic noise amplitude (UI)",
+                        ),
+                        Item(label="UI"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="eta0",
+                            tooltip="Spectral noise density (V^2/GHz)",
+                        ),
+                        Item(label="V^2/GHz"),
+                    ),
+                    HGroup(
+                        Item(
+                            name="TxSNR",
+                            tooltip="Tx signal-to-noise ratio (dB)",
+                        ),
+                        Item(label="dB"),
+                    ),
+                    label="Noise and DER",
+                    show_border=True,
+                ),
+                label="Parasitics and Noise",
+                show_border=True,
+            ),
+            label="Config.",
+        ),
+        VGroup(  # "Results" tab
+            label="Results",
         ),
         layout="tabbed",
         springy=True,
