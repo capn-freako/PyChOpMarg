@@ -18,7 +18,7 @@ import numpy as np  # type: ignore
 import skrf as rf  # type: ignore
 
 from scipy.interpolate import interp1d
-from traits.api import HasTraits, Property, Array, Float, Int, List, cached_property  # type: ignore
+from traits.api import HasTraits, Property, Array, File, Float, Int, List, cached_property, Str, Button  # type: ignore
 from typing import TypeVar, Any, Dict
 
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
@@ -154,6 +154,16 @@ class COM(HasTraits):
     eta0 = Float(5.2e-8)  # spectral noise density (V^2/GHz).
     TxSNR = Float(27)  # Tx signal-to-noise ratio (dB).
     DER0 = Float(1e-5)  # detector error rate threshold.
+    # - Channel file(s)
+    chnl_s32p = File("", entries=5, filter=["*.s32p"], exists=True)
+    chnl_s4p_thru = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_fext1 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_fext2 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_fext3 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_next1 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_next2 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_next3 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_next4 = File("", entries=5, filter=["*.s4p"], exists=True)
 
     def _fb_changed(self):
         "Keep global version in sync."
