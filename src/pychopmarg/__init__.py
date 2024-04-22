@@ -15,7 +15,7 @@ from importlib.metadata import version as _get_version
 # Set PEP396 version attribute
 try:
     __version__ = _get_version("PyChOpMarg")
-except:
+except Exception:
     __version__ = "(dev)"
 
 __date__ = "March 25, 2024"

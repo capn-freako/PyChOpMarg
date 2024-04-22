@@ -10,11 +10,12 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 
 from pathlib import Path
 
-import click
+import click  # type: ignore
 
 from pychopmarg import __version__
 from pychopmarg.view import traits_view
 from pychopmarg.com import COM
+
 
 @click.group(invoke_without_command=True, context_settings=dict(help_option_names=["-h", "--help"]))
 @click.pass_context

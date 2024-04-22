@@ -9,29 +9,76 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 # from enable.component_editor import ComponentEditor
-from numpy                   import log10, array
-from pyface.image_resource   import ImageResource
+# # from numpy                   import log10, array  # type: ignore
+# from pyface.image_resource   import ImageResource
 from traitsui.api import (  # CloseAction,
     Action,
     CheckListEditor,
+    CSVListEditor,
     FileEditor,
     Group,
+    Handler,
     HGroup,
     Item,
-    Menu,
-    MenuBar,
-    NoButtons,
-    ObjectColumn,
-    RangeEditor,
-    Separator,
-    TableEditor,
-    TextEditor,
+    # # Menu,
+    # # MenuBar,
+    # # NoButtons,
+    # ObjectColumn,
+    # RangeEditor,
+    # Separator,
+    # TableEditor,
+    # TextEditor,
     VGroup,
     View,
-    spring,
+    # spring,
 )
-from traitsui.api import ListStrEditor, UItem
-from traitsui.ui_editors.array_view_editor import ArrayViewEditor
+# from traitsui.api import ListStrEditor, UItem
+# from traitsui.ui_editors.array_view_editor import ArrayViewEditor
+
+
+# Event handler.
+class MyHandler(Handler):
+    """This handler is instantiated by the View and handles user button clicks."""
+
+    def do_calc_com(self, info):
+        """Run the COM calculation."""
+        the_pychopmarg = info.object
+        try:
+            the_pychopmarg()
+        except Exception as err:
+            the_pychopmarg.status_str = str(err)
+            raise
+
+
+# Buttons.
+calc_com = Action(name="Calc. COM", action="do_calc_com")
+
+
+# Formatting utilities.
+def to_ns(t: float) -> str:
+    """Return formatted time in nanoseconds."""
+    return f"{t*1e9:6.2f}"
+
+
+def to_GHz(f: float) -> str:
+    """Return formatted frequency in GHz."""
+    return f"{f/1e9:6.2f}"
+
+
+def to_MHz(f: float) -> str:
+    """Return formatted frequency in MHz."""
+    return f"{f/1e6:6.2f}"
+
+
+def to_pF(c: float) -> str:
+    """Return formatted capacitance in pF."""
+    return f"{c*1e12:6.2f}"
+
+
+def to_nH(L: float) -> str:
+    """Return formatted inductance in nH."""
+    return f"{L*1e9:6.2f}"
+
 
 # Main window layout definition.
 traits_view = View(
@@ -41,7 +88,7 @@ traits_view = View(
                 VGroup(
                     HGroup(
                         Item(
-                            name="fb",
+                            name="fb", format_func=to_GHz,
                             # label="fb",
                             tooltip="Baud. rate (GHz)",
                             # show_label=True,
@@ -68,7 +115,7 @@ traits_view = View(
                     ),
                     HGroup(
                         Item(
-                            name="fmax",
+                            name="fmax", format_func=to_GHz,
                             # label="fb",
                             tooltip="Maximum system frequency (GHz)",
                             # show_label=True,
@@ -79,7 +126,7 @@ traits_view = View(
                     ),
                     HGroup(
                         Item(
-                            name="fstep",
+                            name="fstep", format_func=to_MHz,
                             # label="fb",
                             tooltip="System frequency step (MHz)",
                             # show_label=True,
@@ -181,103 +228,132 @@ traits_view = View(
             ),
             HGroup(
                 VGroup(
-                    Item(
-                        name="chnl_s32p",
-                        label="s32p",
-                        editor=FileEditor(dialog_style="open", filter=["*.s32p"]),
+                    HGroup(
+                        Item(
+                            name="chnl_s32p",
+                            label="s32p",
+                            editor=FileEditor(dialog_style="open", filter=["*.s32p"]),
+                        ),
+                        Item(
+                            name="vic_chnl_ix",
+                            enabled_when="chnl_s32p",
+                        ),
                     ),
-                    Item(
-                        name="chnl_s4p_thru",
-                        label="s4p_THRU",
-                        editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
-                    ),
-                    VGroup(
-                        HGroup(
+                    HGroup(
+                        VGroup(
                             Item(
-                                name="R0",
-                                tooltip="System reference impedance (Ohms)",
+                                name="chnl_s4p_thru",
+                                label="s4p_THRU",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
                             ),
-                            Item(label="Ohms"),
-                        ),
-                        HGroup(
                             Item(
-                                name="Rd",
-                                tooltip="On-die termination impedance (Ohms)",
+                                name="chnl_s4p_fext1",
+                                label="s4p_FEXT1",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
                             ),
-                            Item(label="Ohms"),
-                        ),
-                        HGroup(
                             Item(
-                                name="Cd",
-                                tooltip="Die parasitic capacitance (pF)",
+                                name="chnl_s4p_fext2",
+                                label="s4p_FEXT2",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
                             ),
-                            Item(label="pF"),
-                        ),
-                        HGroup(
                             Item(
-                                name="Cb",
-                                tooltip="Bumb parasitic capacitance (pF)",
+                                name="chnl_s4p_fext3",
+                                label="s4p_FEXT3",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
                             ),
-                            Item(label="pF"),
                         ),
-                        HGroup(
+                        VGroup(
                             Item(
-                                name="Cp",
-                                tooltip="Ball parasitic capacitance (pF)",
+                                name="chnl_s4p_next1",
+                                label="s4p_NEXT1",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
                             ),
-                            Item(label="pF"),
+                            Item(
+                                name="chnl_s4p_next2",
+                                label="s4p_NEXT2",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
+                            ),
+                            Item(
+                                name="chnl_s4p_next3",
+                                label="s4p_NEXT3",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
+                            ),
+                            Item(
+                                name="chnl_s4p_next4",
+                                label="s4p_NEXT4",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
+                            ),
                         ),
-                        label="Package and Die",
-                        show_border=True,
                     ),
                     label="Interconnect",
                     show_border=True,
                 ),
                 VGroup(
-                    Item(
-                        name="chnl_s4p_fext1",
-                        label="s4p_FEXT1",
-                        editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
-                    ),
-                    Item(
-                        name="chnl_s4p_fext2",
-                        label="s4p_FEXT2",
-                        editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
-                    ),
-                    Item(
-                        name="chnl_s4p_fext3",
-                        label="s4p_FEXT3",
-                        editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
-                    ),
-                    Item(
-                        name="chnl_s4p_next1",
-                        label="s4p_NEXT1",
-                        editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
-                    ),
-                    Item(
-                        name="chnl_s4p_next2",
-                        label="s4p_NEXT2",
-                        editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
-                    ),
-                    Item(
-                        name="chnl_s4p_next3",
-                        label="s4p_NEXT3",
-                        editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
-                    ),
-                    Item(
-                        name="chnl_s4p_next4",
-                        label="s4p_NEXT4",
-                        editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                    HGroup(
+                        VGroup(
+                            HGroup(
+                                Item(
+                                    name="R0",
+                                    tooltip="System reference impedance (Ohms)",
+                                ),
+                                Item(label="Ohms"),
+                            ),
+                            HGroup(
+                                Item(
+                                    name="Rd",
+                                    tooltip="On-die termination impedance (Ohms)",
+                                ),
+                                Item(label="Ohms"),
+                            ),
+                        ),
+                        VGroup(
+                            HGroup(
+                                Item(
+                                    name="Cd", format_func=to_pF,
+                                    tooltip="Die parasitic capacitance (pF)",
+                                ),
+                                Item(label="pF"),
+                            ),
+                            HGroup(
+                                Item(
+                                    name="Cb", format_func=to_pF,
+                                    tooltip="Bumb parasitic capacitance (pF)",
+                                ),
+                                Item(label="pF"),
+                            ),
+                            HGroup(
+                                Item(
+                                    name="Cp", format_func=to_pF,
+                                    tooltip="Ball parasitic capacitance (pF)",
+                                ),
+                                Item(label="pF"),
+                            ),
+                        ),
                     ),
                     HGroup(
                         Item(
-                            name="zp",
+                            name="zp_vals",
                             tooltip="Package transmission line length (mm)",
-                            editor=CheckListEditor(values=[(12, "12"), (30, "30")]),
+                            editor=CSVListEditor(),
                         ),
                         Item(label="mm"),
                     ),
-                    label="Crosstalk",
+                    Item(
+                        name="zp_sel",
+                        # editor=CheckListEditor(name="zp_sel_lbls", values=[0, 1]),
+                        editor=CheckListEditor(values=[(0, "1"), (1, "2")]),
+                        # editor=CheckListEditor(values="zp_vals"),
+                        # editor=CSVListEditor(),
+                    ),
+                    label="Package",
                     show_border=True,
                 ),
                 label="Channel",
@@ -330,38 +406,38 @@ traits_view = View(
                         Item(
                             name="gDC",
                             tooltip="CTLE d.c. gain 1 (dB)",
-                            editor=CheckListEditor(values=[(-n, str(n)) for n in range(13)]),
+                            # editor=CheckListEditor(values=[(-n, str(n)) for n in range(13)]),
                         ),
                         Item(
                             name="gDC2",
                             tooltip="CTLE d.c. gain 2 (dB)",
-                            editor=CheckListEditor(values=[(0, "0")]),
+                            # editor=CheckListEditor(values=[(0, "0")]),
                         ),
                     ),
                     HGroup(
                         Item(
-                            name="fz",
+                            name="fz", format_func=to_GHz,
                             tooltip="CTLE zero frequency (GHz)",
                         ),
                         Item(label="GHz"),
                     ),
                     HGroup(
                         Item(
-                            name="fp1",
+                            name="fp1", format_func=to_GHz,
                             tooltip="CTLE first pole frequency (GHz)",
                         ),
                         Item(label="GHz"),
                     ),
                     HGroup(
                         Item(
-                            name="fp2",
+                            name="fp2", format_func=to_GHz,
                             tooltip="CTLE second pole frequency (GHz)",
                         ),
                         Item(label="GHz"),
                     ),
                     HGroup(
                         Item(
-                            name="fLF",
+                            name="fLF", format_func=to_MHz,
                             tooltip="CTLE low-f corner frequency (MHz)",
                         ),
                         Item(label="MHz"),
@@ -384,9 +460,9 @@ traits_view = View(
         id="tabs",
     ),
     resizable=True,
-    # handler=MyHandler(),
-    buttons=NoButtons,
-    # statusbar="status_str",
+    handler=MyHandler(),
+    buttons=[calc_com],
+    statusbar="status_str",
     title="PyChOpMarg",
     # icon=ImageResource("icon.png"),
 )
