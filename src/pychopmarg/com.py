@@ -119,6 +119,25 @@ def calc_Hffe(tap_weights: list[float]) -> Cvec:
                             enumerate(cs))))
 
 
+def print_taps(ws: list[float]) -> str:
+    """Return formatted tap weight values."""
+    n_ws = len(ws)
+    if n_ws == 0:
+        return ""
+    res = f"{ws[0]:5.2f}"
+    if n_ws > 1:
+        if n_ws > 8:
+            for w in ws[1:8]:
+                res += f" {w:5.2f}"
+            res += f"\n{ws[8]:5.2f}"
+            for w in ws[9:]:
+                res += f" {w:5.2f}"
+        else:
+            for w in ws[1:]:
+                res += f" {w:5.2f}"
+    return res
+
+
 class COM(HasTraits):
     """
     Encoding of the IEEE 802.3-22 Annex 93A "Channel Operating Margin"
@@ -191,6 +210,27 @@ class COM(HasTraits):
     chnl_s4p_next3 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_next4 = File("", entries=5, filter=["*.s4p"], exists=True)
     vic_chnl_ix = Int(1)
+    # - Results
+    # -- COM
+    com = Float(0.0)
+    com_As = Float(0.0)
+    com_cursor_ix = Int(0)
+    com_sigma_Tx = Float(0.0)
+    com_sigma_G = Float(0.0)
+    com_sigma_N = Float(0.0)
+    com_dfe_taps = Str(print_taps([0.0] * N_DFE))
+    # -- FOM
+    fom = Float(0.0)
+    fom_As = Float(0.0)
+    Ani = Float(0.0)
+    fom_cursor_ix = Int(0)
+    sigma_ISI = Float(0.0)
+    sigma_J = Float(0.0)
+    sigma_XT = Float(0.0)
+    sigma_Tx = Float(0.0)
+    sigma_N = Float(0.0)
+    fom_tx_taps = Str(print_taps([0.0] * nTxTaps))
+    fom_dfe_taps = Str(print_taps([0.0] * N_DFE))
 
     def _fb_changed(self):
         "Keep global version in sync."
@@ -591,18 +631,13 @@ class COM(HasTraits):
         self.status_str = "Optimizing EQ..."
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
             "EQ optimization failed!")
-        self.gDC = self.rslts['gDC']
-        self.gDC2 = self.rslts['gDC2']
-        self.tx_taps = [self.rslts['tx_taps'],]
 
         self.status_str = "Calculating noise..."
-        As, Ani, cursor_ix = self.calc_noise()
+        As, Ani, self.cursor_ix = self.calc_noise()
         com = 20 * np.log10(As / Ani)
+        self.As = As
+        self.Ani = Ani
         self.com = com
-        self.rslts['As'] = As * 1_000  # (mV)
-        self.rslts['Ani'] = Ani * 1_000  # (mV)
-        self.rslts['com'] = com
-        self.cursor_ix = cursor_ix
         self.status_str = f"Ready; COM = {com: 5.1f} dB"
         return com
 
@@ -1083,20 +1118,21 @@ class COM(HasTraits):
         # Check for error and save the best results.
         if not fom_max_changed:
             return False
-        self.rslts['fom'] = fom_max
-        self.rslts['gDC2'] = gDC2_best
-        self.rslts['gDC'] = gDC_best
-        self.rslts['tx_taps'] = tx_taps_best
-        self.rslts['dfe_tap_weights'] = dfe_tap_weights_best
-        self.rslts['cursor_ix'] = cursor_ix_best
-        self.rslts['As'] = As_best * 1_000  # (mV)
-        self.rslts['sigma_ISI'] = np.sqrt(varISI_best) * 1_000  # (mV)
-        self.rslts['sigma_J'] = np.sqrt(varJ_best) * 1_000  # (mV)
-        self.rslts['sigma_XT'] = np.sqrt(varXT_best) * 1_000  # (mV)
-        # These two are also calculated by `calc_noise()`; so, add "_best".
-        self.rslts['sigma_Tx_best'] = np.sqrt(varTx_best) * 1_000  # (mV)
-        self.rslts['sigma_N_best'] = np.sqrt(varN_best) * 1_000  # (mV)
-        self.rslts['foms'] = foms
+        self.fom = fom_max
+        self.gDC2 = gDC2_best
+        self.gDC = gDC_best
+        self.tx_taps = [tx_taps_best,]
+        self.fom_tx_taps = print_taps(tx_taps_best)
+        self.fom_dfe_taps = print_taps(dfe_tap_weights_best)
+        self.fom_cursor_ix = cursor_ix_best
+        self.fom_As = As_best
+        self.sigma_ISI = np.sqrt(varISI_best)
+        self.sigma_J = np.sqrt(varJ_best)
+        self.sigma_XT = np.sqrt(varXT_best)
+        # These two are also calculated by `calc_noise()`.
+        self.sigma_Tx = np.sqrt(varTx_best)
+        self.sigma_N = np.sqrt(varN_best)
+        self.foms = foms
         return True
 
     def calc_noise(self) -> tuple[float, float, int]:
@@ -1229,16 +1265,17 @@ class COM(HasTraits):
 
         # Store some results.
         self.pulse_resps = pulse_resps
-        self.cursor_ix = cursor_ix
-        self.rslts['sigma_Tx'] = np.sqrt(varTx) * 1_000  # (mV)
-        self.rslts['sigma_G'] = np.sqrt(varG) * 1_000  # (mV)
-        self.rslts['sigma_N'] = np.sqrt(varN) * 1_000  # (mV)
+        self.com_cursor_ix = cursor_ix
+        self.com_sigma_Tx = np.sqrt(varTx)
+        self.com_sigma_G = np.sqrt(varG)
+        self.com_sigma_N = np.sqrt(varN)
         self.rslts['pG'] = pG
         self.rslts['pN'] = pN
         self.rslts['py'] = py
         self.rslts['Py'] = Py
         self.rslts['y'] = y
-        self.rslts['dfe_taps'] = dfe_tap_weights
+        self.com_dfe_taps = print_taps(dfe_tap_weights)
+        self.com_As = As
 
         return (As,
                 abs(np.where(Py >= self.DER0)[0][0] - npts // 2) * ystep,

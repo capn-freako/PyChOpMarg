@@ -80,6 +80,11 @@ def to_nH(L: float) -> str:
     return f"{L*1e9:6.2f}"
 
 
+def to_mV(v: float) -> str:
+    """Return formatted voltage in mV."""
+    return f"{v*1e3:6.2f}"
+
+
 # Main window layout definition.
 traits_view = View(
     Group(  # Members correspond to top-level tabs.
@@ -451,8 +456,84 @@ traits_view = View(
             label="Config.",
         ),
         VGroup(  # "Results" tab
-            Item("rslts"),
-            Item("fom_rslts"),
+            HGroup(
+                HGroup(
+                    VGroup(
+                        HGroup(
+                            HGroup(
+                                Item(name="com", label="COM", format_str="%4.1f", style="readonly"),
+                                Item(label="dB"),
+                            ),
+                            Item(label="     "),
+                            HGroup(
+                                Item(name="com_As", label="As", format_func=to_mV, style="readonly"),
+                                Item(label="mV"),
+                            ),
+                            Item(label="     "),
+                            HGroup(
+                                Item(name="Ani", label="Ani", format_func=to_mV, style="readonly"),
+                                Item(label="mV"),
+                            ),
+                        ),
+                        Item(name="com_cursor_ix", label="CurPos", style="readonly"),
+                        Item(name="com_dfe_taps", label="Rx DFE", style="readonly"),
+                        label="Results",
+                        show_border=True,
+                    ),
+                    VGroup(
+                        Item(name="com_sigma_Tx", label="Tx", format_func=to_mV, style="readonly"),
+                        Item(name="com_sigma_N",  label="N",  format_func=to_mV, style="readonly"),
+                        Item(name="com_sigma_G",  label="G",  format_func=to_mV, style="readonly"),
+                        label="Noise Sigmas (mV)",
+                        show_border=True,
+                    ),
+                    label="COM",
+                    show_border=True,
+                ),
+                HGroup(
+                    VGroup(
+                        HGroup(
+                            HGroup(
+                                Item(name="fom", label="FOM", format_str="%4.1f", style="readonly"),
+                                Item(label="dB"),
+                            ),
+                            Item(label="     "),
+                            HGroup(
+                                Item(name="fom_As", label="As", format_func=to_mV, style="readonly"),
+                                Item(label="mV"),
+                            ),
+                        ),
+                        HGroup(
+                            Item(name="fom_cursor_ix", label="CurPos", style="readonly"),
+                            Item(label="     "),
+                            HGroup(
+                                Item(name="gDC", label="gDC", format_str="%4.1f", style="readonly"),
+                                Item(label="dB"),
+                            ),
+                            Item(label="     "),
+                            HGroup(
+                                Item(name="gDC2", label="gDC2", format_str="%4.1f", style="readonly"),
+                                Item(label="dB"),
+                            ),
+                        ),
+                        Item(name="fom_dfe_taps", label="Rx DFE", style="readonly"),
+                        Item(name="fom_tx_taps",  label="Tx FFE", style="readonly"),
+                        label="Results",
+                        show_border=True,
+                    ),
+                    VGroup(
+                        Item(name="sigma_Tx",  label="Tx",  format_func=to_mV, style="readonly"),
+                        Item(name="sigma_N",   label="N",   format_func=to_mV, style="readonly"),
+                        Item(name="sigma_ISI", label="ISI", format_func=to_mV, style="readonly"),
+                        Item(name="sigma_J",   label="J",   format_func=to_mV, style="readonly"),
+                        Item(name="sigma_XT",  label="XT",  format_func=to_mV, style="readonly"),
+                        label="Noise Sigmas (mV)",
+                        show_border=True,
+                    ),
+                    label="FOM",
+                    show_border=True,
+                ),
+            ),
             label="Results",
         ),
         layout="tabbed",
