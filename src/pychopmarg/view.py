@@ -8,7 +8,7 @@ Original date:   March 26, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-# from enable.component_editor import ComponentEditor
+from enable.component_editor import ComponentEditor
 # # from numpy                   import log10, array  # type: ignore
 # from pyface.image_resource   import ImageResource
 from traitsui.api import (  # CloseAction,
@@ -318,6 +318,13 @@ traits_view = View(
                                 ),
                                 Item(label="Ohms"),
                             ),
+                            HGroup(
+                                Item(
+                                    name="zp",
+                                    tooltip="Package transmission line length",
+                                ),
+                                Item(label="mm"),
+                            ),
                         ),
                         VGroup(
                             HGroup(
@@ -342,21 +349,6 @@ traits_view = View(
                                 Item(label="pF"),
                             ),
                         ),
-                    ),
-                    HGroup(
-                        Item(
-                            name="zp_vals",
-                            tooltip="Package transmission line length (mm)",
-                            editor=CSVListEditor(),
-                        ),
-                        Item(label="mm"),
-                    ),
-                    Item(
-                        name="zp_sel",
-                        # editor=CheckListEditor(name="zp_sel_lbls", values=[0, 1]),
-                        editor=CheckListEditor(values=[(0, "1"), (1, "2")]),
-                        # editor=CheckListEditor(values="zp_vals"),
-                        # editor=CSVListEditor(),
                     ),
                     label="Package",
                     show_border=True,
@@ -534,6 +526,7 @@ traits_view = View(
                     show_border=True,
                 ),
             ),
+            Item("cont1", editor=ComponentEditor(high_resolution=False), show_label=False, springy=True),
             label="Results",
         ),
         layout="tabbed",

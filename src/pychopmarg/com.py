@@ -14,9 +14,22 @@ ToDo:
     1. Provide type hints for imports.
 """
 
+PLOT_SPACING = 20
+
 import numpy as np  # type: ignore
 import skrf as rf  # type: ignore
 
+from chaco.api import ArrayPlotData, GridPlotContainer
+from chaco.api import (
+    ArrayPlotData,
+    ColorMapper,
+    GridPlotContainer,
+    OverlayPlotContainer,
+    Plot,
+    PlotAxis,
+    VPlotContainer
+)  # type: ignore
+from chaco.tools.api import PanTool, ZoomTool
 from scipy.interpolate import interp1d
 from traits.api import (
     Array,
@@ -26,6 +39,7 @@ from traits.api import (
     File,
     Float,
     HasTraits,
+    Instance,
     Int,
     List,
     Property,
@@ -72,13 +86,14 @@ def all_combs(xss: list[list[T]]) -> list[list[T]]:
 
 # @cache
 # def calc_Hffe(tap_weights: Rvec) -> Cvec:
-def calc_Hffe(tap_weights: list[float]) -> Cvec:
+def calc_Hffe(tap_weights: list[float], n_post: int) -> Cvec:
     """
     Calculate the voltage transfer function, H(f), for the Tx FFE,
     according to (93A-21).
 
     Args:
         tap_weights: The vector of filter tap weights, excluding the cursor tap.
+        n_post: The number of post-cursor taps.
 
     Returns:
         The complex voltage transfer function, H(f), for the Tx FFE.
@@ -99,9 +114,6 @@ def calc_Hffe(tap_weights: list[float]) -> Cvec:
             is repeated often.)
             (See the `opt_eq()` method of the `COM` class.)
         2. Currently, a single post-cursor tap is assumed.
-
-    ToDo:
-        1. Remove the single post-cursor tap assumption.
     """
 
     assert len(gFreqs) and gFb and gC0min and gNtaps, RuntimeError(
@@ -114,7 +126,7 @@ def calc_Hffe(tap_weights: list[float]) -> Cvec:
         return np.ones(len(gFreqs))
     else:
         cs = tap_weights
-        cs.insert(-1, c0)  # Note the assumption of only one post-cursor tap!
+        cs.insert(-n_post, c0)
         return sum(list(map(lambda n_c: n_c[1] * np.exp(-1j * TWOPI * n_c[0] * gFreqs / gFb),
                             enumerate(cs))))
 
@@ -164,6 +176,7 @@ class COM(HasTraits):
     RLM = Float(1.0)  # ratio level mismatch.
     # - Linear EQ
     nTxTaps = 6
+    tx_n_post = Int(3)
     tx_taps_min = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
     tx_taps_max = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
     tx_taps_step = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0.02, 0.02, 0., 0.],])
@@ -189,9 +202,8 @@ class COM(HasTraits):
     Cd = Float(0.25e-12)  # parasitic die capacitance.
     Cb = Float(0.00e-12)  # parasitic bump capacitance.
     Cp = Float(0.18e-12)  # parasitic ball capacitance.
-    zp_sel = List(trait=Int, value=[0, 1])
-    zp_sel_lbls = List(trait=Str, value=["1", "2"])
-    zp_vals = List(trait=Int, value=[12, 30])  # package transmission line lengths (mm).
+    zp_vals = List([12, 30])  # package transmission line lengths (mm).
+    zp = Enum(12, values="zp_vals")
     zc = Float(78.2)  # package transmission line characteristic impedance.
     # - Noise & DER
     sigma_Rj = Float(0.01)  # random jitter standard deviation (ui).
@@ -232,6 +244,25 @@ class COM(HasTraits):
     fom_tx_taps = Str(print_taps([0.0] * nTxTaps))
     fom_dfe_taps = Str(print_taps([0.0] * N_DFE))
 
+    # Plots (plot containers, actually).
+    plotdata = ArrayPlotData()
+    plotdata.set_data("t_ns",      np.linspace(0., 10., 100))
+    plotdata.set_data("pulse_raw", np.zeros(100))
+    plotdata.set_data("pulse_pkg", np.zeros(100))
+    plotdata.set_data("pulse_eq",  np.zeros(100))
+    # - pulse responses.
+    plot1 = Plot(plotdata, padding_left=75)
+    plot1.plot(("t_ns", "pulse_raw"), name="Raw",    type="line", color="red")
+    plot1.plot(("t_ns", "pulse_pkg"), name="w/ Pkg", type="line", color="green")
+    plot1.plot(("t_ns", "pulse_eq"),  name="w/ EQ",  type="line", color="blue")
+    plot1.title = "Pulse Responses"
+    plot1.index_axis.title = "Time (ns)"
+    plot1.value_axis.title = "p(t) (mV)"
+    plot1.legend.visible = True
+    plot1.legend.align = "ur"
+    cont1 = GridPlotContainer(shape=(1, 1), spacing=(PLOT_SPACING, PLOT_SPACING))
+    cont1.add(plot1)
+
     def _fb_changed(self):
         "Keep global version in sync."
         global gFb
@@ -246,17 +277,6 @@ class COM(HasTraits):
         "Keep global version in sync."
         global gNtaps
         gNtaps = len(self.tx_taps_min.flatten())
-
-    def _zp_vals_changed(self):
-        "Keep allowed range of `zp_sel` in sync. w/ `zp_vals`."
-        zp_sel = range(len(self.zp_vals))
-        print(f"_zp_vals_changed(): zp_sel: {zp_sel}")
-        self.zp_sel_lbls = [str(n + 1) for n in zp_sel]
-        self.zp_sel = zp_sel
-
-    def _zp_sel_changed(self):
-        if not self.zp_sel:
-            raise RuntimeError("zp_sel set to empty list!")
 
     # Dependent variable definitions
     # - Unit interval (s).
@@ -274,7 +294,9 @@ class COM(HasTraits):
     def _get_times(self):
         """System times (s)."""
         tstep = self.ui / self.nspui
-        return np.arange(0, self.tmax + tstep, tstep)
+        rslt = np.arange(0, self.tmax + tstep, tstep)
+        self.plotdata.set_data("t_ns", rslt * 1e9)
+        return rslt
 
     # - system frequency vector; decoupled from system time vector!
     freqs = Property(Array, depends_on=["fstep", "fmax"])
@@ -395,11 +417,11 @@ class COM(HasTraits):
         return self.gamma1
 
     # - Package response
-    sPkgRx = Property(depends_on=['Cd', 'Cp', 'zc', 'R0', 'zp_vals', 'zp_sel', 'freqs'])
-    sPkgTx = Property(depends_on=['Cd', 'Cp', 'zc', 'R0', 'zp_vals', 'zp_sel', 'freqs'])
-    sPkgNEXT = Property(depends_on=['Cd', 'Cp', 'zc', 'R0', 'zp_vals', 'zp_sel', 'freqs'])
-    sZp = Property(depends_on=['zc', 'R0', 'zp_vals', 'zp_sel', 'freqs'])
-    sZpNEXT = Property(depends_on=['zc', 'R0', 'zp_vals', 'zp_sel', 'freqs'])
+    sPkgRx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])
+    sPkgTx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])
+    sPkgNEXT = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])
+    sZp      = Property(depends_on=['zc', 'R0', 'zp', 'freqs'])
+    sZpNEXT  = Property(depends_on=['zc', 'R0', 'zp', 'freqs'])
 
     @cached_property
     def _get_sPkgRx(self) -> rf.Network:
@@ -448,12 +470,7 @@ class COM(HasTraits):
         if NEXT:
             zp = self.zp_vals[0]
         else:
-            try:
-                zp = self.zp_vals[self.zp_sel[0]]
-            except Exception:
-                print(f"self.zp_vals: {self.zp_vals}")
-                print(f"self.zp_sel: {self.zp_sel}")
-                raise
+            zp = self.zp
 
         f_GHz  = self.freqs / 1e9               # noqa E221
         a1     = 1.734e-3  # sqrt(ns)/mm        # noqa E221
@@ -493,7 +510,7 @@ class COM(HasTraits):
     chnls_s4p_wPkg = Property(List,
         depends_on=['chnl_s4p_thru', 'chnl_s4p_fext1', 'chnl_s4p_fext2', 'chnl_s4p_fext3',
                     'chnl_s4p_next1', 'chnl_s4p_next2', 'chnl_s4p_next3', 'chnl_s4p_next4',
-                    'Cd', 'Cp', 'zc', 'R0', 'zp_vals', 'zp_sel', 'freqs'],
+                    'Cd', 'Cp', 'zc', 'R0', 'zp_vals', 'zp', 'freqs'],
     )
     chnls_s32p_noPkg = Property(List,
         depends_on=['chnl_s32p', 'vic_chnl_ix'],
@@ -534,7 +551,9 @@ class COM(HasTraits):
         self.fmax = ntwks[0][0].f[-1]
 
         # Generate the pulse responses before adding the packages, for reference.
-        self.pulse_resps_nopkg = self.gen_pulse_resps(ntwks, [], apply_eq=False)
+        pulse_resps_nopkg = self.gen_pulse_resps(ntwks, [], apply_eq=False)
+        self.plotdata.set_data("pulse_raw", pulse_resps_nopkg[0])
+        self.pulse_resps_nopkg = pulse_resps_nopkg
 
         return ntwks
 
@@ -561,7 +580,9 @@ class COM(HasTraits):
         self.fmax = fmax
 
         # Generate the pulse responses before adding the packages, for reference.
-        self.pulse_resps_nopkg = self.gen_pulse_resps(ntwks, [], apply_eq=False)
+        pulse_resps_nopkg = self.gen_pulse_resps(ntwks, [], apply_eq=False)
+        self.plotdata.set_data("pulse_raw", pulse_resps_nopkg[0])
+        self.pulse_resps_nopkg = pulse_resps_nopkg
 
         return ntwks
 
@@ -570,12 +591,10 @@ class COM(HasTraits):
         if not ntwks:
             return []
         _ntwks = list(map(self.add_pkg, ntwks))
-        # ntwks = []
-        # for ntwk, ntype in self.chnls_s32p_noPkg:
-        #     ntwks.append(self.add_pkg())
         pulse_resps_noeq = self.gen_pulse_resps(_ntwks, [], apply_eq=False)
-        self.rslts['vic_pulse_pk'] = self.Av * max(pulse_resps_noeq[0]) * 1_000  # (mV)
+        self.rslts['vic_pulse_pk'] = max(pulse_resps_noeq[0]) * 1_000  # (mV)
         self.pulse_resps_noeq = pulse_resps_noeq
+        self.plotdata.set_data("pulse_pkg", pulse_resps_noeq[0])
         return _ntwks
 
     def add_pkg(self, ntwk: tuple[rf.Network, str]) -> tuple[rf.Network, str]:
@@ -590,17 +609,6 @@ class COM(HasTraits):
     def __init__(self):
         """
         Instance creation only! Must still initialize.
-
-        Notes:
-            1. In order to support multi-mode operation (i.e. - library, CLI, and GUI),
-               we have to separate instance *creation* from instance *initialization*.
-               Therefore, at this point you still need to call one of the 3 initializers:
-
-                   - `init_lib()`,
-                   - `init_cli()`, or
-                   - `init_gui()`.
-
-               (See their docstrings, below, for more detail.)
         """
 
         # Super-class initialization is ABSOLUTELY NECESSARY, in order
@@ -614,6 +622,37 @@ class COM(HasTraits):
         self.fb = self.FB
         self.c0_min = 0.62
         self.tx_taps_min = [[0., 0., -0.18, -0.38, 0., 0.],]
+
+    @classmethod
+    def init(cls, params: dict, chnl_fnames: list[str], vic_id: int,
+        zp_sel: int = 1, num_ui: int = 500, gui: bool = False):
+        """
+        Legacy initializer supports my VITA notebook, which was created before
+        PyChOpMarg was altered to support a GUI.
+        """
+        obj = cls()
+        obj.set_params(params)
+        assert zp_sel > 0 and zp_sel <= len(obj.zp_vals), RuntimeError(
+            "`zp_sel` out of range!")
+        if len(chnl_fnames) == 1:
+            obj.chnl_s32p = chnl_fnames[0]
+        else:
+            obj.chnl_s4p_thru = chnl_fnames[0]
+            if len(chnl_fnames) > 1:
+                obj.chnl_s4p_fext1 = chnl_fnames[1]
+            if len(chnl_fnames) > 2:
+                obj.chnl_s4p_fext2 = chnl_fnames[2]
+            if len(chnl_fnames) > 3:
+                obj.chnl_s4p_next1 = chnl_fnames[3]
+            if len(chnl_fnames) > 4:
+                obj.chnl_s4p_next2 = chnl_fnames[4]
+            if len(chnl_fnames) > 5:
+                obj.chnl_s4p_next3 = chnl_fnames[5]
+        obj.vic_chnl_ix = vic_id
+        obj.zp = obj.zp_vals[zp_sel - 1]
+        obj.num_ui = num_ui
+        obj.gui = gui
+        return obj
 
     def __call__(self, do_opt_eq=True, tx_taps: Rvec = None):
         """
@@ -638,6 +677,9 @@ class COM(HasTraits):
         self.As = As
         self.Ani = Ani
         self.com = com
+        self.rslts['com'] = com
+        self.rslts['As'] = As * 1e3
+        self.rslts['Ani'] = Ani * 1e3
         self.status_str = f"Ready; COM = {com: 5.1f} dB"
         return com
 
@@ -654,7 +696,7 @@ class COM(HasTraits):
         """
 
         # Set default parameter values, as necessary.
-        if 'zc' not in params:
+        if 'z_c' not in params:
             params['zc'] = 78.2
         if 'C_b' not in params:
             params['C_b'] = 0.0
@@ -667,7 +709,7 @@ class COM(HasTraits):
         self.fb = params['fb'] * 1e9
         self.nspui = params['M']
         self.L = params['L']
-        self.fstep = params['fstep'] * 1e9
+        self.fstep = params['fstep']
         self.tx_taps_min = params['tx_taps_min']
         self.tx_taps_max = params['tx_taps_max']
         self.tx_taps_step = params['tx_taps_step']
@@ -676,8 +718,8 @@ class COM(HasTraits):
         self.fp1 = params['f_p1'] * 1e9
         self.fp2 = params['f_p2'] * 1e9
         self.fLF = params['f_LF'] * 1e9
-        self.gDC = params['g_DC']
-        self.gDC2 = params['g_DC2']
+        self.gDC_vals = params['g_DC']
+        self.gDC2_vals = params['g_DC2']
         self.Rd = params['R_d']
         self.R0 = params['R_0']
         self.Cd = params['C_d'] / 1e12
@@ -691,7 +733,8 @@ class COM(HasTraits):
         self.Add = params['A_DD']
         self.eta0 = params['eta_0']
         self.TxSNR = params['SNR_TX']
-        self.zc = params['zc']
+        self.zc = params['z_c']
+        self.zp_vals = params['z_p']
 
         # Stash input parameters, for future reference.
         self.params = params
@@ -745,7 +788,13 @@ class COM(HasTraits):
         """
 
         assert s2p.s[0].shape == (2, 2), ValueError("I can only convert 2-port networks.")
-        s2p.interpolate_self(self.freqs)
+        try:
+            s2p.interpolate_self(self.freqs)
+        except:
+            print(f"self.freqs: {self.freqs}")
+            print(f"self.fmax: {self.fmax}")
+            print(f"self.fstep: {self.fstep}")
+            raise
         g1 = self.gamma1
         g2 = self.gamma2
         s11 = s2p.s11.s.flatten()
@@ -783,7 +832,8 @@ class COM(HasTraits):
 
         assert s2p.s[0, :, :].shape == (2, 2), ValueError(
             f"I can only convert 2-port networks. {s2p}")
-        return calc_Hffe(list(tap_weights.flatten())) * self.H21(s2p) * self.Hr * self.calc_Hctf(gDC, gDC2)
+        return (calc_Hffe(list(tap_weights.flatten()), self.tx_n_post) *
+                self.H21(s2p) * self.Hr * self.calc_Hctf(gDC, gDC2))
 
     def pulse_resp(self, H: Cvec) -> Rvec:
         """
@@ -838,13 +888,16 @@ class COM(HasTraits):
             None
 
         Notes:
-            1. Assumes `self.gDC` and `self.gDC2` have been set correctly.
+            1. Assumes `self.gDC` and `self.gDC2` have been set correctly, if not provided.
         """
 
         pulse_resps = []
         for ntwk, ntype in ntwks:
             if apply_eq:
-                pr = self.pulse_resp(self.H(ntwk, tx_taps, gDC, gDC2))
+                if ntype == 'NEXT':
+                    pr = self.pulse_resp(self.H(ntwk, np.zeros(tx_taps.shape), gDC, gDC2))
+                else:
+                    pr = self.pulse_resp(self.H(ntwk, tx_taps, gDC, gDC2))
             else:
                 pr = self.pulse_resp(self.H21(ntwk))
 
@@ -899,6 +952,7 @@ class COM(HasTraits):
         thresh = As * rel_thresh
         valid_pr_samp_ixs = np.array(list(filter(lambda ix: abs(pulse_resp[ix]) >= thresh,
                                                  range(cursor_ix, len(pulse_resp) - 1, M))))
+                                                 # range(cursor_ix + M, len(pulse_resp) - 1, M))))
         m1s = pulse_resp[valid_pr_samp_ixs - 1]
         p1s = pulse_resp[valid_pr_samp_ixs + 1]
         return (p1s - m1s) / (2 / M)  # (93A-28)
@@ -1097,6 +1151,7 @@ class COM(HasTraits):
                             varJ_best = self.fom_rslts['varJ']
                             varXT_best = self.fom_rslts['varXT']
                             varN_best = self.fom_rslts['varN']
+                            vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
             fom = self.calc_fom(tx_taps)
@@ -1114,6 +1169,7 @@ class COM(HasTraits):
             varJ_best = self.fom_rslts['varJ']
             varXT_best = self.fom_rslts['varXT']
             varN_best = self.fom_rslts['varN']
+            vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
 
         # Check for error and save the best results.
         if not fom_max_changed:
@@ -1133,6 +1189,15 @@ class COM(HasTraits):
         self.sigma_Tx = np.sqrt(varTx_best)
         self.sigma_N = np.sqrt(varN_best)
         self.foms = foms
+        self.plotdata.set_data("pulse_eq", vic_pulse_resp)
+        self.rslts['fom'] = fom_max
+        self.rslts['gDC'] = gDC_best
+        self.rslts['gDC2'] = gDC2_best
+        self.rslts['tx_taps'] = tx_taps_best[2:4]
+        self.rslts['dfe_taps'] = dfe_tap_weights_best
+        self.rslts['sigma_ISI'] = self.sigma_ISI * 1e3
+        self.rslts['sigma_XT'] = self.sigma_XT * 1e3
+        self.rslts['sigma_J'] = self.sigma_J * 1e3
         return True
 
     def calc_noise(self) -> tuple[float, float, int]:
@@ -1276,6 +1341,9 @@ class COM(HasTraits):
         self.rslts['y'] = y
         self.com_dfe_taps = print_taps(dfe_tap_weights)
         self.com_As = As
+        self.rslts['sigma_G'] = self.com_sigma_G * 1e3
+        self.rslts['sigma_Tx'] = self.com_sigma_Tx * 1e3
+        self.rslts['sigma_N'] = self.com_sigma_N * 1e3
 
         return (As,
                 abs(np.where(Py >= self.DER0)[0][0] - npts // 2) * ystep,
