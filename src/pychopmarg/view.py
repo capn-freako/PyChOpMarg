@@ -9,31 +9,16 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 from enable.component_editor import ComponentEditor
-# # from numpy                   import log10, array  # type: ignore
-# from pyface.image_resource   import ImageResource
-from traitsui.api import (  # CloseAction,
+from traitsui.api import (
     Action,
-    CheckListEditor,
-    CSVListEditor,
     FileEditor,
     Group,
     Handler,
     HGroup,
     Item,
-    # # Menu,
-    # # MenuBar,
-    # # NoButtons,
-    # ObjectColumn,
-    # RangeEditor,
-    # Separator,
-    # TableEditor,
-    # TextEditor,
     VGroup,
     View,
-    # spring,
 )
-# from traitsui.api import ListStrEditor, UItem
-# from traitsui.ui_editors.array_view_editor import ArrayViewEditor
 
 
 # Event handler.
@@ -93,50 +78,33 @@ traits_view = View(
                 VGroup(
                     HGroup(
                         Item(
-                            name="fb", format_func=to_GHz,
-                            # label="fb",
+                            name="fb", format_func=to_GHz, label="f_b",
                             tooltip="Baud. rate (GHz)",
-                            # show_label=True,
-                            # enabled_when="True",
-                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                         ),
                         Item(label="GHz"),
                     ),
                     Item(
-                        name="nspui",
-                        # label="nspui",
+                        name="nspui", label="M",
                         tooltip="Samples per UI",
                     ),
                     HGroup(
                         Item(
-                            name="tmax",
-                            # label="fb",
+                            name="tmax", label="t_max",
                             tooltip="Maximum simulation time (ns)",
-                            # show_label=True,
-                            # enabled_when="True",
-                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                         ),
                         Item(label="ns"),
                     ),
                     HGroup(
                         Item(
-                            name="fmax", format_func=to_GHz,
-                            # label="fb",
+                            name="fmax", format_func=to_GHz, label="f_max",
                             tooltip="Maximum system frequency (GHz)",
-                            # show_label=True,
-                            # enabled_when="True",
-                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                         ),
                         Item(label="GHz"),
                     ),
                     HGroup(
                         Item(
-                            name="fstep", format_func=to_MHz,
-                            # label="fb",
+                            name="fstep", format_func=to_MHz, label="f_step",
                             tooltip="System frequency step (MHz)",
-                            # show_label=True,
-                            # enabled_when="True",
-                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                         ),
                         Item(label="MHz"),
                     ),
@@ -146,47 +114,31 @@ traits_view = View(
                 VGroup(
                     HGroup(
                         Item(
-                            name="Av",
-                            # label="fb",
+                            name="Av", label="A_v",
                             tooltip="Victim Tx Vout (V)",
-                            # show_label=True,
-                            # enabled_when="True",
-                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                         ),
                         Item(label="V"),
                     ),
                     HGroup(
                         Item(
-                            name="Afe",
-                            # label="fb",
+                            name="Afe", label="A_fe",
                             tooltip="FEXT Tx Vout (V)",
-                            # show_label=True,
-                            # enabled_when="True",
-                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                         ),
                         Item(label="V"),
                     ),
                     HGroup(
                         Item(
-                            name="Ane",
-                            # label="fb",
+                            name="Ane", label="A_ne",
                             tooltip="NEXT Tx Vout (V)",
-                            # show_label=True,
-                            # enabled_when="True",
-                            # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                         ),
                         Item(label="V"),
                     ),
                     Item(
                         name="L",
-                        # label="fb",
                         tooltip="Modulation levels",
-                        # show_label=True,
-                        # enabled_when="True",
-                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                     ),
                     Item(
-                        name="fr",
+                        name="fr", label="f_r",
                         tooltip="AFE corner frequency (fb)",
                     ),
                     label="Voltage and Modulation",
@@ -194,33 +146,33 @@ traits_view = View(
                 ),
                 VGroup(
                     Item(
-                        name="DER0",
+                        name="DER0", label="DER_0",
                         tooltip="Detector error rate threshold.",
                     ),
                     HGroup(
                         Item(
-                            name="sigma_Rj",
+                            name="sigma_Rj", label="sigma_Rj",
                             tooltip="Random noise standard deviation (UI)",
                         ),
                         Item(label="UI"),
                     ),
                     HGroup(
                         Item(
-                            name="Add",
+                            name="Add", label="A_DD",
                             tooltip="Deterministic noise amplitude (UI)",
                         ),
                         Item(label="UI"),
                     ),
                     HGroup(
                         Item(
-                            name="eta0",
+                            name="eta0", label="eta_0",
                             tooltip="Spectral noise density (V^2/GHz)",
                         ),
                         Item(label="V^2/GHz"),
                     ),
                     HGroup(
                         Item(
-                            name="TxSNR",
+                            name="TxSNR", label="SNR_TX",
                             tooltip="Tx signal-to-noise ratio (dB)",
                         ),
                         Item(label="dB"),
@@ -240,8 +192,9 @@ traits_view = View(
                             editor=FileEditor(dialog_style="open", filter=["*.s32p"]),
                         ),
                         Item(
-                            name="vic_chnl_ix",
+                            name="vic_chnl_ix", label="Vic_ID",
                             enabled_when="chnl_s32p",
+                            tooltip="Victim channel index (from 1).",
                         ),
                     ),
                     HGroup(
@@ -306,21 +259,21 @@ traits_view = View(
                         VGroup(
                             HGroup(
                                 Item(
-                                    name="R0",
+                                    name="R0", label="R_0",
                                     tooltip="System reference impedance (Ohms)",
                                 ),
                                 Item(label="Ohms"),
                             ),
                             HGroup(
                                 Item(
-                                    name="Rd",
+                                    name="Rd", label="R_d",
                                     tooltip="On-die termination impedance (Ohms)",
                                 ),
                                 Item(label="Ohms"),
                             ),
                             HGroup(
                                 Item(
-                                    name="zp",
+                                    name="zp", label="z_p",
                                     tooltip="Package transmission line length",
                                 ),
                                 Item(label="mm"),
@@ -329,21 +282,21 @@ traits_view = View(
                         VGroup(
                             HGroup(
                                 Item(
-                                    name="Cd", format_func=to_pF,
+                                    name="Cd", format_func=to_pF, label="C_d",
                                     tooltip="Die parasitic capacitance (pF)",
                                 ),
                                 Item(label="pF"),
                             ),
                             HGroup(
                                 Item(
-                                    name="Cb", format_func=to_pF,
+                                    name="Cb", format_func=to_pF, label="C_b",
                                     tooltip="Bumb parasitic capacitance (pF)",
                                 ),
                                 Item(label="pF"),
                             ),
                             HGroup(
                                 Item(
-                                    name="Cp", format_func=to_pF,
+                                    name="Cp", format_func=to_pF, label="C_p",
                                     tooltip="Ball parasitic capacitance (pF)",
                                 ),
                                 Item(label="pF"),
@@ -359,41 +312,29 @@ traits_view = View(
             HGroup(
                 VGroup(
                     Item(
-                        name="c0_min",
-                        # label="nspui",
+                        name="c0_min", label="c(0)",
                         tooltip="Minimum allowed main tap weight.",
                     ),
                     Item(
-                        name="tx_taps_min",
-                        label="Min.",
+                        name="tx_taps_pos", label="c_pos",
+                        style="readonly", format_str="%10d",
+                        tooltip="Tap positions, relative to main cursor.",
+                    ),
+                    Item(
+                        name="tx_taps_min", label="c_min",
                         tooltip="Minimum tap weights.",
-                        # show_label=True,
-                        # enabled_when="True",
-                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                     ),
                     Item(
-                        name="tx_taps_max",
-                        label="Max.",
+                        name="tx_taps_max", label="c_max",
                         tooltip="Maximum tap weights.",
-                        # show_label=True,
-                        # enabled_when="True",
-                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                     ),
                     Item(
-                        name="tx_taps_step",
-                        label="Step",
+                        name="tx_taps_step", label="c_step",
                         tooltip="Tap weight steps.",
-                        # show_label=True,
-                        # enabled_when="True",
-                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
                     ),
                     Item(
-                        name="tx_taps",
-                        label="Value",
-                        tooltip="Tap weights.",
-                        # show_label=True,
-                        # enabled_when="True",
-                        # editor=TextEditor(auto_set=False, enter_set=True, evaluate=float),
+                        name="tx_taps", label="c_val",
+                        tooltip="Tap weight values.",
                     ),
                     label="Tx FFE",
                     show_border=True,
@@ -401,40 +342,38 @@ traits_view = View(
                 VGroup(
                     HGroup(
                         Item(
-                            name="gDC",
+                            name="gDC", label="g_DC",
                             tooltip="CTLE d.c. gain 1 (dB)",
-                            # editor=CheckListEditor(values=[(-n, str(n)) for n in range(13)]),
                         ),
                         Item(
-                            name="gDC2",
+                            name="gDC2", label="g_DC2",
                             tooltip="CTLE d.c. gain 2 (dB)",
-                            # editor=CheckListEditor(values=[(0, "0")]),
                         ),
                     ),
                     HGroup(
                         Item(
-                            name="fz", format_func=to_GHz,
+                            name="fz", format_func=to_GHz, label="f_z",
                             tooltip="CTLE zero frequency (GHz)",
                         ),
                         Item(label="GHz"),
                     ),
                     HGroup(
                         Item(
-                            name="fp1", format_func=to_GHz,
+                            name="fp1", format_func=to_GHz, label="f_p1",
                             tooltip="CTLE first pole frequency (GHz)",
                         ),
                         Item(label="GHz"),
                     ),
                     HGroup(
                         Item(
-                            name="fp2", format_func=to_GHz,
+                            name="fp2", format_func=to_GHz, label="f_p2",
                             tooltip="CTLE second pole frequency (GHz)",
                         ),
                         Item(label="GHz"),
                     ),
                     HGroup(
                         Item(
-                            name="fLF", format_func=to_MHz,
+                            name="fLF", format_func=to_MHz, label="f_LF",
                             tooltip="CTLE low-f corner frequency (MHz)",
                         ),
                         Item(label="MHz"),
@@ -474,8 +413,8 @@ traits_view = View(
                     ),
                     VGroup(
                         Item(name="com_sigma_Tx", label="Tx", format_func=to_mV, style="readonly"),
-                        Item(name="com_sigma_N",  label="N",  format_func=to_mV, style="readonly"),
-                        Item(name="com_sigma_G",  label="G",  format_func=to_mV, style="readonly"),
+                        Item(name="com_sigma_N", label="N", format_func=to_mV, style="readonly"),
+                        Item(name="com_sigma_G", label="G", format_func=to_mV, style="readonly"),
                         label="Noise Sigmas (mV)",
                         show_border=True,
                     ),
@@ -509,16 +448,16 @@ traits_view = View(
                             ),
                         ),
                         Item(name="fom_dfe_taps", label="Rx DFE", style="readonly"),
-                        Item(name="fom_tx_taps",  label="Tx FFE", style="readonly"),
+                        Item(name="fom_tx_taps", label="Tx FFE", style="readonly"),
                         label="Results",
                         show_border=True,
                     ),
                     VGroup(
-                        Item(name="sigma_Tx",  label="Tx",  format_func=to_mV, style="readonly"),
-                        Item(name="sigma_N",   label="N",   format_func=to_mV, style="readonly"),
+                        Item(name="sigma_Tx", label="Tx", format_func=to_mV, style="readonly"),
+                        Item(name="sigma_N", label="N", format_func=to_mV, style="readonly"),
                         Item(name="sigma_ISI", label="ISI", format_func=to_mV, style="readonly"),
-                        Item(name="sigma_J",   label="J",   format_func=to_mV, style="readonly"),
-                        Item(name="sigma_XT",  label="XT",  format_func=to_mV, style="readonly"),
+                        Item(name="sigma_J", label="J", format_func=to_mV, style="readonly"),
+                        Item(name="sigma_XT", label="XT", format_func=to_mV, style="readonly"),
                         label="Noise Sigmas (mV)",
                         show_border=True,
                     ),
@@ -528,6 +467,10 @@ traits_view = View(
             ),
             Item("cont1", editor=ComponentEditor(high_resolution=False), show_label=False, springy=True),
             label="Results",
+        ),
+        VGroup(  # "About" tab
+            Item("about_str", style="readonly", show_label=False,),
+            label="About",
         ),
         layout="tabbed",
         springy=True,

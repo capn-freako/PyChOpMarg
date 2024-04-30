@@ -14,39 +14,29 @@ ToDo:
     1. Provide type hints for imports.
 """
 
-PLOT_SPACING = 20
-
 import numpy as np  # type: ignore
 import skrf as rf  # type: ignore
 
-from chaco.api import ArrayPlotData, GridPlotContainer
 from chaco.api import (
     ArrayPlotData,
-    ColorMapper,
     GridPlotContainer,
-    OverlayPlotContainer,
     Plot,
-    PlotAxis,
-    VPlotContainer
 )  # type: ignore
-from chaco.tools.api import PanTool, ZoomTool
+from chaco.tools.api import ZoomTool
 from scipy.interpolate import interp1d
 from traits.api import (
     Array,
-    # Button,
     cached_property,
     Enum,
     File,
     Float,
     HasTraits,
-    Instance,
     Int,
     List,
     Property,
-    # Range,
     Str,
 )  # type: ignore
-from typing import Any, Optional, TypeVar  # , Dict
+from typing import Any, Optional, TypeVar
 
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
 from pychopmarg.utility import import_s32p, sdd_21
@@ -58,6 +48,7 @@ gFreqs: Rvec = None  # type: ignore
 gFb: float = None  # type: ignore
 gC0min: float = None  # type: ignore
 gNtaps: int = None  # type: ignore
+PLOT_SPACING = 20
 
 T = TypeVar('T', Any, Any)
 
@@ -84,8 +75,6 @@ def all_combs(xss: list[list[T]]) -> list[list[T]]:
     return [[x] + ys for x in head for ys in yss]
 
 
-# @cache
-# def calc_Hffe(tap_weights: Rvec) -> Cvec:
 def calc_Hffe(tap_weights: list[float], n_post: int) -> Cvec:
     """
     Calculate the voltage transfer function, H(f), for the Tx FFE,
@@ -117,7 +106,8 @@ def calc_Hffe(tap_weights: list[float], n_post: int) -> Cvec:
     """
 
     assert len(gFreqs) and gFb and gC0min and gNtaps, RuntimeError(
-        f"Called before global variables were initialized!\n\tgFreqs: {gFreqs}, gFb: {gFb}, gC0min: {gC0min}, gNtaps: {gNtaps}")
+        f"Called before global variables were initialized!\n\tgFreqs: \
+        {gFreqs}, gFb: {gFb}, gC0min: {gC0min}, gNtaps: {gNtaps}")
     assert len(tap_weights) == gNtaps, ValueError(
         f"Length of given tap weight vector is incorrect!\n\tExpected: {gNtaps}; got: {len(tap_weights)}")
 
@@ -177,6 +167,7 @@ class COM(HasTraits):
     # - Linear EQ
     nTxTaps = 6
     tx_n_post = Int(3)
+    tx_taps_pos = Array(shape=(1, (1, nTxTaps)), dtype=int, value=[[-3, -2, -1, 1, 2, 3],])
     tx_taps_min = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
     tx_taps_max = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
     tx_taps_step = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0.02, 0.02, 0., 0.],])
@@ -246,22 +237,38 @@ class COM(HasTraits):
 
     # Plots (plot containers, actually).
     plotdata = ArrayPlotData()
-    plotdata.set_data("t_ns",      np.linspace(0., 10., 100))
+    plotdata.set_data("t_ns", np.linspace(0., 10., 100))
     plotdata.set_data("pulse_raw", np.zeros(100))
     plotdata.set_data("pulse_pkg", np.zeros(100))
-    plotdata.set_data("pulse_eq",  np.zeros(100))
+    plotdata.set_data("pulse_eq", np.zeros(100))
     # - pulse responses.
     plot1 = Plot(plotdata, padding_left=75)
-    plot1.plot(("t_ns", "pulse_raw"), name="Raw",    type="line", color="red")
+    plot1.plot(("t_ns", "pulse_raw"), name="Raw", type="line", color="red")
     plot1.plot(("t_ns", "pulse_pkg"), name="w/ Pkg", type="line", color="green")
-    plot1.plot(("t_ns", "pulse_eq"),  name="w/ EQ",  type="line", color="blue")
+    plot1.plot(("t_ns", "pulse_eq"), name="w/ EQ", type="line", color="blue")
     plot1.title = "Pulse Responses"
     plot1.index_axis.title = "Time (ns)"
     plot1.value_axis.title = "p(t) (mV)"
     plot1.legend.visible = True
     plot1.legend.align = "ur"
+    zoom1 = ZoomTool(plot1, tool_mode="range", axis="index", always_on=False)
+    plot1.overlays.append(zoom1)
     cont1 = GridPlotContainer(shape=(1, 1), spacing=(PLOT_SPACING, PLOT_SPACING))
     cont1.add(plot1)
+
+    about_str = """
+      <H2><em>PyChOpMarg</em> - A Python implementation of COM, as per IEEE 802.3-22 Annex 93A.</H2>\n
+      <strong>By:</strong> David Banas <capn.freako@gmail.com><p>\n
+      <strong>On:</strong> April 30, 2024<p>\n
+      <strong>At:</strong> v1.1.0\n
+      <H3>Useful Links</H3>\n
+      (You'll probably need to: right click, select <em>Copy link address</em>, and paste into your browser.)
+        <UL>\n
+          <LI><a href="https://github.com/capn-freako/PyChOpMarg"><em>GitHub</em> Home</a>
+          <LI><a href="https://pypi.org/project/PyChOpMarg/"><em>PyPi</em> Home</a>
+          <LI><a href="https://readthedocs.org/projects/pychopmarg/"><em>Read the Docs</em> Home</a>
+        </UL>
+    """
 
     def _fb_changed(self):
         "Keep global version in sync."
@@ -310,7 +317,6 @@ class COM(HasTraits):
         return freqs
 
     # - `irfft()` time vector; decoupled from system time vector!
-    # t_irfft = Property(Array, depends_on=["fmax", "fstep"])
     t_irfft = Property(Array, depends_on=["freqs"])
 
     @cached_property
@@ -417,11 +423,11 @@ class COM(HasTraits):
         return self.gamma1
 
     # - Package response
-    sPkgRx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])
-    sPkgTx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])
-    sPkgNEXT = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])
-    sZp      = Property(depends_on=['zc', 'R0', 'zp', 'freqs'])
-    sZpNEXT  = Property(depends_on=['zc', 'R0', 'zp', 'freqs'])
+    sPkgRx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])  # noqa E221
+    sPkgTx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])  # noqa E221
+    sPkgNEXT = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])  # noqa E221
+    sZp      = Property(depends_on=['zc', 'R0', 'zp', 'freqs'])  # noqa E221
+    sZpNEXT  = Property(depends_on=['zc', 'R0', 'zp', 'freqs'])  # noqa E221
 
     @cached_property
     def _get_sPkgRx(self) -> rf.Network:
@@ -501,50 +507,23 @@ class COM(HasTraits):
         return rf.Network(s=s2p, f=self.freqs, z0=[2 * r0, 2 * r0])
 
     # - Channels
-    chnls = Property(List, value=[])
-    chnls_s32p_wPkg = Property(List,
-        # depends_on=['chnl_s32p', 'vic_chnl_ix', 'Cd', 'Cp', 'zc', 'R0', 'zp_vals', 'zp_sel', 'freqs'],
-        depends_on=['chnls_s32p_noPkg', 'sPkgTx', 'sPkgRx', 'sPkgNEXT'],
-        value=[],
-    )
-    chnls_s4p_wPkg = Property(List,
-        depends_on=['chnl_s4p_thru', 'chnl_s4p_fext1', 'chnl_s4p_fext2', 'chnl_s4p_fext3',
-                    'chnl_s4p_next1', 'chnl_s4p_next2', 'chnl_s4p_next3', 'chnl_s4p_next4',
-                    'Cd', 'Cp', 'zc', 'R0', 'zp_vals', 'zp', 'freqs'],
-    )
-    chnls_s32p_noPkg = Property(List,
-        depends_on=['chnl_s32p', 'vic_chnl_ix'],
-        value=[],
-    )
-    chnls_s4p_noPkg = Property(List,
-        depends_on=['chnl_s4p_thru', 'chnl_s4p_fext1', 'chnl_s4p_fext2', 'chnl_s4p_fext3',
-                    'chnl_s4p_next1', 'chnl_s4p_next2', 'chnl_s4p_next3', 'chnl_s4p_next4'],
-        value=[],
-    )
-
-    def _get_chnls(self) -> list[tuple[rf.Network, str]]:
+    def get_chnls(self) -> list[tuple[rf.Network, str]]:
         """Import all channels from Touchstone file(s)."""
         if self.chnl_s32p:
-            return self.chnls_s32p_wPkg
+            return self.get_chnls_s32p_wPkg()
         else:
-            return self.chnls_s4p_wPkg
+            return self.get_chnls_s4p_wPkg()
 
-    @cached_property
-    def _get_chnls_s32p_wPkg(self) -> list[tuple[rf.Network, str]]:
+    def get_chnls_s32p_wPkg(self) -> list[tuple[rf.Network, str]]:
         """Augment imported s32p channels, w/ package response."""
-        print("_get_chnls_s32p_wPkg() entered.")
-        return self.add_pkgs(self.chnls_s32p_noPkg)
+        return self.add_pkgs(self.get_chnls_s32p_noPkg())
 
-    @cached_property
-    def _get_chnls_s4p_wPkg(self) -> list[tuple[rf.Network, str]]:
+    def get_chnls_s4p_wPkg(self) -> list[tuple[rf.Network, str]]:
         """Augment imported s4p channels, w/ package response."""
-        print("_get_chnls_s4p_wPkg() entered.")
-        return self.add_pkgs(self.chnls_s4p_noPkg)
+        return self.add_pkgs(self.get_chnls_s4p_noPkg())
 
-    @cached_property
-    def _get_chnls_s32p_noPkg(self) -> list[tuple[rf.Network, str]]:
+    def get_chnls_s32p_noPkg(self) -> list[tuple[rf.Network, str]]:
         """Import s32p file, w/o package."""
-        print("_get_chnls_s32p_noPkg() entered.")
         if not self.chnl_s32p:
             return []
         ntwks = import_s32p(self.chnl_s32p, self.vic_chnl_ix)
@@ -557,10 +536,9 @@ class COM(HasTraits):
 
         return ntwks
 
-    @cached_property
-    def _get_chnls_s4p_noPkg(self) -> list[tuple[rf.Network, str]]:
+    # @cached_property
+    def get_chnls_s4p_noPkg(self) -> list[tuple[rf.Network, str]]:
         """Import s4p files, w/o package."""
-        print("_get_chnls_s4p_noPkg() entered.")
         if not self.chnl_s4p_thru:
             return []
         ntwks = [(sdd_21(rf.Network(self.chnl_s4p_thru)), 'THRU')]
@@ -625,7 +603,7 @@ class COM(HasTraits):
 
     @classmethod
     def init(cls, params: dict, chnl_fnames: list[str], vic_id: int,
-        zp_sel: int = 1, num_ui: int = 500, gui: bool = False):
+             zp_sel: int = 1, num_ui: int = 500, gui: bool = False):
         """
         Legacy initializer supports my VITA notebook, which was created before
         PyChOpMarg was altered to support a GUI.
@@ -667,6 +645,7 @@ class COM(HasTraits):
 
         assert self.chnl_s32p or self.chnl_s4p_thru, RuntimeError(
             "You must, at least, select a thru path channel file, either 32 or 4 port.")
+        self.chnls = self.get_chnls()
         self.status_str = "Optimizing EQ..."
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
             "EQ optimization failed!")
@@ -788,13 +767,7 @@ class COM(HasTraits):
         """
 
         assert s2p.s[0].shape == (2, 2), ValueError("I can only convert 2-port networks.")
-        try:
-            s2p.interpolate_self(self.freqs)
-        except:
-            print(f"self.freqs: {self.freqs}")
-            print(f"self.fmax: {self.fmax}")
-            print(f"self.fstep: {self.fstep}")
-            raise
+        s2p.interpolate_self(self.freqs)
         g1 = self.gamma1
         g2 = self.gamma2
         s11 = s2p.s11.s.flatten()
@@ -832,8 +805,9 @@ class COM(HasTraits):
 
         assert s2p.s[0, :, :].shape == (2, 2), ValueError(
             f"I can only convert 2-port networks. {s2p}")
-        return (calc_Hffe(list(tap_weights.flatten()), self.tx_n_post) *
-                self.H21(s2p) * self.Hr * self.calc_Hctf(gDC, gDC2))
+        H_tx = calc_Hffe(list(tap_weights.flatten()), self.tx_n_post)
+        H_rx = self.H21(s2p) * self.Hr * self.calc_Hctf(gDC, gDC2)
+        return (H_tx * H_rx)
 
     def pulse_resp(self, H: Cvec) -> Rvec:
         """
@@ -952,7 +926,6 @@ class COM(HasTraits):
         thresh = As * rel_thresh
         valid_pr_samp_ixs = np.array(list(filter(lambda ix: abs(pulse_resp[ix]) >= thresh,
                                                  range(cursor_ix, len(pulse_resp) - 1, M))))
-                                                 # range(cursor_ix + M, len(pulse_resp) - 1, M))))
         m1s = pulse_resp[valid_pr_samp_ixs - 1]
         p1s = pulse_resp[valid_pr_samp_ixs + 1]
         return (p1s - m1s) / (2 / M)  # (93A-28)
