@@ -259,8 +259,8 @@ class COM(HasTraits):
     about_str = """
       <H2><em>PyChOpMarg</em> - A Python implementation of COM, as per IEEE 802.3-22 Annex 93A.</H2>\n
       <strong>By:</strong> David Banas <capn.freako@gmail.com><p>\n
-      <strong>On:</strong> April 30, 2024<p>\n
-      <strong>At:</strong> v1.1.0\n
+      <strong>On:</strong> August 12, 2024<p>\n
+      <strong>At:</strong> v1.1.3\n
       <H3>Useful Links</H3>\n
       (You'll probably need to: right click, select <em>Copy link address</em>, and paste into your browser.)
         <UL>\n
