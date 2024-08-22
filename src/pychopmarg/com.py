@@ -188,14 +188,22 @@ class COM(HasTraits):
     bmax = List([1.0] * N_DFE)  # DFE maximum tap values.
     bmin = List([-1.0] * N_DFE)  # DFE minimum tap values.
     # - Package & Die Modeling
+    # -- MKS
     R0 = Float(50.0)  # system reference impedance.
     Rd = Float(55.0)  # on-die termination impedance.
-    Cd = Float(0.25e-12)  # parasitic die capacitance.
+    Cd = List([0.04e-12, 0.09e-12, 0.11e-12])  # parasitic die capacitances.
     Cb = Float(0.00e-12)  # parasitic bump capacitance.
     Cp = Float(0.18e-12)  # parasitic ball capacitance.
-    zp_vals = List([12, 30])  # package transmission line lengths (mm).
-    zp = Enum(12, values="zp_vals")
-    zc = Float(78.2)  # package transmission line characteristic impedance.
+    Ls = List([0.13e-9, 0.15e-9, 0.14e-9])  # parasitic die inductances.
+    # -- ns & mm
+    zp_vals = Array([[33, 1.8],
+                     [12, 1.8]])  # package transmission line lengths (mm).
+    zp = Enum([33, 1.8], values="zp_vals")
+    zc = List([87.5, 92.5])  # package transmission line characteristic impedances (Ohms).
+    gamma0 = Float(5.0e-4)   # propagation loss constant (1/mm)
+    a1 = Float(8.9e-4)       # first polynomial coefficient (sqrt_ns/mm)
+    a2 = Float(2.0e-4)       # second polynomial coefficient (ns/mm)
+    tau = Float(6.141e-3)    # propagation delay (ns/mm)
     # - Noise & DER
     sigma_Rj = Float(0.01)  # random jitter standard deviation (ui).
     Add = Float(0.05)  # deterministic jitter amplitude (ui).
@@ -210,10 +218,13 @@ class COM(HasTraits):
     chnl_s4p_fext3 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_fext4 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_fext5 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_fext6 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_next1 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_next2 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_next3 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_next4 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_next5 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_next6 = File("", entries=5, filter=["*.s4p"], exists=True)
     vic_chnl_ix = Int(1)
     # - Results
     # -- COM
@@ -473,19 +484,19 @@ class COM(HasTraits):
             2-port network equivalent to package transmission line.
         """
 
+        f_GHz  = self.freqs / 1e9               # noqa E221
         zc = self.zc
         r0 = self.R0
         if NEXT:
             zp = self.zp_vals[0]
         else:
             zp = self.zp
-
-        f_GHz  = self.freqs / 1e9               # noqa E221
-        a1     = 1.734e-3  # sqrt(ns)/mm        # noqa E221
-        a2     = 1.455e-4  # ns/mm              # noqa E221
-        tau    = 6.141e-3  # ns/mm              # noqa E221
+        a1     = self.a1      # sqrt(ns)/mm
+        a2     = self.a2      # ns/mm
+        tau    = self.tau     # ns/mm
+        gamma0 = self.gamma0  # 1/mm
+        assert len()
         rho    = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
-        gamma0 = 0         # 1/mm
         gamma1 = a1 * (1 + 1j)
 
         def gamma2(f: float) -> complex:
@@ -545,13 +556,15 @@ class COM(HasTraits):
             return []
         ntwks = [(sdd_21(rf.Network(self.chnl_s4p_thru)), 'THRU')]
         fmax = ntwks[0][0].f[-1]
-        for fname in [self.chnl_s4p_fext1, self.chnl_s4p_fext2, self.chnl_s4p_fext3, self.chnl_s4p_fext4, self.chnl_s4p_fext5]:
+        for fname in [self.chnl_s4p_fext1, self.chnl_s4p_fext2, self.chnl_s4p_fext3,
+                      self.chnl_s4p_fext4, self.chnl_s4p_fext5, self.chnl_s4p_fext6]:
             if fname:
                 ntwk = sdd_21(rf.Network(fname))
                 ntwks.append((ntwk, 'FEXT'))
                 if ntwk.f[-1] < fmax:
                     fmax = ntwk.f[-1]
-        for fname in [self.chnl_s4p_next1, self.chnl_s4p_next2, self.chnl_s4p_next3, self.chnl_s4p_next4]:
+        for fname in [self.chnl_s4p_next1, self.chnl_s4p_next2, self.chnl_s4p_next3,
+                      self.chnl_s4p_next4, self.chnl_s4p_next5, self.chnl_s4p_next6]:
             if fname:
                 ntwk = sdd_21(rf.Network(fname))
                 ntwks.append((sdd_21(rf.Network(fname)), 'NEXT'))
@@ -686,7 +699,8 @@ class COM(HasTraits):
         if 'g_DC2' not in params:
             params['g_DC2'] = 0.0
 
-        # Capture parameters, adjusting units as necessary to keep all but (dB) and `eta0` SI.
+        # Capture parameters, adjusting units as necessary to keep all but
+        # (dB), package values, and `eta0` SI.
         self.fb = params['fb'] * 1e9
         self.nspui = params['M']
         self.L = params['L']
@@ -706,6 +720,7 @@ class COM(HasTraits):
         self.Cd = params['C_d'] / 1e12
         self.Cb = params['C_b'] / 1e12
         self.Cp = params['C_p'] / 1e12
+        self.Ls = params['L_s'] / 1e9
         self.Av = params['A_v']
         self.Afe = params['A_fe']
         self.Ane = params['A_ne']
@@ -716,6 +731,10 @@ class COM(HasTraits):
         self.TxSNR = params['SNR_TX']
         self.zc = params['z_c']
         self.zp_vals = params['z_p']
+        self.gamma0 = params['gamma0']
+        self.a1 = params['a1']
+        self.a2 = params['a2']
+        self.tau = params['tau']
 
         # Stash input parameters, for future reference.
         self.params = params
