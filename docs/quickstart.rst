@@ -11,13 +11,13 @@ Installation
 
 To install *PyChOpMarg* into a dedicated new virtual environment, execute these commands from an appropriate shell prompt:
 
-1. `python -m venv ~/.venv/pychopmarg`
+1. `python3 -m venv ~/.venv/pychopmarg`
 
     - This command creates the new dedicated Python virtual environment.
 
     * I've assumed that you keep your Python virtual environments in the `.venv/` sub-directory of your home directory. If that's not the case then you'll need to modify the command slightly, to accommodate your system layout and usage habbits.
 
-2. `. ~/.venv/pychopmarg/bin/activate`
+2. `source ~/.venv/pychopmarg/bin/activate`
 
     - This command activates the new virtual environment, so we can install packages into it.
 

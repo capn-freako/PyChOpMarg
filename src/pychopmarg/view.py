@@ -223,6 +223,18 @@ traits_view = View(
                                 editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
                                 enabled_when="not chnl_s32p",
                             ),
+                            Item(
+                                name="chnl_s4p_fext4",
+                                label="s4p_FEXT4",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
+                            ),
+                            Item(
+                                name="chnl_s4p_fext5",
+                                label="s4p_FEXT5",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
+                            ),
                         ),
                         VGroup(
                             Item(

@@ -208,6 +208,8 @@ class COM(HasTraits):
     chnl_s4p_fext1 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_fext2 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_fext3 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_fext4 = File("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s4p_fext5 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_next1 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_next2 = File("", entries=5, filter=["*.s4p"], exists=True)
     chnl_s4p_next3 = File("", entries=5, filter=["*.s4p"], exists=True)
@@ -543,7 +545,7 @@ class COM(HasTraits):
             return []
         ntwks = [(sdd_21(rf.Network(self.chnl_s4p_thru)), 'THRU')]
         fmax = ntwks[0][0].f[-1]
-        for fname in [self.chnl_s4p_fext1, self.chnl_s4p_fext2, self.chnl_s4p_fext3]:
+        for fname in [self.chnl_s4p_fext1, self.chnl_s4p_fext2, self.chnl_s4p_fext3, self.chnl_s4p_fext4, self.chnl_s4p_fext5]:
             if fname:
                 ntwk = sdd_21(rf.Network(fname))
                 ntwks.append((ntwk, 'FEXT'))
@@ -637,7 +639,7 @@ class COM(HasTraits):
         Calculate the COM value.
 
         Keyword Args:
-            opt_eq: Perform optimization of linear equalization when True.
+            do_opt_eq: Perform optimization of linear equalization when True.
                 Default: True
             tx_taps: Used when `do_opt_eq` = False.
                 Default: None
@@ -665,7 +667,7 @@ class COM(HasTraits):
     # Initializers
     def set_params(self, params: COMParams) -> None:
         """
-        Set the COM instance parameters, according the the given dictionary.
+        Set the COM instance parameters, according to the given dictionary.
 
         Args:
             params: Dictionary of COM parameter values.
@@ -767,6 +769,7 @@ class COM(HasTraits):
         """
 
         assert s2p.s[0].shape == (2, 2), ValueError("I can only convert 2-port networks.")
+        s2p = s2p.extrapolate_to_dc()
         s2p.interpolate_self(self.freqs)
         g1 = self.gamma1
         g2 = self.gamma2
@@ -831,7 +834,7 @@ class COM(HasTraits):
         """
 
         assert len(H) == len(self.freqs), ValueError(
-            "Length of given H(f) does not match length of f!")
+            f"Length of given H(f) {len(H)} does not match length of f {len(self.freqs)}!")
 
         Xsinc = self.Xsinc
         Ts = self.t_irfft[1]
