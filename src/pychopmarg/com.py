@@ -435,19 +435,27 @@ class COM(HasTraits):
         """
         return self.gamma1
 
-    # - Package response
-    sPkgRx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])  # noqa E221
-    sPkgTx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])  # noqa E221
-    sPkgNEXT = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp'])  # noqa E221
+    # - Die/Package response
+    sDieLadder = Property(depends_on=['R0', 'freqs', 'Cd', 'Ls'])  # noqa E221
+    sPkgRx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp', 'Ls'])  # noqa E221
+    sPkgTx   = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp', 'Ls'])  # noqa E221
+    sPkgNEXT = Property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp', 'Ls'])  # noqa E221
     sZp      = Property(depends_on=['zc', 'R0', 'zp', 'freqs'])  # noqa E221
     sZpNEXT  = Property(depends_on=['zc', 'R0', 'zp', 'freqs'])  # noqa E221
+
+    @cached_property
+    def _get_sDieLadder(self) -> rf.Network:
+        """
+        On-die parasitic capacitance/inductance ladder network.
+        """
 
     @cached_property
     def _get_sPkgRx(self) -> rf.Network:
         """
         Rx package response.
         """
-        return self.sC(self.Cp) ** self.sZp ** self.sC(self.Cd)
+        # return self.sC(self.Cp) ** self.sZp ** self.sC(self.Cd)
+        return self.sC(self.Cp) ** self.sZp ** self.sDieLadder()
 
     @cached_property
     def _get_sPkgTx(self) -> rf.Network:
@@ -484,18 +492,20 @@ class COM(HasTraits):
             2-port network equivalent to package transmission line.
         """
 
-        f_GHz  = self.freqs / 1e9               # noqa E221
         zc = self.zc
-        r0 = self.R0
         if NEXT:
             zp = self.zp_vals[0]
         else:
             zp = self.zp
+        assert len(zc) == len(zp), ValueError(
+            f"Length of `zc` ({len(zc)}) does not match length of `zp` ({len(zp)})!")
+
+        f_GHz  = self.freqs / 1e9               # noqa E221
+        r0 = self.R0
         a1     = self.a1      # sqrt(ns)/mm
         a2     = self.a2      # ns/mm
         tau    = self.tau     # ns/mm
         gamma0 = self.gamma0  # 1/mm
-        assert len()
         rho    = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
         gamma1 = a1 * (1 + 1j)
 
@@ -511,12 +521,26 @@ class COM(HasTraits):
                 return gamma0 + gamma1 * np.sqrt(f) + gamma2(f) * f
 
         g = np.array(list(map(gamma, f_GHz)))
-        s11 = s22 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
-        s21 = s12 = (1 - rho**2) * np.exp(-g * zp) / (1 - rho**2 * np.exp(-g * 2 * zp))
-        s2p = np.array(
-            [[[_s11, _s12],
-              [_s21, _s22]]
-             for _s11, _s12, _s21, _s22 in zip(s11, s12, s21, s22)])
+
+        def mk_s2p(zc: float, zp: float) -> NDArray:
+            """
+            Make two dimmensional S-parameter matrix for a leg of T-line.
+
+            Args:
+                zc: Characteristic impedance of leg (Ohms).
+                zp: Length of leg (mm).
+
+            Returns:
+                s2p: Two port S-parameters for the leg.
+            """
+            s11 = s22 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
+            s21 = s12 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
+            return np.array(
+                [[[_s11, _s12],
+                  [_s21, _s22]]
+                 for _s11, _s12, _s21, _s22 in zip(s11, s12, s21, s22)])
+
+        s2p = np.array(rf.network.cascade_list(list(map(mk_s2p, zip(zc, zp)))))
         return rf.Network(s=s2p, f=self.freqs, z0=[2 * r0, 2 * r0])
 
     # - Channels
