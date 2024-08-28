@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 """
 The Channel Operating Margin (COM) model, as per IEEE 802.3-22 Annex 93A.
 
@@ -23,6 +25,7 @@ from chaco.api import (
     Plot,
 )  # type: ignore
 from chaco.tools.api import ZoomTool
+from numpy.typing import NDArray
 from scipy.interpolate import interp1d
 from traits.api import (
     Array,
@@ -140,6 +143,75 @@ def print_taps(ws: list[float]) -> str:
     return res
 
 
+def sCshunt(freqs: list[float], c: float, r0: float = 50.0) -> rf.Network:
+    """
+    Calculate the 2-port network for a shunt capacitance.
+
+    Args:
+        freqs: The frequencies at which to calculate network data (Hz).
+        c: The capacitance (F).
+
+    Keyword Args:
+        r0: The reference impedance for the network (Ohms).
+            Default: 50 Ohms.
+
+    Returns:
+        s2p: The network corresponding to a shunt capacitance, `c`,
+            calculated at the given frequencies, `freqs`.
+    """
+    w = TWOPI * np.array(freqs)
+    s = 1j * w
+    jwRC = s * r0 * c
+    s11 = -jwRC / (2 + jwRC)
+    s21 =     2 / (2 + jwRC)
+    return rf.Network(s=np.array(list(zip(zip(s11, s21), zip(s21, s11)))), f=freqs, z0=r0)
+
+
+def sLseries(freqs: list[float], l: float, r0: float = 50.0) -> rf.Network:
+    """
+    Calculate the 2-port network for a series inductance.
+
+    Args:
+        freqs: The frequencies at which to calculate network data (Hz).
+        l: The inductance (H).
+
+    Keyword Args:
+        r0: The reference impedance for the network (Ohms).
+            Default: 50 Ohms.
+
+    Returns:
+        s2p: The network corresponding to a series inductance, `l`,
+            calculated at the given frequencies, `freqs`.
+    """
+    w = TWOPI * np.array(freqs)
+    s = 1j * w
+    w2L2 = w**2 * l**2
+    jwRL = s * r0 * l
+    R2x2 = 2 * r0**2
+    den = 2 * R2x2 + w2L2
+    s11 = (w2L2 + 2 * jwRL) / den
+    s21 = 2 * (R2x2 - jwRL) / den
+    return rf.Network(s=np.array(list(zip(zip(s11, s21), zip(s21, s11)))), f=freqs, z0=r0)
+
+
+def sDieLadderSegment(freqs: list[float], trip: tuple[float, float, float]) -> rf.Network:
+    """
+    Calculate one segment of the on-die parasitic ladder network.
+
+    Args:
+        f: List of frequencies to use for network creation (Hz).
+        trip: Triple containing:
+            - R0: Reference impedance for network (Ohms).
+            - Cd: Shunt capacitance (F).
+            - Ls: Series inductance (H).
+
+    Returns:
+        s2p: Two port network for segment.
+    """
+    R0, Cd, Ls = trip
+    return sCshunt(freqs, Cd, r0=R0) ** sLseries(freqs, Ls, r0=R0)
+
+
 class COM(HasTraits):
     """
     Encoding of the IEEE 802.3-22 Annex 93A "Channel Operating Margin"
@@ -182,11 +254,13 @@ class COM(HasTraits):
     fp1 = Float(FB / 4.)  # CTLE first pole frequency.
     fp2 = Float(FB)  # CTLE second pole frequency.
     fLF = Float(1e6)  # CTLE low-f corner frequency.
-    # - DFE
+    opt_mode = Enum(["PRZF", "MMSE"])
+    # - FFE/DFE
     N_DFE = 14  # number of DFE taps.
     nDFE = Int(N_DFE)  # number of DFE taps.
     bmax = List([1.0] * N_DFE)  # DFE maximum tap values.
     bmin = List([-1.0] * N_DFE)  # DFE minimum tap values.
+    
     # - Package & Die Modeling
     # -- MKS
     R0 = Float(50.0)  # system reference impedance.
@@ -196,9 +270,12 @@ class COM(HasTraits):
     Cp = Float(0.18e-12)  # parasitic ball capacitance.
     Ls = List([0.13e-9, 0.15e-9, 0.14e-9])  # parasitic die inductances.
     # -- ns & mm
-    zp_vals = Array([[33, 1.8],
-                     [12, 1.8]])  # package transmission line lengths (mm).
-    zp = Enum([33, 1.8], values="zp_vals")
+    # zp_vals = Array([Array([33, 1.8]),
+    #                  Array([12, 1.8])])  # package transmission line lengths (mm).
+    zp_vals = List([12, 33])
+    # zp = Enum([33, 1.8], values="zp_vals")
+    zp = Enum(values="zp_vals")
+    zp_B = Float(1.8)
     zc = List([87.5, 92.5])  # package transmission line characteristic impedances (Ohms).
     gamma0 = Float(5.0e-4)   # propagation loss constant (1/mm)
     a1 = Float(8.9e-4)       # first polynomial coefficient (sqrt_ns/mm)
@@ -449,6 +526,12 @@ class COM(HasTraits):
         On-die parasitic capacitance/inductance ladder network.
         """
 
+        Cd = self.Cd
+        Ls = self.Ls
+        R0 = [self.R0] * len(Cd)
+        rslt = rf.network.cascade_list(list(map(lambda trip: sDieLadderSegment(self.freqs, trip), zip(R0, Cd, Ls))))
+        return rslt
+
     @cached_property
     def _get_sPkgRx(self) -> rf.Network:
         """
@@ -462,14 +545,16 @@ class COM(HasTraits):
         """
         Tx package response.
         """
-        return self.sC(self.Cd) ** self.sZp ** self.sC(self.Cp)
+        # return self.sC(self.Cd) ** self.sZp ** self.sC(self.Cp)
+        return self.sDieLadder() ** self.sZp ** self.sC(self.Cp)
 
     @cached_property
     def _get_sPkgNEXT(self) -> rf.Network:
         """
         NEXT package response.
         """
-        return self.sC(self.Cd) ** self.sZpNEXT ** self.sC(self.Cp)
+        # return self.sC(self.Cd) ** self.sZpNEXT ** self.sC(self.Cp)
+        return self.sDieLadder() ** self.sZpNEXT ** self.sC(self.Cp)
 
     @cached_property
     def _get_sZp(self) -> rf.Network:
@@ -493,20 +578,24 @@ class COM(HasTraits):
         """
 
         zc = self.zc
+        assert len(zc) in [1, 2], ValueError(
+            f"Length of `zc` ({len(zc)}) must be 1 or 2!")
+
         if NEXT:
             zp = self.zp_vals[0]
         else:
             zp = self.zp
-        assert len(zc) == len(zp), ValueError(
-            f"Length of `zc` ({len(zc)}) does not match length of `zp` ({len(zp)})!")
+        if len(zc) == 1:
+            zps = [zp]
+        else:
+            zps = [zp, self.zp_B]
 
         f_GHz  = self.freqs / 1e9               # noqa E221
-        r0 = self.R0
+        r0     = self.R0
         a1     = self.a1      # sqrt(ns)/mm
         a2     = self.a2      # ns/mm
         tau    = self.tau     # ns/mm
         gamma0 = self.gamma0  # 1/mm
-        rho    = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
         gamma1 = a1 * (1 + 1j)
 
         def gamma2(f: float) -> complex:
@@ -522,17 +611,20 @@ class COM(HasTraits):
 
         g = np.array(list(map(gamma, f_GHz)))
 
-        def mk_s2p(zc: float, zp: float) -> NDArray:
+        def mk_s2p(z_pair: tuple[float, float]) -> NDArray:
             """
             Make two dimmensional S-parameter matrix for a leg of T-line.
 
             Args:
-                zc: Characteristic impedance of leg (Ohms).
-                zp: Length of leg (mm).
+                z_pair: Pair consisting of:
+                    - zc: Characteristic impedance of leg (Ohms).
+                    - zp: Length of leg (mm).
 
             Returns:
                 s2p: Two port S-parameters for the leg.
             """
+            zc, zp = z_pair
+            rho = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
             s11 = s22 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
             s21 = s12 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
             return np.array(
@@ -540,7 +632,7 @@ class COM(HasTraits):
                   [_s21, _s22]]
                  for _s11, _s12, _s21, _s22 in zip(s11, s12, s21, s22)])
 
-        s2p = np.array(rf.network.cascade_list(list(map(mk_s2p, zip(zc, zp)))))
+        s2p = np.array(rf.network.cascade_list(list(map(mk_s2p, zip(zc, zps)))))
         return rf.Network(s=s2p, f=self.freqs, z0=[2 * r0, 2 * r0])
 
     # - Channels
@@ -1367,3 +1459,7 @@ class COM(HasTraits):
         return (As,
                 abs(np.where(Py >= self.DER0)[0][0] - npts // 2) * ystep,
                 cursor_ix)
+
+if __name__ == "__main__":
+    from pychopmarg.cli import cli
+    cli()

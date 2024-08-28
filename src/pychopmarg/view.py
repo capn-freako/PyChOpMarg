@@ -235,8 +235,17 @@ traits_view = View(
                                 editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
                                 enabled_when="not chnl_s32p",
                             ),
+                            Item(
+                                name="chnl_s4p_fext6",
+                                label="s4p_FEXT6",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
+                            ),
                         ),
                         VGroup(
+                            Item(
+                                label="Note: The `chnl_s32p` field, above, must be empty.",
+                                ),
                             Item(
                                 name="chnl_s4p_next1",
                                 label="s4p_NEXT1",
@@ -258,6 +267,18 @@ traits_view = View(
                             Item(
                                 name="chnl_s4p_next4",
                                 label="s4p_NEXT4",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
+                            ),
+                            Item(
+                                name="chnl_s4p_next5",
+                                label="s4p_NEXT5",
+                                editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
+                                enabled_when="not chnl_s32p",
+                            ),
+                            Item(
+                                name="chnl_s4p_next6",
+                                label="s4p_NEXT6",
                                 editor=FileEditor(dialog_style="open", filter=["*.s4p"]),
                                 enabled_when="not chnl_s32p",
                             ),
@@ -285,20 +306,25 @@ traits_view = View(
                             ),
                             HGroup(
                                 Item(
-                                    name="zp", label="z_p",
-                                    tooltip="Package transmission line length",
+                                    name="zp", label="z_p A",
+                                    tooltip="Package transmission line length A",
+                                ),
+                                Item(label="mm"),
+                                Item(
+                                    name="zp_B", label="z_p B", style="readonly",
+                                    tooltip="Package transmission line length B",
                                 ),
                                 Item(label="mm"),
                             ),
-                        ),
-                        VGroup(
                             HGroup(
                                 Item(
-                                    name="Cd", format_func=to_pF, label="C_d",
-                                    tooltip="Die parasitic capacitance (pF)",
+                                    name="Ls", format_func=to_nH, label="L_s",
+                                    tooltip="Die parasitic inductances (nH)",
                                 ),
-                                Item(label="pF"),
+                                Item(label="nH"),
                             ),
+                        ),
+                        VGroup(
                             HGroup(
                                 Item(
                                     name="Cb", format_func=to_pF, label="C_b",
@@ -313,6 +339,14 @@ traits_view = View(
                                 ),
                                 Item(label="pF"),
                             ),
+                            Item(label="Note: `L_s` & `C_d` in left->right order."),
+                            HGroup(
+                                Item(
+                                    name="Cd", format_func=to_pF, label="C_d",
+                                    tooltip="Die parasitic capacitances (pF)",
+                                ),
+                                Item(label="pF"),
+                            ),
                         ),
                     ),
                     label="Package",
@@ -321,77 +355,89 @@ traits_view = View(
                 label="Channel",
                 show_border=True,
             ),
-            HGroup(
-                VGroup(
-                    Item(
-                        name="c0_min", label="c(0)",
-                        tooltip="Minimum allowed main tap weight.",
-                    ),
-                    Item(
-                        name="tx_taps_pos", label="c_pos",
-                        style="readonly", format_str="%10d",
-                        tooltip="Tap positions, relative to main cursor.",
-                    ),
-                    Item(
-                        name="tx_taps_min", label="c_min",
-                        tooltip="Minimum tap weights.",
-                    ),
-                    Item(
-                        name="tx_taps_max", label="c_max",
-                        tooltip="Maximum tap weights.",
-                    ),
-                    Item(
-                        name="tx_taps_step", label="c_step",
-                        tooltip="Tap weight steps.",
-                    ),
-                    Item(
-                        name="tx_taps", label="c_val",
-                        tooltip="Tap weight values.",
-                    ),
-                    label="Tx FFE",
-                    show_border=True,
-                ),
-                VGroup(
-                    HGroup(
+            VGroup(
+                Item(name="opt_mode", label="Optimization Mode",
+                     tooltip="Linear EQ optimization mode."),
+                HGroup(
+                    VGroup(
                         Item(
-                            name="gDC", label="g_DC",
-                            tooltip="CTLE d.c. gain 1 (dB)",
+                            name="c0_min", label="c(0)",
+                            tooltip="Minimum allowed main tap weight.",
                         ),
                         Item(
-                            name="gDC2", label="g_DC2",
-                            tooltip="CTLE d.c. gain 2 (dB)",
+                            name="tx_taps_pos", label="c_pos",
+                            style="readonly", format_str="%10d",
+                            tooltip="Tap positions, relative to main cursor.",
                         ),
-                    ),
-                    HGroup(
                         Item(
-                            name="fz", format_func=to_GHz, label="f_z",
-                            tooltip="CTLE zero frequency (GHz)",
+                            name="tx_taps_min", label="c_min",
+                            tooltip="Minimum tap weights.",
                         ),
-                        Item(label="GHz"),
-                    ),
-                    HGroup(
                         Item(
-                            name="fp1", format_func=to_GHz, label="f_p1",
-                            tooltip="CTLE first pole frequency (GHz)",
+                            name="tx_taps_max", label="c_max",
+                            tooltip="Maximum tap weights.",
                         ),
-                        Item(label="GHz"),
-                    ),
-                    HGroup(
                         Item(
-                            name="fp2", format_func=to_GHz, label="f_p2",
-                            tooltip="CTLE second pole frequency (GHz)",
+                            name="tx_taps_step", label="c_step",
+                            tooltip="Tap weight steps.",
                         ),
-                        Item(label="GHz"),
+                        Item(
+                            name="tx_taps", label="c_val",
+                            tooltip="Tap weight values.",
+                        ),
+                        label="Tx FFE",
+                        show_border=True,
                     ),
-                    HGroup(
+                    VGroup(
+                        HGroup(
+                            Item(
+                                name="gDC", label="g_DC",
+                                tooltip="CTLE d.c. gain 1 (dB)",
+                            ),
+                            Item(
+                                name="gDC2", label="g_DC2",
+                                tooltip="CTLE d.c. gain 2 (dB)",
+                            ),
+                        ),
+                        HGroup(
+                            Item(
+                                name="fz", format_func=to_GHz, label="f_z",
+                                tooltip="CTLE zero frequency (GHz)",
+                            ),
+                            Item(label="GHz"),
+                        ),
+                        HGroup(
+                            Item(
+                                name="fp1", format_func=to_GHz, label="f_p1",
+                                tooltip="CTLE first pole frequency (GHz)",
+                            ),
+                            Item(label="GHz"),
+                        ),
+                        HGroup(
+                            Item(
+                                name="fp2", format_func=to_GHz, label="f_p2",
+                                tooltip="CTLE second pole frequency (GHz)",
+                            ),
+                            Item(label="GHz"),
+                        ),
+                        HGroup(
+                            Item(
+                                name="fLF", format_func=to_MHz, label="f_LF",
+                                tooltip="CTLE low-f corner frequency (MHz)",
+                            ),
+                            Item(label="MHz"),
+                        ),
+                        label="Rx CTLE",
+                        show_border=True,
+                    ),
+                    VGroup(
                         Item(
                             name="fLF", format_func=to_MHz, label="f_LF",
                             tooltip="CTLE low-f corner frequency (MHz)",
                         ),
-                        Item(label="MHz"),
+                        label="Rx FFE/DFE",
+                        show_border=True,
                     ),
-                    label="Rx CTLE",
-                    show_border=True,
                 ),
                 label="Equalization",
                 show_border=True,
