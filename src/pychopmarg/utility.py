@@ -11,6 +11,8 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 import numpy as np  # type: ignore
 import skrf as rf
 
+from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
+
 
 def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Network:
     """
@@ -175,3 +177,72 @@ def import_s32p(filename: str, vic_chnl: int = 1) -> list[tuple[rf.Network, str]
             subntwk = (subntwk, 'FEXT')
         aggs.append(subntwk)
     return [vic] + aggs
+
+
+def sCshunt(freqs: list[float], c: float, r0: float = 50.0) -> rf.Network:
+    """
+    Calculate the 2-port network for a shunt capacitance.
+
+    Args:
+        freqs: The frequencies at which to calculate network data (Hz).
+        c: The capacitance (F).
+
+    Keyword Args:
+        r0: The reference impedance for the network (Ohms).
+            Default: 50 Ohms.
+
+    Returns:
+        s2p: The network corresponding to a shunt capacitance, `c`,
+            calculated at the given frequencies, `freqs`.
+    """
+    w = TWOPI * np.array(freqs)
+    s = 1j * w
+    jwRC = s * r0 * c
+    s11 = -jwRC / (2 + jwRC)
+    s21 =     2 / (2 + jwRC)
+    return rf.Network(s=np.array(list(zip(zip(s11, s21), zip(s21, s11)))), f=freqs, z0=r0)
+
+
+def sLseries(freqs: list[float], l: float, r0: float = 50.0) -> rf.Network:
+    """
+    Calculate the 2-port network for a series inductance.
+
+    Args:
+        freqs: The frequencies at which to calculate network data (Hz).
+        l: The inductance (H).
+
+    Keyword Args:
+        r0: The reference impedance for the network (Ohms).
+            Default: 50 Ohms.
+
+    Returns:
+        s2p: The network corresponding to a series inductance, `l`,
+            calculated at the given frequencies, `freqs`.
+    """
+    w = TWOPI * np.array(freqs)
+    s = 1j * w
+    w2L2 = w**2 * l**2
+    jwRL = s * r0 * l
+    R2x2 = 2 * r0**2
+    den = 2 * R2x2 + w2L2
+    s11 = (w2L2 + 2 * jwRL) / den
+    s21 = 2 * (R2x2 - jwRL) / den
+    return rf.Network(s=np.array(list(zip(zip(s11, s21), zip(s21, s11)))), f=freqs, z0=r0)
+
+
+def sDieLadderSegment(freqs: list[float], trip: tuple[float, float, float]) -> rf.Network:
+    """
+    Calculate one segment of the on-die parasitic ladder network.
+
+    Args:
+        f: List of frequencies to use for network creation (Hz).
+        trip: Triple containing:
+            - R0: Reference impedance for network (Ohms).
+            - Cd: Shunt capacitance (F).
+            - Ls: Series inductance (H).
+
+    Returns:
+        s2p: Two port network for segment.
+    """
+    R0, Cd, Ls = trip
+    return sCshunt(freqs, Cd, r0=R0) ** sLseries(freqs, Ls, r0=R0)
