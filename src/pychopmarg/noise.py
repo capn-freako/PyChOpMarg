@@ -23,7 +23,8 @@ class NoiseCalc(HasTraits):
             this class function as a stand-alone GUI applet.
     """
 
-    def __init__(self, L: int, Tb: float, ts: float, t: Rvec, vic_pulse_resp: Rvec,
+    def __init__(self, L: int, Tb: float, ts_ix: int, t: Rvec,
+                 vic_pulse_resp: Rvec, agg_pulse_resps: list[Rvec],
                  f: Rvec, Ht: Cvec, H21: Cvec, Hr: Cvec, Hctf: Cvec,
                  eps: float = 0.001) -> None:
         """
@@ -32,9 +33,10 @@ class NoiseCalc(HasTraits):
         Args:
             L: Number of modulation levels.
             Tb: Unit interval (s).
-            ts: Main pulse sampling time (s).
+            ts_ix: Main pulse sampling index.
             t: System time vector (for indexing pulse responses) (s).
             vic_pulse_resp: Victim pulse response (V).
+            agg_pulse_resps: List of aggressor pulse responses (V).
             f: System frequency vector (for indexing transfer functions) (Hz).
             Ht: Risetime filter transfer function.
             H21: Terminated interconnect transfer function.
@@ -65,20 +67,21 @@ class NoiseCalc(HasTraits):
 
         super(NoiseCalc, self).__init__()
 
-        self.L = L
-        self.Tb = Tb
-        self.ts = ts
-        self.t = t
-        self.vic_pulse_resp = vic_pulse_resp
-        self.f = f
-        self.Ht = Ht
-        self.H21 = H21
-        self.Hr = Hr
-        self.Hctf = Hctf
+        self.L               = L
+        self.Tb              = Tb
+        self.ts_ix           = ts_ix
+        self.t               = t
+        self.vic_pulse_resp  = vic_pulse_resp
+        self.agg_pulse_resps = agg_pulse_resps
+        self.f               = f
+        self.Ht              = Ht
+        self.H21             = H21
+        self.Hr              = Hr
+        self.Hctf            = Hctf
 
-        self.fN = 0.5 / Tb                         # Nyquist frequency
-        self.nspui = Tb // t[1]                    # Samples per unit interval
-        self.varX = (L**2 - 1) / (3 * (L - 1)**2)  # Signal power
+        self.fN    = 0.5 / Tb                       # Nyquist frequency
+        self.nspui = Tb // t[1]                     # Samples per unit interval
+        self.varX  = (L**2 - 1) / (3 * (L - 1)**2)  # Signal power
 
     def get_aliased_freq(self, f: float) -> float:
         """
@@ -146,14 +149,13 @@ class NoiseCalc(HasTraits):
 
         Tb    = self.Tb
         f     = self.f
-        ts    = self.ts
+        ts_ix = self.ts_ix
         nspui = self.nspui
         varX  = self.varX
 
         Htn   = self.Ht * self.H21 * self.Hr * self.Hctf
         _htn  = irfft(Av * Tb * sinc(f * Tb) * Htn)
         _t    = array([n * 0.5 / f[-1] for n in range(_htn)])
-        ts_ix = argmin(abs(_t - ts))  # Find closest match to `ts` in `_t`.
         htn   = _htn[ts_ix::nspui]
 
         return varX * exp(10, -snr_tx / 10) * abs(rfft(htn))**2 * Tb
@@ -173,12 +175,11 @@ class NoiseCalc(HasTraits):
         """
 
         t              = self.t
-        ts             = self.ts
+        ts_ix          = self.ts_ix
         Tb             = self.Tb
         varX           = self.varX
         vic_pulse_resp = self.vic_pulse_resp
 
-        ts_ix = argmin(abs(t - ts))  # Find closest match to `ts` in `t`.
         dV = diff(vic_pulse_resp)
         dt = t[1]
         nspui = Tb / dt
@@ -198,7 +199,7 @@ class NoiseCalc(HasTraits):
 
         """
 
-        Sn = self.Srn + sum(array(list(map(self.Sxn, agg_pulse_resps))), axis=0) + self.Stn + self.Sjn
+        Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0) + self.Stn + self.Sjn
         Rn = irfft(Sn) / self.Tb
 
         return toeplitz(Rn)
