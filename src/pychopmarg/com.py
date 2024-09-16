@@ -45,8 +45,10 @@ from traits.api        import (
     Str,
 )  # type: ignore
 
-from pychopmarg.common  import Rvec, Cvec, COMParams, PI, TWOPI
-from pychopmarg.utility import import_s32p, sdd_21, sDieLadderSegment
+from pychopmarg.common   import Rvec, Cvec, COMParams, PI, TWOPI
+from pychopmarg.noise    import NoiseCalc
+from pychopmarg.optimize import mmse
+from pychopmarg.utility  import import_s32p, sdd_21, sDieLadderSegment
 
 # Globals
 # These are used by `calc_Hffe()`, to minimize the size of its cache.
@@ -58,7 +60,10 @@ gNtaps: int = None  # type: ignore
 PLOT_SPACING = 20
 
 T = TypeVar('T', Any, Any)
-OptMode = Enum('OptMode', ['PRZF', 'MMSE'])
+
+class OptMode(Enum):
+    PRZF = 1
+    MMSE = 2
 
 
 def from_dB(x: float) -> float:
@@ -194,6 +199,7 @@ class COM(HasTraits):
     Ane = Float(0.6)  # NEXT drive voltage (V).
     L = Int(2)  # number of output levels.
     RLM = Float(1.0)  # ratio level mismatch.
+    tr = Float(10e-12)  # Tx output risetime (s).
     # - Linear EQ
     nTxTaps = 6
     tx_n_post = Int(3)
@@ -219,6 +225,7 @@ class COM(HasTraits):
     bmax = List([1.0] * N_DFE)  # DFE maximum tap values.
     bmin = List([-1.0] * N_DFE)  # DFE minimum tap values.
     nRxTaps = 16
+    nRxPreTaps = 5
     rx_taps_min = Array(shape=(1, (1, nRxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
     rx_taps_max = Array(shape=(1, (1, nRxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
     rx_taps_step = Array(shape=(1, (1, nRxTaps)), dtype=float, value=[[0., 0., 0.02, 0.02, 0., 0.],])
@@ -389,6 +396,18 @@ class COM(HasTraits):
         Ts = self.t_irfft[1]
         w = int(ui / Ts)
         return w * np.sinc(ui * self.freqs)
+
+    # - Tx risetime transfer function.
+    Ht = Property(Array, depends_on=['tr'])
+
+    @cached_property
+    def _get_Ht(self):
+        """
+        Return the voltage transfer function, H(f), associated w/ the Tx risetime,
+        according to (93A-46).
+        """
+        f = self.freqs / 1e9  # 93A-46 calls for f in GHz.
+        return np.exp(-2 * (PI * f * self.tr / 1.6832)**2)
 
     # - Rx AFE voltage transfer function.
     Hr = Property(Array, depends_on=['freqs'])
@@ -727,7 +746,9 @@ class COM(HasTraits):
         obj.gui = gui
         return obj
 
-    def __call__(self, do_opt_eq=True, tx_taps: Rvec = None):
+    def __call__(
+        self, do_opt_eq: bool = True, tx_taps: Rvec = None, opt_mode: OptMode = OptMode.PRZF
+    ) -> float:
         """
         Calculate the COM value.
 
@@ -736,13 +757,22 @@ class COM(HasTraits):
                 Default: True
             tx_taps: Used when `do_opt_eq` = False.
                 Default: None
+            opt_mode: Method for EQ optimization.
+                Default: OptMode.PRZF (i.e. - Use Pulse Response Zero Forcing.)
+
+        Returns:
+            COM: The calculated COM value (dB).
+
+        Raises:
+            RuntimeError if throughput channel is missing.
+            RuntimeError if EQ optimization fails.
         """
 
         assert self.chnl_s32p or self.chnl_s4p_thru, RuntimeError(
             "You must, at least, select a thru path channel file, either 32 or 4 port.")
         self.chnls = self.get_chnls()
         self.status_str = "Optimizing EQ..."
-        assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
+        assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps, opt_mode=opt_mode), RuntimeError(
             "EQ optimization failed!")
 
         self.status_str = "Calculating noise..."
@@ -767,6 +797,7 @@ class COM(HasTraits):
 
         Raises:
             KeyError: If an expected key is not found in the provided dictionary.
+            ValueError: If certain invariants aren't met.
         """
 
         # Set default parameter values, as necessary.
@@ -778,20 +809,37 @@ class COM(HasTraits):
             params['f_LF'] = 0.001
         if 'g_DC2' not in params:
             params['g_DC2'] = 0.0
+        if 'T_r' not in params:
+            params['T_r'] = 10e-12
 
         # Capture parameters, adjusting units as necessary to keep all but
         # (dB), package values, and `eta0` SI.
+        # System
         self.fb = params['fb'] * 1e9
         self.nspui = params['M']
         self.L = params['L']
         self.fstep = params['fstep']
+        # Tx EQ
+        self.tr = params['T_r']
         self.tx_taps_min = params['tx_taps_min']
         self.tx_taps_max = params['tx_taps_max']
         self.tx_taps_step = params['tx_taps_step']
+        assert len(self.tx_taps_min) == len(self.tx_taps_max) == len(self.tx_taps_step), ValueError(
+            f"The lengths of keys: tx_taps_min, tx_taps_max, and tx_taps_step, must match!")
         self.c0_min = params['c0_min']
+        # Rx EQ
+        self.bmin = params['dfe_min']
+        self.bmax = params['dfe_max']
+        assert len(self.bmin) == len(self.bmax), ValueError(
+            f"The lengths of keys: dfe_min, and dfe_max, must match!")
+        self.Nb = len(self.bmin)
         self.rx_taps_min = params['rx_taps_min']
         self.rx_taps_max = params['rx_taps_max']
         self.rx_taps_step = params['rx_taps_step']
+        assert len(self.rx_taps_min[0]) == len(self.rx_taps_max[0]) == len(self.rx_taps_step[0]), ValueError(
+            f"The lengths of keys: rx_taps_min, rx_taps_max, and rx_taps_step, must match!")
+        self.nRxTaps = len(self.rx_taps_min[0])
+        self.nRxPreTaps = params['dw']
         self.w0_min = params['w0_min']
         self.fr = params['f_r']
         self.fz = params['f_z'] * 1e9
@@ -800,6 +848,7 @@ class COM(HasTraits):
         self.fLF = params['f_LF'] * 1e9
         self.gDC_vals = params['g_DC']
         self.gDC2_vals = params['g_DC2']
+        # Package
         self.Rd = params['R_d']
         self.R0 = params['R_0']
         self.Cd = list(map(lambda x: x / 1e12, params['C_d']))
@@ -1200,7 +1249,10 @@ class COM(HasTraits):
 
         return fom
 
-    def opt_eq(self, do_opt_eq: bool = True, tx_taps: Optional[Rvec] = None, opt_mode: OptMode = OptMode.PRZF) -> bool:
+    def opt_eq(
+        self, do_opt_eq: bool = True, tx_taps: Optional[Rvec] = None,
+        opt_mode: OptMode = OptMode.PRZF
+    ) -> bool:
         """
         Find the optimum values for the linear equalization parameters:
         c[n], gDC, gDC2, and w[n] as per IEEE 802.3-22 93A.1.6
@@ -1219,48 +1271,66 @@ class COM(HasTraits):
         """
 
         if do_opt_eq:
-            match opt_mode:
-                case OptMode.PRZF:
-                    # Run the nested optimization loops.
-                    def check_taps(tx_taps: Rvec, t0_min: float = self.c0_min) -> bool:
-                        if (1 - sum(abs(np.array(tx_taps)))) < t0_min:
-                            return False
-                        else:
-                            return True
+            # Run the nested optimization loops.
+            def check_taps(tx_taps: Rvec, t0_min: float = self.c0_min) -> bool:
+                if (1 - sum(abs(np.array(tx_taps)))) < t0_min:
+                    return False
+                else:
+                    return True
 
-                    fom_max = -100.0
-                    fom_max_changed = False
-                    foms = []
-                    for gDC2 in self.gDC2_vals:
-                        for gDC in self.gDC_vals:
-                            for tx_taps in self.tx_combs:
-                                if not check_taps(np.array(tx_taps)):
-                                    continue
+            fom_max = -100.0
+            fom_max_changed = False
+            foms = []
+            for gDC2 in self.gDC2_vals:
+                for gDC in self.gDC_vals:
+                    for tx_taps in self.tx_combs:
+                        if not check_taps(np.array(tx_taps)):
+                            continue
+                        match opt_mode:
+                            case OptMode.PRZF:
                                 for rx_taps in self.rx_combs:
                                     if not check_taps(np.array(rx_taps), self.w0_min):
                                         continue
                                     fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2, rx_taps=rx_taps)
-                                    foms.append(fom)
-                                    if fom > fom_max:
-                                        fom_max_changed = True
-                                        fom_max = fom
-                                        gDC2_best = gDC2
-                                        gDC_best = gDC
-                                        tx_taps_best = tx_taps
-                                        rx_taps_best = rx_taps
-                                        dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
-                                        cursor_ix_best = self.fom_rslts['cursor_ix']
-                                        As_best = self.fom_rslts['As']
-                                        varTx_best = self.fom_rslts['varTx']
-                                        varISI_best = self.fom_rslts['varISI']
-                                        varJ_best = self.fom_rslts['varJ']
-                                        varXT_best = self.fom_rslts['varXT']
-                                        varN_best = self.fom_rslts['varN']
-                                        vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
-                case OptMode.MMSE:
-                    raise ValueError("Sorry, haven't coded up the MMSE optimizer, yet.")
-                case _:
-                    raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
+                            case OptMode.MMSE:
+                                pulse_resps = self.gen_pulse_resps(self.chnls, np.array(tx_taps), gDC=gDC, gDC2=gDC2)
+                                theNoiseCalc = NoiseCalc(
+                                    self.L, 1/self.fb, 0, self.times, pulse_resps[0], pulse_resps[1:],
+                                    self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.Hctf,
+                                    self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
+                                print(f"self.nRxTaps: {self.nRxTaps}", flush=True)
+                                rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb)
+                                fom = rslt["fom"]
+                                rx_taps = rslt["rx_taps"]
+                                # In the PRZF branch, these are set by calc_fom().
+                                self.fom_rslts['dfe_tap_weights'] = rslt["dfe_tap_weights"]
+                                self.fom_rslts['cursor_ix'] = rslt["cursor_ix"]
+                                self.fom_rslts['As'] = rslt["As"]
+                                self.fom_rslts['varTx'] = rslt["varTx"]
+                                self.fom_rslts['varISI'] = rslt["varISI"]
+                                self.fom_rslts['varJ'] = rslt["varJ"]
+                                self.fom_rslts['varXT'] = rslt["varXT"]
+                                self.fom_rslts['varN'] = rslt["varN"]
+                                self.fom_rslts['vic_pulse_resp'] = rslt["vic_pulse_resp"]
+                            case _:
+                                raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
+                        foms.append(fom)
+                        if fom > fom_max:
+                            fom_max_changed = True
+                            fom_max = fom
+                            gDC2_best = gDC2
+                            gDC_best = gDC
+                            tx_taps_best = tx_taps
+                            rx_taps_best = rx_taps
+                            dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
+                            cursor_ix_best = self.fom_rslts['cursor_ix']
+                            As_best = self.fom_rslts['As']
+                            varTx_best = self.fom_rslts['varTx']
+                            varISI_best = self.fom_rslts['varISI']
+                            varJ_best = self.fom_rslts['varJ']
+                            varXT_best = self.fom_rslts['varXT']
+                            varN_best = self.fom_rslts['varN']
+                            vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
             fom = self.calc_fom(tx_taps)

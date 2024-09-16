@@ -8,8 +8,10 @@ Original date:   August 30, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from numpy        import argmax, array, identity, zeros
-from scipy.linalg import solve
+from typing import Any
+
+from numpy        import argmax, array, concatenate, identity, insert, zeros
+from scipy.linalg import solve, toeplitz
 
 from pychopmarg.noise import NoiseCalc
 
@@ -21,7 +23,7 @@ def przf():
     pass
 
 
-def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int):
+def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int) -> dict[str, Any]:
     """
     Optimize linear equalization, via _Minimum Mean Squared Error_ (MMSE).
 
@@ -37,20 +39,26 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int):
 
     """
 
-    vic_pr = theNoiseCalc.vic_pulse_response
+    vic_pr = theNoiseCalc.vic_pulse_resp
     nspui  = theNoiseCalc.nspui
 
     max_fom = -1000
     ts_ix_best = 0
+    rslt = {}
     max_ix = argmax(vic_pr)
-    for ts_ix in range(max(0, max_ix - nspui // 2), min(len(vic_pr), max_ix + nspui // 2)):
+    half_UI = int(nspui // 2)
+    for ts_ix in range(max(0, max_ix - half_UI), min(len(vic_pr), max_ix + half_UI)):
         theNoiseCalc.ts_ix = ts_ix
-        h = array([ts_ix % nspui:: nspui])
+        h = vic_pr[ts_ix % nspui:: nspui]
         d = dw + len(h)
-        H = toeplitz(concatenate((h, zeros(Nw - 1))), concatenate((h[0], zeros(Nw - 1))))
-        h0 = H[d + 1]
+        H = toeplitz(concatenate((h, zeros(Nw - 1))), insert(zeros(Nw - 1), 0, h[0]))
+        try:
+            h0 = H[d + 1]
+        except Exception:
+            print(f"H.shape: {H.shape}; d: {d}; Nw: {Nw}; dw: {dw}")
+            raise
         Hb = H[d + 2: d + Nb + 2]
-        R = H.T @ H + theNoiseCalc.Rnn / theNoiseCalc.varX
+        R = H.T @ H + theNoiseCalc.Rnn(theNoiseCalc.agg_pulse_resps) / theNoiseCalc.varX
         Ib = identity(Nb)
         zb = zeros(Nb)
         A = array([[ R, -Hb.T, -h0.T],
@@ -72,8 +80,23 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int):
         mse = varX * (w_lim.T @ R @ w_lim + 1 + b_lim.T @ b_lim - 2 * w_lim.T @ h0.T - 2 * w_lim.T @ Hb.T @ b_lim)
         fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
         if fom > max_fom:
-            ts_ix_best = ts_ix
+            rslt["ts_ix"] = ts_ix
+            rslt["fom"] = fom
+            rslt["w"] = w_lim
+            rslt["b"] = b_lim
+            rslt["mse"] = mse
+            rslt["rx_taps"] = w_lim
+            rslt["dfe_tap_weights"] = b_lim
+            rslt["cursor_ix"] = ts_ix
+            rslt["As"] = vic_pr[ts_ix]
+            df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
+            # rslt["varTx"] = sum(theNoiseCalc.Stn(Av, snr_tx) * df)
+            rslt["varTx"] = 0
+            rslt["varISI"] = 0
+            rslt["varJ"] = 0
+            rslt["varXT"] = 0
+            rslt["varN"] = 0
+            rslt["vic_pulse_resp"] = vic_pr
             max_fom = fom
-            w_best = w_lim
-            b_best = b_lim
-            mse_best = mse
+
+    return rslt

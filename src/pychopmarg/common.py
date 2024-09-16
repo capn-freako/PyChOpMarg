@@ -16,6 +16,8 @@ Real = TypeVar('Real', float, float)
 Comp = TypeVar('Comp', complex, complex)
 Rvec: TypeAlias = npt.NDArray[Real]
 Cvec: TypeAlias = npt.NDArray[Comp]
+Rmat: TypeAlias = npt.NDArray[Rvec]
+Cmat: TypeAlias = npt.NDArray[Cvec]
 COMParams: TypeAlias = dict[str, Any]  # ToDo: Specify this concretely, perhaps in `standards` module.
 COMFiles: TypeAlias = str | list[str]
 
