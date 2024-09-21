@@ -47,7 +47,7 @@ from traits.api        import (
 
 from pychopmarg.common   import Rvec, Cvec, COMParams, PI, TWOPI
 from pychopmarg.noise    import NoiseCalc
-from pychopmarg.optimize import mmse
+from pychopmarg.optimize import mmse, przf
 from pychopmarg.utility  import import_s32p, sdd_21, sDieLadderSegment
 
 # Globals
@@ -143,8 +143,8 @@ def calc_Hffe(tap_weights: list[float], n_post: int) -> Cvec:
     assert len(gFreqs) and gFb and gC0min and gNtaps, RuntimeError(
         f"Called before global variables were initialized!\n\tgFreqs: \
         {gFreqs}, gFb: {gFb}, gC0min: {gC0min}, gNtaps: {gNtaps}")
-    assert len(tap_weights) == gNtaps, ValueError(
-        f"Length of given tap weight vector is incorrect!\n\tExpected: {gNtaps}; got: {len(tap_weights)}")
+    # assert len(tap_weights) == gNtaps, ValueError(
+    #     f"Length of given tap weight vector is incorrect!\n\tExpected: {gNtaps}; got: {len(tap_weights)}")
 
     c0 = 1 - sum(list(map(abs, tap_weights)))
     if c0 < gC0min:
@@ -241,10 +241,7 @@ class COM(HasTraits):
     Cp = Float(0.18e-12)  # parasitic ball capacitance.
     Ls = List([0.13e-9, 0.15e-9, 0.14e-9])  # parasitic die inductances.
     # -- ns & mm
-    # zp_vals = Array([Array([33, 1.8]),
-    #                  Array([12, 1.8])])  # package transmission line lengths (mm).
     zp_vals = List([12, 33])
-    # zp = Enum([33, 1.8], values="zp_vals")
     zp = Enum(values="zp_vals")
     zp_B = Float(1.8)
     zc = List([87.5, 92.5])  # package transmission line characteristic impedances (Ohms).
@@ -747,7 +744,8 @@ class COM(HasTraits):
         return obj
 
     def __call__(
-        self, do_opt_eq: bool = True, tx_taps: Rvec = None, opt_mode: OptMode = OptMode.PRZF
+        self, do_opt_eq: bool = True, tx_taps: Rvec = None,
+        opt_mode: OptMode = OptMode.PRZF, use_fom_cursor: bool = False
     ) -> float:
         """
         Calculate the COM value.
@@ -759,6 +757,10 @@ class COM(HasTraits):
                 Default: None
             opt_mode: Method for EQ optimization.
                 Default: OptMode.PRZF (i.e. - Use Pulse Response Zero Forcing.)
+            use_fom_cursor: Use the cursor location estimate of the FOM calculator
+                (either `COM.calc_fom()` or `optimize.mmse()`), instead of that
+                from `COM.calc_noise()`, when True.
+                Default: False
 
         Returns:
             COM: The calculated COM value (dB).
@@ -774,9 +776,11 @@ class COM(HasTraits):
         self.status_str = "Optimizing EQ..."
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps, opt_mode=opt_mode), RuntimeError(
             "EQ optimization failed!")
-
         self.status_str = "Calculating noise..."
-        As, Ani, self.cursor_ix = self.calc_noise()
+        if use_fom_cursor or opt_mode == OptMode.MMSE:
+            As, Ani, self.cursor_ix = self.calc_noise(cursor_ix=self.fom_rslts["cursor_ix"])
+        else:
+            As, Ani, self.cursor_ix = self.calc_noise()
         com = 20 * np.log10(As / Ani)
         self.As = As
         self.Ani = Ani
@@ -968,7 +972,7 @@ class COM(HasTraits):
         H_tx = calc_Hffe(list(tap_weights.flatten()), self.tx_n_post)
         H_rx = self.H21(s2p) * self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2)
         if rx_taps is not None:
-            H_rx *= calc_Hffe(list(rx_taps.flatten()), self.nRxTaps)
+            H_rx *= calc_Hffe(list(rx_taps.flatten()), self.nRxTaps - self.nRxPreTaps - 1)
         return (H_tx * H_rx)
 
     def pulse_resp(self, H: Cvec) -> Rvec:
@@ -1018,10 +1022,10 @@ class COM(HasTraits):
                 Default: None
             gDC2: Rx CTLE second stage d.c. gain.
                 Default: None
-            apply_eq: Include linear EQ when True; otherwise, exclude it.
-                Default: True
             rx_taps: Desired Rx FFE tap weights.
                 Default: None
+            apply_eq: Include linear EQ when True; otherwise, exclude it.
+                Default: True
 
         Returns:
             List of pulse responses.
@@ -1030,15 +1034,17 @@ class COM(HasTraits):
             None
 
         Notes:
-            1. Assumes `self.gDC` and `self.gDC2` have been set correctly, if not provided.
-            2. If `rx_taps` is not provided then assume no Rx FFE.
+            1. Assumes `self.gDC`, `self.gDC2`, and `self.rx_taps` have been set correctly, if not provided.
+
+        ToDo:
+            1. I don't think Note 1 is true; fix it.
         """
 
         pulse_resps = []
         for ntwk, ntype in ntwks:
             if apply_eq:
                 if ntype == 'NEXT':
-                    pr = self.pulse_resp(self.H(ntwk, np.zeros(tx_taps.shape), gDC, gDC2))
+                    pr = self.pulse_resp(self.H(ntwk, np.zeros(tx_taps.shape), gDC, gDC2, rx_taps=rx_taps))
                 else:
                     pr = self.pulse_resp(self.H(ntwk, tx_taps, gDC, gDC2, rx_taps=rx_taps))
             else:
@@ -1099,49 +1105,56 @@ class COM(HasTraits):
         p1s = pulse_resp[valid_pr_samp_ixs + 1]
         return (p1s - m1s) / (2 / M)  # (93A-28)
 
-    def loc_curs(self, pulse_resp: Rvec, max_range: int = 4) -> int:
+    def loc_curs(self, pulse_resp: Rvec, max_range: int = 1, eps: float = 0.001) -> int:
         """
         Locate the cursor position for the given pulse response,
-        according to (93A-25) and (93A-26).
+        according to (93A-25) and (93A-26) (i.e. - Muller-Mueller criterion).
 
         Args:
             pulse_resp: The pulse response of interest.
 
         Keyword Args:
-            max_range: The search radius, from the peak.
+            max_range: The search radius, from the peak (UI).
+                Default: 1
+            eps: Threshold for declaring floating point value to be zero.
+                Default: 0.001
 
         Returns:
             The index in the given pulse response vector of the cursor.
 
         Notes:
             1. As per v3.70 of the COM MATLAB code, we only minimize the
-                residual of (93A-25); we don't try to solve it exactly.
+                residual of (93A-25); we don't require solving it exactly.
+                (We do, however, give priority to exact solutions.)
         """
 
         M = self.nspui
         dfe_max = self.bmax
         dfe_min = self.bmin
 
-        # Find zero crossings.
+        # Minimize Muller-Mueller criterion, within `max_range` of peak,
+        # giving priority to exact solutions, as per the spec.
         peak_loc = np.argmax(pulse_resp)
-        peak_val = pulse_resp[peak_loc]
-        search_start = max(0, peak_loc - 4 * M)
-        zxi = np.where(np.diff(np.sign(pulse_resp[search_start:peak_loc] - .01 * peak_val)) >= 1)[0] + search_start
-        assert zxi, RuntimeError("No zero crossings found!")
-        zxi = zxi[-1]
-
-        # Minimize Muller-Mueller criterion within a 2UI range after zero crossing.
-        ix_best = zxi
         res_min = 1e6
-        for ix in range(zxi, zxi + 2 * M):
+        zero_res_ixs = []
+        for ix in range(peak_loc - M * max_range, peak_loc + M * max_range):
+            # Anticipate the DFE first tap value, observing its limits:
             b_1 = min(dfe_max[0],
                       max(dfe_min[0],
                           pulse_resp[ix + M] / pulse_resp[ix]))                          # (93A-26)
+            # And include the effect of that tap when checking the Muller-Mueller condition:
             res = abs(pulse_resp[ix - M] - (pulse_resp[ix + M] - b_1 * pulse_resp[ix]))  # (93A-25)
-            if res < res_min:
+            if res < eps:        # "Exact" match?
+                zero_res_ixs.append(ix)
+            elif res < res_min:  # Keep track of best solution, in case no exact matches.
                 ix_best = ix
                 res_min = res
-        return ix_best
+        if len(zero_res_ixs):  # Give priority to "exact" matches if there were any.
+            pre_peak_ixs = list(filter(lambda x: x <= peak_loc, zero_res_ixs))
+            if len(pre_peak_ixs):
+                return pre_peak_ixs[-1]  # Standard says to use first one prior to peak in event of multiple solutions.
+            return zero_res_ixs[0]       # They're all post-peak; so, return first (i.e. - closest to peak).
+        return ix_best                   # No exact solutions; so, return that which yields minimum error.
 
     def calc_fom(self, tx_taps: Rvec,
                  gDC: Optional[float] = None, gDC2: Optional[float] = None,
@@ -1155,9 +1168,11 @@ class COM(HasTraits):
 
         Keyword Args:
             gDC: CTLE first stage d.c. gain.
+                Default: None
             gDC2: CTLE second stage d.c. gain.
-            rx_taps: Rx FFE tap weights, excepting the cursor.
-                (The cursor takes whatever is left.)
+                Default: None
+            rx_taps: Rx FFE tap weight overrides.
+                Default: None
 
         Returns:
             The resultant figure of merit.
@@ -1173,8 +1188,12 @@ class COM(HasTraits):
         M = self.nspui
         freqs = self.freqs
         chnls = self.chnls
+        nDFE = len(self.bmin)
 
         # Step a - Pulse response construction.
+        if rx_taps is None:
+            pulse_resps = self.gen_pulse_resps(chnls, np.array(tx_taps), gDC=gDC, gDC2=gDC2)
+            rx_taps = przf(pulse_resps[0], M, self.nRxTaps, self.nRxPreTaps, nDFE)
         pulse_resps = self.gen_pulse_resps(chnls, np.array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=np.array(rx_taps))
 
         # Step b - Cursor identification.
@@ -1195,7 +1214,6 @@ class COM(HasTraits):
         varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)  # (93A-30)
 
         # Step e - ISI.
-        nDFE = len(self.bmin)
         # This is not compliant to the standaard, but is consistent w/ v2.60 of MATLAB code.
         n_pre = cursor_ix // M
         first_pre_ix = cursor_ix - n_pre * M
@@ -1246,6 +1264,7 @@ class COM(HasTraits):
         self.fom_rslts['varJ'] = varJ
         self.fom_rslts['varXT'] = varXT
         self.fom_rslts['varN'] = varN
+        self.fom_rslts['rx_taps'] = rx_taps
 
         return fom
 
@@ -1278,7 +1297,7 @@ class COM(HasTraits):
                 else:
                     return True
 
-            fom_max = -100.0
+            fom_max = -1000.0
             fom_max_changed = False
             foms = []
             for gDC2 in self.gDC2_vals:
@@ -1288,18 +1307,16 @@ class COM(HasTraits):
                             continue
                         match opt_mode:
                             case OptMode.PRZF:
-                                for rx_taps in self.rx_combs:
-                                    if not check_taps(np.array(rx_taps), self.w0_min):
-                                        continue
-                                    fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2, rx_taps=rx_taps)
+                                fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2)
+                                rx_taps = self.fom_rslts['rx_taps']
                             case OptMode.MMSE:
                                 pulse_resps = self.gen_pulse_resps(self.chnls, np.array(tx_taps), gDC=gDC, gDC2=gDC2)
                                 theNoiseCalc = NoiseCalc(
                                     self.L, 1/self.fb, 0, self.times, pulse_resps[0], pulse_resps[1:],
                                     self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.Hctf,
                                     self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
-                                print(f"self.nRxTaps: {self.nRxTaps}", flush=True)
-                                rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb)
+                                rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb, self.RLM, self.L,
+                                            self.bmin, self.bmax, self.rx_taps_min, self.rx_taps_max)
                                 fom = rslt["fom"]
                                 rx_taps = rslt["rx_taps"]
                                 # In the PRZF branch, these are set by calc_fom().
@@ -1312,6 +1329,7 @@ class COM(HasTraits):
                                 self.fom_rslts['varXT'] = rslt["varXT"]
                                 self.fom_rslts['varN'] = rslt["varN"]
                                 self.fom_rslts['vic_pulse_resp'] = rslt["vic_pulse_resp"]
+                                self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else 0
                             case _:
                                 raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
                         foms.append(fom)
@@ -1331,6 +1349,7 @@ class COM(HasTraits):
                             varXT_best = self.fom_rslts['varXT']
                             varN_best = self.fom_rslts['varN']
                             vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
+                            mse_best = self.fom_rslts['mse'] if 'mse' in self.fom_rslts else 0
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
             fom = self.calc_fom(tx_taps)
@@ -1340,6 +1359,7 @@ class COM(HasTraits):
             gDC2_best = self.gDC2
             gDC_best = self.gDC
             tx_taps_best = tx_taps
+            rx_taps_best = self.rx_taps
             dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
             cursor_ix_best = self.fom_rslts['cursor_ix']
             As_best = self.fom_rslts['As']
@@ -1349,14 +1369,17 @@ class COM(HasTraits):
             varXT_best = self.fom_rslts['varXT']
             varN_best = self.fom_rslts['varN']
             vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
+            mse_best = 0
 
         # Check for error and save the best results.
         if not fom_max_changed:
             return False
         self.fom = fom_max
+        self.mse = mse_best
         self.gDC2 = gDC2_best
         self.gDC = gDC_best
         self.tx_taps = [tx_taps_best,]
+        self.rx_taps = [rx_taps_best,]
         self.fom_tx_taps = print_taps(tx_taps_best)
         self.fom_dfe_taps = print_taps(dfe_tap_weights_best)
         self.fom_cursor_ix = cursor_ix_best
@@ -1380,9 +1403,15 @@ class COM(HasTraits):
         self.rslts['sigma_J'] = self.sigma_J * 1e3
         return True
 
-    def calc_noise(self) -> tuple[float, float, int]:
+    def calc_noise(self, cursor_ix: Optional[int] = None) -> tuple[float, float, int]:
         """
         Calculate the interference and noise for COM.
+
+        Keyword Args:
+            cursor_ix: An optional predetermined cursor index,
+                to be used instead of our own estimate.
+                (In support of MMSE.)
+                Default: None
 
         Returns:
             - signal amplitude
@@ -1394,6 +1423,7 @@ class COM(HasTraits):
                 - gDC
                 - gDC2
                 - tx_taps
+                - rx_taps
             2. Warns if `2*As/npts` rises above 10 uV, against standard's recommendation.
         """
 
@@ -1402,9 +1432,10 @@ class COM(HasTraits):
         freqs = self.freqs
         nDFE = len(self.bmin)
 
-        pulse_resps = self.gen_pulse_resps(self.chnls, np.array(self.tx_taps))
+        pulse_resps = self.gen_pulse_resps(self.chnls, np.array(self.tx_taps))  # ToDo: Add rx_taps.
         vic_pulse_resp = pulse_resps[0]
-        cursor_ix = self.loc_curs(vic_pulse_resp)
+        if cursor_ix is None:
+            cursor_ix = self.loc_curs(vic_pulse_resp)
         vic_curs_val = vic_pulse_resp[cursor_ix]
         As = self.RLM * vic_curs_val / (L - 1)
         npts = 2 * max(int(As / 0.001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!

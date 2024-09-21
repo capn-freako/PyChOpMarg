@@ -9,21 +9,51 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 from typing import Any
+import warnings
 
-from numpy        import argmax, array, concatenate, identity, insert, zeros
-from scipy.linalg import solve, toeplitz
+import numpy as np
+from numpy        import argmax, array, array_equal, concatenate, dot, identity, insert, log10, maximum, minimum, ones, sqrt, zeros
+from scipy.linalg import LinAlgWarning, convolution_matrix, solve, toeplitz
 
-from pychopmarg.noise import NoiseCalc
+from pychopmarg.common  import Rvec
+from pychopmarg.noise   import NoiseCalc
 
-
-def przf():
+def przf(pulse_resp: Rvec, nspui: int, nTaps: int, nPreTaps: int, nDFETaps: int) -> Rvec:
     """
-    Optimize linear equalization, via _Pulse Response Zero Forcing_ (PRZF).
+    Optimize FFE tap weights, via _Pulse Response Zero Forcing_ (PRZF).
+
+    Args:
+        pulse_resp: The pulse response to be filtered.
+        nspui: Number of samples per unit interval.
+        nTaps: The total number of FFE filter taps, including the cursor.
+        nPreTaps: The number of pre-cursor taps.
+        nDFETaps: Number of DFE taps.
+
+    Returns:
+        weights: The optimum tap weights.
     """
-    pass
+
+    assert len(pulse_resp) >= nTaps * nspui, ValueError(
+        f"The pulse response length ({len(pulse_resp)}) must be at least: `nspui` ({nspui}) * `nTaps` ({nTaps}) = {nspui * nTaps}!")
+    assert nTaps > nPreTaps, ValueError(
+        f"`nTaps` ({nTaps}) must be greater than `nPreTaps` ({nPreTaps})!")
+    assert (nPreTaps + nDFETaps) < (nTaps - 1), ValueError(
+        f"The sum of `nPreTaps` ({nPreTaps}) and `nDFETaps` ({nDFETaps}) must be less than: `nTaps` ({nTaps}) - 1!")
+
+    curs_uis, curs_ofst = divmod(argmax(pulse_resp), nspui)
+    pr_samps = pulse_resp[curs_ofst::nspui]
+    if curs_uis < nPreTaps:
+        pr_samps = pad(pr_samps, (nPreTaps - curs_uis, 0))
+    else:
+        pr_samps = pr_samps[curs_uis - nPreTaps:]
+    fv = zeros(nTaps)
+    fv[nPreTaps: nPreTaps + nDFETaps + 1] = pr_samps[nPreTaps: nPreTaps + nDFETaps + 1]
+    vv = convolution_matrix(pr_samps[:nTaps], nTaps, mode='same')
+    return solve(vv, fv)
 
 
-def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int) -> dict[str, Any]:
+def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
+         b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec) -> dict[str, Any]:
     """
     Optimize linear equalization, via _Minimum Mean Squared Error_ (MMSE).
 
@@ -32,6 +62,8 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int) -> dict[str, Any]:
         Nw: Number of taps in Rx FFE.
         dw: Number of pre-cursor taps in the Rx FFE.
         Nb: Number of DFE taps.
+        Rlm: Relative level mismatch.
+        L: Number of modulation levels.
 
     Notes:
         1. The optimization technique encoded here is taken from the following reference:
@@ -52,33 +84,36 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int) -> dict[str, Any]:
         h = vic_pr[ts_ix % nspui:: nspui]
         d = dw + len(h)
         H = toeplitz(concatenate((h, zeros(Nw - 1))), insert(zeros(Nw - 1), 0, h[0]))
-        try:
-            h0 = H[d + 1]
-        except Exception:
-            print(f"H.shape: {H.shape}; d: {d}; Nw: {Nw}; dw: {dw}")
-            raise
+        h0 = H[d + 1]
         Hb = H[d + 2: d + Nb + 2]
-        R = H.T @ H + theNoiseCalc.Rnn(theNoiseCalc.agg_pulse_resps) / theNoiseCalc.varX
+        R = H.T @ H + toeplitz(theNoiseCalc.Rn(theNoiseCalc.agg_pulse_resps)[:Nw]) / theNoiseCalc.varX
         Ib = identity(Nb)
         zb = zeros(Nb)
-        A = array([[ R, -Hb.T, -h0.T],
-                   [-Hb, Ib,    zb.T],
-                   [ h0, zb,    0]])
-        y = array([h0.T, zb.T, 1]).T
-        w, b, _ = solve(A, y)
-        b_lim = max(b_min, min(b_max, b))
-        if b_lim != b:
-            _A = array([[R, -h0.T],
-                        [h0, 0]])
-            _y = array([h0.T + Hb.T @ b_lim]).T
-            w, _ = solve(_A, _y)
-        w_lim = max(w_min, min(w_max, w))
-        if w_lim != w:
-            w_lim /= h0 @ w_lim
-            b = Hb @ w_lim
-            b_lim = max(b_min, min(b_max, b))
-        mse = varX * (w_lim.T @ R @ w_lim + 1 + b_lim.T @ b_lim - 2 * w_lim.T @ h0.T - 2 * w_lim.T @ Hb.T @ b_lim)
-        fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
+        A = concatenate((concatenate((R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),
+                         concatenate((-Hb, ones((Nb, 1)), zeros((Nb, 1))), axis=1),
+                         concatenate((h0, zeros(2))).reshape((1, Nw + 2))))
+        y = concatenate((h0, zeros(1), ones(1)))
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            x = solve(A, y)
+        w = x[:Nw]
+        b = x[Nw: Nw + Nb]
+        b_lim = maximum(b_min, minimum(b_max, b))
+        if not array_equal(b_lim, b):
+            _A = concatenate((concatenate((R, -h0.reshape((Nw, 1))), axis=1),
+                              concatenate((h0, zeros(1))).reshape((1, -1))))
+            _y = concatenate((h0 + Hb.T @ b_lim, ones(1)))
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                _x = solve(_A, _y)
+            w = _x[:Nw]
+        w_lim = maximum(w_min, minimum(w_max, w))
+        if not array_equal(w_lim, w):
+            w_lim /= dot(h0[:Nw], w_lim.flatten())
+            b = Hb @ w_lim.flatten()
+            b_lim = maximum(b_min, minimum(b_max, b))
+        mse = theNoiseCalc.varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
+        fom = 20 * log10(Rlm / (L - 1) / sqrt(mse.flatten()[0]))
         if fom > max_fom:
             rslt["ts_ix"] = ts_ix
             rslt["fom"] = fom
