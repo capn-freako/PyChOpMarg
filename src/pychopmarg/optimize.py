@@ -12,7 +12,9 @@ from typing import Any
 import warnings
 
 import numpy as np
-from numpy        import argmax, array, array_equal, concatenate, dot, identity, insert, log10, maximum, minimum, ones, sqrt, zeros
+from numpy        import(
+    argmax, array, array_equal, concatenate, dot, identity, insert,
+    log10, maximum, minimum, ones, sqrt, sum, vectorize, where, zeros)
 from scipy.linalg import LinAlgWarning, convolution_matrix, solve, toeplitz
 
 from pychopmarg.common  import Rvec
@@ -49,7 +51,8 @@ def przf(pulse_resp: Rvec, nspui: int, nTaps: int, nPreTaps: int, nDFETaps: int)
     fv = zeros(nTaps)
     fv[nPreTaps: nPreTaps + nDFETaps + 1] = pr_samps[nPreTaps: nPreTaps + nDFETaps + 1]
     vv = convolution_matrix(pr_samps[:nTaps], nTaps, mode='same')
-    return solve(vv, fv)
+
+    return solve(vv, fv)  # solve() returns a 1-D array!
 
 
 def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
@@ -71,6 +74,9 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
 
     """
 
+    assert Nw > dw, ValueError(
+        f"`Nw` ({Nw}) must be greater than `dw` ({dw})!")
+
     vic_pr = theNoiseCalc.vic_pulse_resp
     nspui  = theNoiseCalc.nspui
 
@@ -81,57 +87,89 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     half_UI = int(nspui // 2)
     for ts_ix in range(max(0, max_ix - half_UI), min(len(vic_pr), max_ix + half_UI)):
         theNoiseCalc.ts_ix = ts_ix
-        h = vic_pr[ts_ix % nspui:: nspui]
-        d = dw + len(h)
+        h = vic_pr[ts_ix % nspui::nspui]
+        d = dw + argmax(h)
         H = toeplitz(concatenate((h, zeros(Nw - 1))), insert(zeros(Nw - 1), 0, h[0]))
         h0 = H[d + 1]
-        Hb = H[d + 2: d + Nb + 2]
-        R = H.T @ H + toeplitz(theNoiseCalc.Rn(theNoiseCalc.agg_pulse_resps)[:Nw]) / theNoiseCalc.varX
+        Hb = H[d + 2: d + 2 + Nb]
+        varX = theNoiseCalc.varX
+        Rn = theNoiseCalc.Rn(theNoiseCalc.agg_pulse_resps)[:Nw]
+        R = H.T @ H + toeplitz(Rn) / varX
         Ib = identity(Nb)
         zb = zeros(Nb)
         A = concatenate((concatenate((R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),
                          concatenate((-Hb, ones((Nb, 1)), zeros((Nb, 1))), axis=1),
                          concatenate((h0, zeros(2))).reshape((1, Nw + 2))))
         y = concatenate((h0, zeros(1), ones(1)))
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore')
-            x = solve(A, y)
+        # with warnings.catch_warnings():
+        #     warnings.simplefilter('ignore')
+        #     x = solve(A, y)
+        x = solve(A, y)
         w = x[:Nw]
         b = x[Nw: Nw + Nb]
         b_lim = maximum(b_min, minimum(b_max, b))
         if not array_equal(b_lim, b):
+            # print(f"b_lim ({b_lim}) != b ({b})!", flush=True)
             _A = concatenate((concatenate((R, -h0.reshape((Nw, 1))), axis=1),
                               concatenate((h0, zeros(1))).reshape((1, -1))))
             _y = concatenate((h0 + Hb.T @ b_lim, ones(1)))
-            with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
-                _x = solve(_A, _y)
+            # with warnings.catch_warnings():
+            #     warnings.simplefilter('ignore')
+            #     _x = solve(_A, _y)
+            _x = solve(_A, _y)
             w = _x[:Nw]
-        w_lim = maximum(w_min, minimum(w_max, w))
+        
+        def filt_scalars(x: float) -> bool:
+            "Filter scaling values."
+            return 1 > x > 0
+        vfilt_scalars = vectorize(filt_scalars)
+
+        w_scalars_min = w_min / w
+        w_scalars_max = w_max / w
+        w_scalars = minimum(
+            where(vfilt_scalars(w_scalars_min), w_scalars_min, 1),
+            where(vfilt_scalars(w_scalars_max), w_scalars_max, 1),
+            )
+        w_scale = np.min(w_scalars)
+        w_lim = w_scale * w
         if not array_equal(w_lim, w):
+            # print(f"w_lim ({w_lim}) != w ({w})!", flush=True)
             w_lim /= dot(h0[:Nw], w_lim.flatten())
             b = Hb @ w_lim.flatten()
             b_lim = maximum(b_min, minimum(b_max, b))
-        mse = theNoiseCalc.varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
-        fom = 20 * log10(Rlm / (L - 1) / sqrt(mse.flatten()[0]))
+        mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
+        fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
         if fom > max_fom:
-            rslt["ts_ix"] = ts_ix
+            max_fom = fom
             rslt["fom"] = fom
-            rslt["w"] = w_lim
-            rslt["b"] = b_lim
             rslt["mse"] = mse
             rslt["rx_taps"] = w_lim
             rslt["dfe_tap_weights"] = b_lim
-            rslt["cursor_ix"] = ts_ix
-            rslt["As"] = vic_pr[ts_ix]
-            df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
-            # rslt["varTx"] = sum(theNoiseCalc.Stn(Av, snr_tx) * df)
-            rslt["varTx"] = 0
-            rslt["varISI"] = 0
-            rslt["varJ"] = 0
-            rslt["varXT"] = 0
-            rslt["varN"] = 0
             rslt["vic_pulse_resp"] = vic_pr
-            max_fom = fom
+            rslt["cursor_ix"] = ts_ix
+            df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
+            rslt["varTx"] = sum(theNoiseCalc.Stn) * df
+            # rslt["varTx"] = 0
+            rslt["varISI"] = 0
+            # rslt["varJ"] = 0
+            rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
+            # rslt["varXT"] = 0
+            rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
+            rslt["varN"] = 0
+            # DEBUGGING:
+            rslt["h"] = h
+            rslt["H"] = H
+            rslt["d"] = d
+            rslt["R"] = R
+            rslt["A"] = A
+            rslt["y"] = y
+            rslt["x"] = x
+            # rslt["_A"] = _A
+            # rslt["_y"] = _y
+            # rslt["_x"] = _x
+            rslt["b"] = b
+            rslt["theNoiseCalc"] = theNoiseCalc
+            rslt["varX"] = varX
+            rslt["Rn"] = Rn
 
     return rslt

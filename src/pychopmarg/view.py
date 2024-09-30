@@ -430,7 +430,7 @@ traits_view = View(
                         label="Rx CTLE",
                         show_border=True,
                     ),
-                    VGroup(
+                    VGroup(  # ToDo: Complete this.
                         Item(
                             name="fLF", format_func=to_MHz, label="f_LF",
                             tooltip="CTLE low-f corner frequency (MHz)",

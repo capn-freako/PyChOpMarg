@@ -91,6 +91,8 @@ class NoiseCalc(HasTraits):
 
         Notes:
             1. No assumption is made, re: any linkage between `t` and `f`.
+            2. The transfer functions are assumed to contain only positive frequency values.
+            3. `f` may begin at zero, but is not required to.
         """
 
         assert len(t) == len(vic_pulse_resp), IndexError(
@@ -169,10 +171,14 @@ class NoiseCalc(HasTraits):
         """
         One-sided folded noise PSD at Rx sampler input,
         uniformly sampled over [0, PI] (rads./s norm.).
+
+        Notes:
+            1. Re: the scaling term: `2 * self.f[-1]`, when combined w/
+                the implicit `1/N` of the `irfft()` function, this gives `df`.
         """
         nspui = self.nspui
         rslt  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2  # "/ 2" in [1] omitted, since we're only considering: m >= 0.
-        return rfft(self.from_irfft(irfft(rslt))[nspui // 2::nspui])
+        return abs(rfft(self.from_irfft(irfft(rslt))[nspui // 2::nspui])) * 2 * self.f[-1] * self.t[1]
 
     def Sxn(self, agg_pulse_resp: Rvec) -> Rvec:
         """
@@ -190,7 +196,7 @@ class NoiseCalc(HasTraits):
         sampled_agg_prs = [agg_pulse_resp[m::nspui] for m in range(nspui)]
         best_m = argmax(list(map(lambda pr_samps: sum(array(pr_samps)**2), sampled_agg_prs)))
 
-        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb
+        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.t[1]**2 * self.Tb  # i.e. - / fB
 
     Stn = Property(observe=["Tb", "f", "Ht", "H21", "Hr", "Hctf", "Av", "ts_ix", "nspui", "varX", "snr_tx"])
 
@@ -206,11 +212,10 @@ class NoiseCalc(HasTraits):
         nspui = self.nspui
 
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf
-        _htn = irfft(self.Av * Tb * sinc(f * Tb) * Htn)
+        _htn = self.Av * irfft(Tb * sinc(f * Tb) * Htn) * 2 * f[-1]  # See `_get_Srn()`.
         htn  = self.from_irfft(_htn)[self.ts_ix % nspui::nspui]
 
-        return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * Tb
-
+        return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * self.t[1]**2 * Tb  # i.e. - / fB
 
     Sjn = Property(observe=["Tb", "t", "vic_pulse_resp", "ts_ix", "nspui", "varX", "Add", "sigma_Rj"])
 
@@ -230,15 +235,18 @@ class NoiseCalc(HasTraits):
 
         dV = diff(vic_pulse_resp)
         if int(ts_ix % nspui) != 0:
-            # hJ = mean(array([dV[ts_ix % nspui - 1::nspui], dV[ts_ix % nspui::nspui]]), axis=0) / t[1]
             hJ = mean(concatenate((dV[ts_ix % nspui - 1: -1: nspui], dV[ts_ix % nspui::nspui])).reshape((2, -1)), axis=0) / t[1]
         else:
             hJ = mean(array([dV[nspui - 1::nspui], dV[nspui::nspui]]), axis=0) / t[1]
 
-        return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ))**2 * Tb
+        # FOR DEBUGGING ONLY!
+        self.hJ = hJ
+        self.dV = dV
+
+        return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * t[1])**2 * Tb  # i.e. - / fB
 
 
-    def Rn(self, agg_pulse_resps: list[Rvec]) -> Rmat:
+    def Rn(self, agg_pulse_resps: list[Rvec]) -> Rvec:
         """
         Noise autocorrelation vector at Rx FFE input.
 
@@ -249,4 +257,4 @@ class NoiseCalc(HasTraits):
             Rn: Noise autocorrelation vector at Rx FFE input.
         """
         Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0) + self.Stn + self.Sjn
-        return irfft(Sn) / self.Tb
+        return irfft(Sn) / self.Tb  # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.

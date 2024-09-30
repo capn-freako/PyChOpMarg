@@ -13,9 +13,12 @@ Notes:
     1. Throughout this file, equation numbers refer to Annex 93A of the IEEE 802.3-22 standard.
     2. Throughout this file, reference may be made to the following, via "[n]" syntax:
         [1] - Healey, A., Hegde, R., _Reference receiver framework for 200G/lane electrical interfaces and PHYs_, IEEE P802.3dj Task Force, January 2024 (r4).
+    3. The superficial two dimmensional nature of the Tx/Rx FFE tap weight vectors is imposed on us by the GUI machinery.
+        Let's keep it confined to just the GUI code!
 
 ToDo:
     1. Provide type hints for imports.
+    2. Move non-class code to a new file.
 """
 
 import numpy as np  # type: ignore
@@ -34,6 +37,7 @@ from numpy.typing      import NDArray
 from scipy.interpolate import interp1d
 from traits.api        import (
     Array,
+    Bool,
     cached_property,
     Enum,
     File,
@@ -107,21 +111,24 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[list[float]]:
     return all_combs(ranges)
 
 
-def calc_Hffe(tap_weights: list[float], n_post: int) -> Cvec:
+def calc_Hffe(tap_weights: Rvec, n_post: int, isRx: bool = False) -> Cvec:
     """
-    Calculate the voltage transfer function, H(f), for the Tx FFE,
-    according to (93A-21).
+    Calculate the voltage transfer function, H(f), for a FFE, according to (93A-21).
 
     Args:
         tap_weights: The vector of filter tap weights, excluding the cursor tap.
         n_post: The number of post-cursor taps.
 
+    Keyword Args:
+        isRx: Tap weights include cursor when True.
+            Default: False
+
     Returns:
-        The complex voltage transfer function, H(f), for the Tx FFE.
+        The complex voltage transfer function, H(f), for the FFE.
 
     Raises:
-        RuntimeError: If the global variables above haven't been initialized.
-        ValueError: If the length of the given tap weight vector is incorrect.
+        RuntimeError: If certain global variables haven't been initialized.
+            (See Note 1, below.)
 
     Notes:
         1. This function has been (awkwardly) pulled outside of the
@@ -134,26 +141,24 @@ def calc_Hffe(tap_weights: list[float], n_post: int) -> Cvec:
             used to find the optimal EQ solution. And its input argument
             is repeated often.)
             (See the `opt_eq()` method of the `COM` class.)
-        2. Currently, a single post-cursor tap is assumed.
 
     ToDo:
         1. Pull this function back inside the `COM` class, and do manual memoization.
+        2. Fix broken usage for Rx FFE.
     """
 
     assert len(gFreqs) and gFb and gC0min and gNtaps, RuntimeError(
         f"Called before global variables were initialized!\n\tgFreqs: \
         {gFreqs}, gFb: {gFb}, gC0min: {gC0min}, gNtaps: {gNtaps}")
-    # assert len(tap_weights) == gNtaps, ValueError(
-    #     f"Length of given tap weight vector is incorrect!\n\tExpected: {gNtaps}; got: {len(tap_weights)}")
 
-    c0 = 1 - sum(list(map(abs, tap_weights)))
-    if c0 < gC0min:
-        return np.ones(len(gFreqs))
-    else:
-        cs = tap_weights
+    cs = list(np.array(tap_weights).flatten())
+    if not isRx:
+        c0 = 1 - sum(list(map(abs, tap_weights)))
+        if c0 < gC0min:
+            raise ValueError(f"Calculated `c0` for Tx FFE ({c0}) is below allowed minimum ({gC0min})!")
         cs.insert(-n_post, c0)
-        return sum(list(map(lambda n_c: n_c[1] * np.exp(-1j * TWOPI * n_c[0] * gFreqs / gFb),
-                            enumerate(cs))))
+    return sum(list(map(lambda n_c: n_c[1] * np.exp(-1j * TWOPI * n_c[0] * gFreqs / gFb),
+                        enumerate(cs))))
 
 
 def print_taps(ws: list[float]) -> str:
@@ -183,6 +188,7 @@ class COM(HasTraits):
     """
 
     status_str = Str("Ready")
+    debug = Bool(False)
 
     # Independent variable definitions (Defaults from IEEE 802.3by.)
     # Units are SI, except for: (dB), `zp`, and `eta0`.
@@ -201,13 +207,13 @@ class COM(HasTraits):
     RLM = Float(1.0)  # ratio level mismatch.
     tr = Float(10e-12)  # Tx output risetime (s).
     # - Linear EQ
-    nTxTaps = 6
-    tx_n_post = Int(3)
-    tx_taps_pos = Array(shape=(1, (1, nTxTaps)), dtype=int, value=[[-3, -2, -1, 1, 2, 3],])
-    tx_taps_min = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
-    tx_taps_max = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
-    tx_taps_step = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0., 0., 0.02, 0.02, 0., 0.],])
-    tx_taps = Array(shape=(1, (1, nTxTaps)), dtype=float, value=[[0.] * nTxTaps,])  # Tx FFE tap weights.
+    nTxTaps      = 6
+    tx_n_post    = Int(3)
+    tx_taps_pos  = Array(shape=(nTxTaps,), dtype=int,   value=[-3, -2, -1,    1,    2,  3])
+    tx_taps_min  = Array(shape=(nTxTaps,), dtype=float, value=[ 0., 0., 0.,   0.,   0., 0.])
+    tx_taps_max  = Array(shape=(nTxTaps,), dtype=float, value=[ 0., 0., 0.,   0.,   0., 0.])
+    tx_taps_step = Array(shape=(nTxTaps,), dtype=float, value=[ 0., 0., 0.02, 0.02, 0., 0.])
+    tx_taps      = Array(shape=(nTxTaps,), dtype=float, value=[ 0.] * nTxTaps)  # Tx FFE tap weights.
     c0_min = Float(0)  # minimum allowed Tx FFE main tap value.
     fr = Float(0.75)  # AFE corner frequency (fb)
     gDC_vals = List([-x for x in range(13)])  # D.C. gain of Rx CTLE first stage (dB).
@@ -224,13 +230,13 @@ class COM(HasTraits):
     nDFE = Int(N_DFE)  # number of DFE taps.
     bmax = List([1.0] * N_DFE)  # DFE maximum tap values.
     bmin = List([-1.0] * N_DFE)  # DFE minimum tap values.
-    nRxTaps = 16
-    nRxPreTaps = 5
-    rx_taps_min = Array(shape=(1, (1, nRxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
-    rx_taps_max = Array(shape=(1, (1, nRxTaps)), dtype=float, value=[[0., 0., 0., 0., 0., 0.],])
-    rx_taps_step = Array(shape=(1, (1, nRxTaps)), dtype=float, value=[[0., 0., 0.02, 0.02, 0., 0.],])
-    rx_taps = Array(shape=(1, (1, nRxTaps)), dtype=float, value=[[0.] * nRxTaps,])  # Rx FFE tap weights.
-    w0_min = Float(0)  # minimum allowed Rx FFE main tap value.
+    nRxTaps      = 16
+    nRxPreTaps   = 5
+    rx_taps_min  = Array(shape=(nRxTaps,), dtype=float, value=[0.] * nRxTaps)
+    rx_taps_max  = Array(shape=(nRxTaps,), dtype=float, value=[0.] * nRxTaps)
+    rx_taps_step = Array(shape=(nRxTaps,), dtype=float, value=[0.] * nRxTaps)
+    rx_taps      = Array(shape=(nRxTaps,), dtype=float, value=[0.] * nRxTaps)  # Rx FFE tap weights.
+    w0_min       = Float(0)  # minimum allowed Rx FFE main tap value.
     
     # - Package & Die Modeling
     # -- MKS
@@ -440,7 +446,7 @@ class COM(HasTraits):
             1. The instance's current value(s) for `gDC` and `gDC2` are used if not provided.
                 (Necessary, to accommodate sweeping when optimizing EQ.)
         """
-        if gDC is None:
+        if gDC is None:  # ToDo: Simplify syntax.
             gDC = self.gDC
         if gDC2 is None:
             gDC2 = self.gDC2
@@ -457,7 +463,7 @@ class COM(HasTraits):
 
     # - All possible Tx/Rx tap weight combinations.
     tx_combs = Property(List, depends_on=['tx_taps_min', 'tx_taps_max', 'tx_taps_step'])
-    rx_combs = Property(List, depends_on=['rx_taps_min', 'rx_taps_max', 'rx_taps_step'])
+    # rx_combs = Property(List, depends_on=['rx_taps_min', 'rx_taps_max', 'rx_taps_step'])
 
     @cached_property
     def _get_tx_combs(self):
@@ -467,13 +473,13 @@ class COM(HasTraits):
         trips = list(zip(self.tx_taps_min.flatten(), self.tx_taps_max.flatten(), self.tx_taps_step.flatten()))
         return mk_combs(trips)
 
-    @cached_property
-    def _get_rx_combs(self):
-        """
-        All possible Rx tap weight combinations.
-        """
-        trips = list(zip(self.rx_taps_min.flatten(), self.rx_taps_max.flatten(), self.rx_taps_step.flatten()))
-        return mk_combs(trips)
+    # @cached_property
+    # def _get_rx_combs(self):
+    #     """
+    #     All possible Rx tap weight combinations.
+    #     """
+    #     trips = list(zip(self.rx_taps_min.flatten(), self.rx_taps_max.flatten(), self.rx_taps_step.flatten()))
+    #     return mk_combs(trips)
 
     # - Reflection coefficients
     gamma1 = Property(Float, depends_on=['Rd', 'R0'])
@@ -639,7 +645,7 @@ class COM(HasTraits):
         self.fmax = ntwks[0][0].f[-1]
 
         # Generate the pulse responses before adding the packages, for reference.
-        pulse_resps_nopkg = self.gen_pulse_resps(ntwks, [], apply_eq=False)
+        pulse_resps_nopkg = self.gen_pulse_resps(ntwks, apply_eq=False)
         self.plotdata.set_data("pulse_raw", pulse_resps_nopkg[0])
         self.pulse_resps_nopkg = pulse_resps_nopkg
 
@@ -669,7 +675,7 @@ class COM(HasTraits):
         self.fmax = fmax
 
         # Generate the pulse responses before adding the packages, for reference.
-        pulse_resps_nopkg = self.gen_pulse_resps(ntwks, [], apply_eq=False)
+        pulse_resps_nopkg = self.gen_pulse_resps(ntwks, apply_eq=False)
         self.plotdata.set_data("pulse_raw", pulse_resps_nopkg[0])
         self.pulse_resps_nopkg = pulse_resps_nopkg
 
@@ -680,7 +686,7 @@ class COM(HasTraits):
         if not ntwks:
             return []
         _ntwks = list(map(self.add_pkg, ntwks))
-        pulse_resps_noeq = self.gen_pulse_resps(_ntwks, [], apply_eq=False)
+        pulse_resps_noeq = self.gen_pulse_resps(_ntwks, apply_eq=False)
         self.rslts['vic_pulse_pk'] = max(pulse_resps_noeq[0]) * 1_000  # (mV)
         self.pulse_resps_noeq = pulse_resps_noeq
         self.plotdata.set_data("pulse_pkg", pulse_resps_noeq[0])
@@ -694,8 +700,15 @@ class COM(HasTraits):
         else:
             return (self.sPkgTx ** ntwk[0] ** self.sPkgRx, ntype)
 
+    # Logging / Debugging
+    def set_status(self, status: str) -> None:
+        "Set the GUI status string and print it if we're debugging."
+        self.status_str = status
+        if self.debug:
+            print(status, flush=True)
+
     # Reserved functions
-    def __init__(self):
+    def __init__(self, debug: bool = False):
         """
         Instance creation only! Must still initialize.
         """
@@ -704,13 +717,17 @@ class COM(HasTraits):
         # to get all the Traits/UI machinery setup correctly.
         super().__init__()
 
+        self.debug = debug
+
         self.rslts = {}
         self.fom_rslts = {}
         self.dbg = {}
 
         self.fb = self.FB
         self.c0_min = 0.62
-        self.tx_taps_min = [[0., 0., -0.18, -0.38, 0., 0.],]
+        self.tx_taps_min = [0., 0., -0.18, -0.38, 0., 0.]
+
+        self.set_status("Ready")
 
     @classmethod
     def init(cls, params: dict, chnl_fnames: list[str], vic_id: int,
@@ -743,10 +760,11 @@ class COM(HasTraits):
         obj.gui = gui
         return obj
 
-    def __call__(
-        self, do_opt_eq: bool = True, tx_taps: Rvec = None,
-        opt_mode: OptMode = OptMode.PRZF, use_fom_cursor: bool = False
-    ) -> float:
+    def __call__(self,
+                 do_opt_eq: bool = True,
+                 tx_taps: Rvec = None,
+                 opt_mode: OptMode = OptMode.PRZF
+                ) -> float:
         """
         Calculate the COM value.
 
@@ -773,14 +791,12 @@ class COM(HasTraits):
         assert self.chnl_s32p or self.chnl_s4p_thru, RuntimeError(
             "You must, at least, select a thru path channel file, either 32 or 4 port.")
         self.chnls = self.get_chnls()
-        self.status_str = "Optimizing EQ..."
+        self.set_status("Optimizing EQ...")
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps, opt_mode=opt_mode), RuntimeError(
             "EQ optimization failed!")
-        self.status_str = "Calculating noise..."
-        if use_fom_cursor or opt_mode == OptMode.MMSE:
-            As, Ani, self.cursor_ix = self.calc_noise(cursor_ix=self.fom_rslts["cursor_ix"])
-        else:
-            As, Ani, self.cursor_ix = self.calc_noise()
+        # raise RuntimeError("Debugging stop.")
+        self.set_status("Calculating noise...")
+        As, Ani, self.cursor_ix = self.calc_noise()
         com = 20 * np.log10(As / Ani)
         self.As = As
         self.Ani = Ani
@@ -788,7 +804,7 @@ class COM(HasTraits):
         self.rslts['com'] = com
         self.rslts['As'] = As * 1e3
         self.rslts['Ani'] = Ani * 1e3
-        self.status_str = f"Ready; COM = {com: 5.1f} dB"
+        self.set_status(f"Ready; COM = {com: 5.1f} dB")
         return com
 
     # Initializers
@@ -840,9 +856,9 @@ class COM(HasTraits):
         self.rx_taps_min = params['rx_taps_min']
         self.rx_taps_max = params['rx_taps_max']
         self.rx_taps_step = params['rx_taps_step']
-        assert len(self.rx_taps_min[0]) == len(self.rx_taps_max[0]) == len(self.rx_taps_step[0]), ValueError(
+        assert len(self.rx_taps_min) == len(self.rx_taps_max) == len(self.rx_taps_step), ValueError(
             f"The lengths of keys: rx_taps_min, rx_taps_max, and rx_taps_step, must match!")
-        self.nRxTaps = len(self.rx_taps_min[0])
+        self.nRxTaps = len(self.rx_taps_min)
         self.nRxPreTaps = params['dw']
         self.w0_min = params['w0_min']
         self.fr = params['f_r']
@@ -937,7 +953,7 @@ class COM(HasTraits):
         dS = s11 * s22 - s12 * s21
         return (s21 * (1 - g1) * (1 + g2)) / (1 - s11 * g1 - s22 * g2 + g1 * g2 * dS)
 
-    def H(self, s2p: rf.Network, tap_weights: Rvec,
+    def H(self, s2p: rf.Network, tx_taps: Optional[Rvec] = None,
           gDC: Optional[float] = None, gDC2: Optional[float] = None,
           rx_taps: Optional[Rvec] = None) -> Cvec:
         """
@@ -946,34 +962,57 @@ class COM(HasTraits):
 
         Args:
             s2p: Two port network of interest.
-            tap_weights: Tx FFE tap weights.
 
         Keyword Args:
-            gDC: CTLE first stage d.c. gain.
-                Default: None
-            gDC2: CTLE second stage d.c. gain.
-                Default: None
+            tx_taps: Tx FFE tap weights.
+                Default: None (i.e. - Use `self.tx_taps`.)
+            gDC: CTLE first stage d.c. gain (dB).
+                Default: None (i.e. - Use `self.gDC`.)
+            gDC2: CTLE second stage d.c. gain (dB).
+                Default: None (i.e. - Use `self.gDC2`.)
             rx_taps: Rx FFE tap weights.
-                Default: None
+                Default: None (i.e. - Use `self.rx_taps`.)
 
         Returns:
             Complex voltage transfer function of complete path.
 
         Raises:
-            ValueError: If given network is not two port,
-                or length of `tap_weights` is incorrect.
+            ValueError: If given network is not two port.
 
         Notes:
             1. It is in this processing step that linear EQ is first applied.
+            2. Any unprovided EQ values are taken from the `COM` instance.
+                If you really want to omit a particular EQ component then call with:
+
+                - `tx_taps`/`rx_taps`: []
+                - `gDC`/`gDC2`: 0
         """
 
         assert s2p.s[0, :, :].shape == (2, 2), ValueError(
             f"I can only convert 2-port networks. {s2p}")
-        H_tx = calc_Hffe(list(tap_weights.flatten()), self.tx_n_post)
-        H_rx = self.H21(s2p) * self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2)
-        if rx_taps is not None:
-            H_rx *= calc_Hffe(list(rx_taps.flatten()), self.nRxTaps - self.nRxPreTaps - 1)
-        return (H_tx * H_rx)
+
+        gDC     = gDC     or self.gDC
+        gDC2    = gDC2    or self.gDC2
+        if tx_taps is None:
+            tx_taps = self.tx_taps
+        if rx_taps is None:
+            rx_taps = self.rx_taps
+        Htx  = calc_Hffe(np.array(tx_taps).flatten(), self.tx_n_post)
+        H21  = self.H21(s2p)
+        Hr   = self.Hr
+        Hctf = self.calc_Hctf(gDC=gDC, gDC2=gDC2)
+        Hrx  = calc_Hffe(np.array(rx_taps).flatten(), self.nRxTaps - self.nRxPreTaps - 1, isRx=True)
+        rslt = Htx * H21 * Hr * Hctf * Hrx
+        if max(abs(rslt)) == 0:
+            print(f"max(abs(Htx)): {max(abs(Htx))}")
+            print(f"max(abs(H21)): {max(abs(H21))}")
+            print(f"max(abs(Hr)): {max(abs(Hr))}")
+            print(f"max(abs(Hctf)): {max(abs(Hctf))}")
+            print(f"Hrx: {Hrx}")
+            # print(f"max(abs(Hrx)): {max(abs(Hrx))}")
+            raise
+
+        return rslt
 
     def pulse_resp(self, H: Cvec) -> Rvec:
         """
@@ -1003,28 +1042,39 @@ class COM(HasTraits):
         Ts = self.t_irfft[1]
         p = np.fft.irfft(Xsinc * H)
         p_mag = np.abs(p)
-        p_beg = np.where(p_mag > 0.01 * max(p_mag))[0][0] - int(5 * self.ui / Ts)  # Give it some "front porch".
+        try:
+            p_beg = np.where(p_mag > 0.01 * max(p_mag))[0][0] - int(5 * self.ui / Ts)  # Give it some "front porch".
+        except Exception:
+            print(f"max(p_mag): {max(p_mag)}; len(p_mag): {len(p_mag)}")
+            print(f"max(abs(H)): {max(abs(H))}; len(H): {len(H)}")
+            raise
         spln = interp1d(self.t_irfft, np.roll(p, -p_beg))  # `p` is not yet in our system time domain!
         return spln(self.times)                            # Now, it is.
 
-    def gen_pulse_resps(self, ntwks: list[tuple[rf.Network, str]], tx_taps: Rvec,
-                        gDC: Optional[float] = None, gDC2: Optional[float] = None,
-                        rx_taps: Optional[Rvec] = None, apply_eq: bool = True) -> list[Rvec]:
+    def gen_pulse_resps(
+        self, ntwks: Optional[list[tuple[rf.Network, str]]] = None,
+        gDC: Optional[float] = None, gDC2: Optional[float] = None,
+        tx_taps: Optional[Rvec] = None, rx_taps: Optional[Rvec] = None,
+        apply_eq: bool = True
+    ) -> list[Rvec]:
         """
         Generate pulse responses for all networks.
 
         Args:
-            ntwks: The list of networks to generate pulse responses for.
-            tx_taps: Desired Tx tap weights.
 
         Keyword Args:
+            ntwks: The list of networks to generate pulse responses for.
+                Default: None (i.e. - Use `self.chnls`.)
             gDC: Rx CTLE first stage d.c. gain.
-                Default: None
+                Default: None (i.e. - Use `self.gDC`.)
             gDC2: Rx CTLE second stage d.c. gain.
-                Default: None
+                Default: None (i.e. - Use `self.gDC2`.)
+            tx_taps: Desired Tx tap weights.
+                Default: None (i.e. - Use `self.tx_taps`.)
             rx_taps: Desired Rx FFE tap weights.
-                Default: None
+                Default: None (i.e. - Use `self.rx_taps`.)
             apply_eq: Include linear EQ when True; otherwise, exclude it.
+                (Allows for pulse response generation of terminated, but unequalized, channel.)
                 Default: True
 
         Returns:
@@ -1034,19 +1084,29 @@ class COM(HasTraits):
             None
 
         Notes:
-            1. Assumes `self.gDC`, `self.gDC2`, and `self.rx_taps` have been set correctly, if not provided.
-
-        ToDo:
-            1. I don't think Note 1 is true; fix it.
+            1. Assumes `self.gDC`, `self.gDC2`, `self.tx_taps`, and `self.rx_taps` have been set correctly,
+                if the equivalent function parameters have not been provided.
+            2. To generate pulse responses that include all linear EQ except the Rx FFE
+                (i.e. - pulse responses suitable for Rx FFE tap weight optimization, via either `optimize.przf()` or `optimize.mmse()`)
+                set `rx_taps` equal to: [1.0].
         """
+
+        gDC  = gDC  or self.gDC  # The more Pythonic way, but doesn't work for lists in newer versions of Python.
+        gDC2 = gDC2 or self.gDC2
+        if ntwks is None:
+            ntwks = self.chnls
+        if tx_taps is None:
+            tx_taps = self.tx_taps
+        if rx_taps is None:
+            rx_taps = self.rx_taps
 
         pulse_resps = []
         for ntwk, ntype in ntwks:
             if apply_eq:
                 if ntype == 'NEXT':
-                    pr = self.pulse_resp(self.H(ntwk, np.zeros(tx_taps.shape), gDC, gDC2, rx_taps=rx_taps))
+                    pr = self.pulse_resp(self.H(ntwk, np.zeros(tx_taps.shape), gDC=gDC, gDC2=gDC2, rx_taps=rx_taps))
                 else:
-                    pr = self.pulse_resp(self.H(ntwk, tx_taps, gDC, gDC2, rx_taps=rx_taps))
+                    pr = self.pulse_resp(self.H(ntwk, tx_taps,                 gDC=gDC, gDC2=gDC2, rx_taps=rx_taps))
             else:
                 pr = self.pulse_resp(self.H21(ntwk))
 
@@ -1161,6 +1221,7 @@ class COM(HasTraits):
                  rx_taps: Optional[Rvec] = None) -> float:
         """
         Calculate the *figure of merit* (FOM), given the existing linear EQ settings.
+        Optimize Rx FFE taps if they aren't specified by caller.
 
         Args:
             tx_taps: The Tx FFE tap weights, excepting the cursor.
@@ -1168,11 +1229,11 @@ class COM(HasTraits):
 
         Keyword Args:
             gDC: CTLE first stage d.c. gain.
-                Default: None
+                Default: None (i.e. - Use `self.gDC`.)
             gDC2: CTLE second stage d.c. gain.
-                Default: None
+                Default: None (i.e. - Use `self.gDC2`.)
             rx_taps: Rx FFE tap weight overrides.
-                Default: None
+                Default: None (i.e. - Optimize Rx FFE tap weights.)
 
         Returns:
             The resultant figure of merit.
@@ -1182,6 +1243,9 @@ class COM(HasTraits):
 
         Notes:
             1. See: IEEE 802.3-2022 93A.1.6.
+            2. When not provided, the values for `gDC` and `gDC2` are taken from the `COM` instance.
+            3. Unlike other member functions of the ``COM`` class,
+                this function _optimizes_ the Rx FFE tap weights when they are not provided.
         """
 
         L = self.L
@@ -1192,9 +1256,9 @@ class COM(HasTraits):
 
         # Step a - Pulse response construction.
         if rx_taps is None:
-            pulse_resps = self.gen_pulse_resps(chnls, np.array(tx_taps), gDC=gDC, gDC2=gDC2)
+            pulse_resps = self.gen_pulse_resps(chnls, tx_taps=np.array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0])  # ToDo: Check this.
             rx_taps = przf(pulse_resps[0], M, self.nRxTaps, self.nRxPreTaps, nDFE)
-        pulse_resps = self.gen_pulse_resps(chnls, np.array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=np.array(rx_taps))
+        pulse_resps = self.gen_pulse_resps(chnls, tx_taps=np.array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=np.array(rx_taps))
 
         # Step b - Cursor identification.
         try:
@@ -1310,7 +1374,7 @@ class COM(HasTraits):
                                 fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2)
                                 rx_taps = self.fom_rslts['rx_taps']
                             case OptMode.MMSE:
-                                pulse_resps = self.gen_pulse_resps(self.chnls, np.array(tx_taps), gDC=gDC, gDC2=gDC2)
+                                pulse_resps = self.gen_pulse_resps(tx_taps=np.array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0])
                                 theNoiseCalc = NoiseCalc(
                                     self.L, 1/self.fb, 0, self.times, pulse_resps[0], pulse_resps[1:],
                                     self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.Hctf,
@@ -1321,14 +1385,14 @@ class COM(HasTraits):
                                 rx_taps = rslt["rx_taps"]
                                 # In the PRZF branch, these are set by calc_fom().
                                 self.fom_rslts['dfe_tap_weights'] = rslt["dfe_tap_weights"]
+                                self.fom_rslts['vic_pulse_resp'] = rslt["vic_pulse_resp"]
                                 self.fom_rslts['cursor_ix'] = rslt["cursor_ix"]
-                                self.fom_rslts['As'] = rslt["As"]
+                                self.fom_rslts['As'] = self.RLM * rslt["vic_pulse_resp"][rslt["cursor_ix"]] / (self.L - 1)
                                 self.fom_rslts['varTx'] = rslt["varTx"]
                                 self.fom_rslts['varISI'] = rslt["varISI"]
                                 self.fom_rslts['varJ'] = rslt["varJ"]
                                 self.fom_rslts['varXT'] = rslt["varXT"]
                                 self.fom_rslts['varN'] = rslt["varN"]
-                                self.fom_rslts['vic_pulse_resp'] = rslt["vic_pulse_resp"]
                                 self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else 0
                             case _:
                                 raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
@@ -1350,6 +1414,9 @@ class COM(HasTraits):
                             varN_best = self.fom_rslts['varN']
                             vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
                             mse_best = self.fom_rslts['mse'] if 'mse' in self.fom_rslts else 0
+                            # TEMPORARY DEBUGGING ONLY!:
+                            if opt_mode == OptMode.MMSE:
+                                self.mmse_rslt = rslt
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
             fom = self.calc_fom(tx_taps)
@@ -1378,8 +1445,8 @@ class COM(HasTraits):
         self.mse = mse_best
         self.gDC2 = gDC2_best
         self.gDC = gDC_best
-        self.tx_taps = [tx_taps_best,]
-        self.rx_taps = [rx_taps_best,]
+        self.tx_taps = tx_taps_best
+        self.rx_taps = rx_taps_best
         self.fom_tx_taps = print_taps(tx_taps_best)
         self.fom_dfe_taps = print_taps(dfe_tap_weights_best)
         self.fom_cursor_ix = cursor_ix_best
@@ -1392,6 +1459,7 @@ class COM(HasTraits):
         self.sigma_N = np.sqrt(varN_best)
         self.foms = foms
         self.plotdata.set_data("pulse_eq", vic_pulse_resp)
+        self.vic_pulse_resp = vic_pulse_resp
         self.rslts['fom'] = fom_max
         self.rslts['gDC'] = gDC_best
         self.rslts['gDC2'] = gDC2_best
@@ -1424,6 +1492,7 @@ class COM(HasTraits):
                 - gDC2
                 - tx_taps
                 - rx_taps
+                (This assumption is embedded into the `gen_pulse_resps()` function.)
             2. Warns if `2*As/npts` rises above 10 uV, against standard's recommendation.
         """
 
@@ -1432,7 +1501,10 @@ class COM(HasTraits):
         freqs = self.freqs
         nDFE = len(self.bmin)
 
-        pulse_resps = self.gen_pulse_resps(self.chnls, np.array(self.tx_taps))  # ToDo: Add rx_taps.
+        # pulse_resps = self.gen_pulse_resps(self.chnls, np.array(self.tx_taps))  # ToDo: Add rx_taps.
+        self.set_status("Generating pulse responses...")
+        pulse_resps = self.gen_pulse_resps()
+        self.set_status("Finished.")
         vic_pulse_resp = pulse_resps[0]
         if cursor_ix is None:
             cursor_ix = self.loc_curs(vic_pulse_resp)
@@ -1445,7 +1517,7 @@ class COM(HasTraits):
         delta = np.zeros(npts)
         delta[npts // 2] = 1
         varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
-        df = freqs[1]
+        df = freqs[1] - freqs[0]
 
         def pn(hn: float) -> Rvec:
             """
@@ -1461,7 +1533,6 @@ class COM(HasTraits):
 
             Args:
                 h_samps: Vector of pulse response samples.
-                As: Signal amplitude, as per 93A.1.6.c.
 
             Returns:
                 Vector of "deltas" giving amplitude probability distribution.
@@ -1478,54 +1549,73 @@ class COM(HasTraits):
             rslts = []
             rslt = delta
             rslts.append(rslt)
-            for hn in h_samps:
+            for hn in self.filt_pr_samps(h_samps, As):
                 _pn = pn(hn)
                 pns.append(_pn)
                 rslt = np.convolve(rslt, _pn, mode='same')
                 rslts.append(rslt)
-            rslt /= sum(rslt)  # Enforce a PMF. Commenting out didn't make a difference.
+            rslt /= sum(rslt)  # Enforce a PMF. (Commenting out didn't make a difference.)
             self.dbg['pns'] = pns
             self.dbg['rslts'] = rslts
             return rslt
 
         # Sec. 93A.1.7.2
-        varN = self.eta0 * sum(abs(self.Hr * self.Hctf)**2) * (df / 1e9)  # (93A-35)
-        varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)               # (93A-30)
+        self.set_status("Sec. 93A.1.7.2")
+        varN = self.eta0 * sum(abs(self.Hr * self.Hctf)**2) * (df / 1e9)    # (93A-35)
+        varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)                 # (93A-30)
+        self.set_status("Calling calc_hJ()...")
         hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
+        self.set_status(f"len(vic_pulse_resp): {len(vic_pulse_resp)}; len(hJ): {len(hJ)}; calling p()...")
         pJ = p(self.Add * hJ)
+        self.set_status("Done")
         self.dbg['pJ'] = pJ
         self.dbg['hJ'] = hJ
-        varG = varTx + self.sigma_Rj**2 * varX * sum(hJ**2) + varN  # (93A-41)
-        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG)               # (93A-42)
-        pN = np.convolve(pG, pJ, mode='same')                                 # (93A-43)
+        varG = varTx + self.sigma_Rj**2 * varX * sum(hJ**2) + varN          # (93A-41)
+        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG)             # (93A-42)
+        pN = np.convolve(pG, pJ, mode='same')                               # (93A-43)
 
         # Sec. 93A.1.7.3
+        self.set_status("Sec. 93A.1.7.3")
         # - ISI (Inconsistent w/ IEEE 802.3-22, but consistent w/ v2.60 of MATLAB code.)
-        n_pre = cursor_ix // M
+        n_pre = min(2, cursor_ix // M)
         first_pre_ix = cursor_ix - n_pre * M
         vic_pulse_resp_isi_samps = np.concatenate((vic_pulse_resp[first_pre_ix:cursor_ix:M],
                                                    vic_pulse_resp[cursor_ix + M::M]))
+        vic_pulse_resp_isi_samps = vic_pulse_resp_isi_samps[:102]  # Ignore everything beyond 100 UI after cursor.
         vic_pulse_resp_post_samps = vic_pulse_resp_isi_samps[n_pre:]
+        if len(vic_pulse_resp_post_samps) == 0:
+            print(f"len(vic_pulse_resp_isi_samps): {len(vic_pulse_resp_isi_samps)}")
+            print(f"n_pre: {n_pre}")
+            raise RuntimeError("Debugging stop.")
+
         dfe_tap_weights = np.maximum(  # (93A-26)
             self.bmin,
             np.minimum(
                 self.bmax,
                 (vic_pulse_resp_post_samps[:nDFE] / vic_curs_val)))
-        hISI = vic_pulse_resp_isi_samps \
-             - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
-                                     (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
-                                     mode='constant',
-                                     constant_values=0)  # (93A-27)
-        hISI = self.filt_pr_samps(hISI, As)
+        try:
+            hISI = vic_pulse_resp_isi_samps \
+                 - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
+                                         (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
+                                         mode='constant',
+                                         constant_values=0)  # (93A-27)
+        except Exception:
+            print(f"n_pre: {n_pre}")
+            print(f"len(vic_pulse_resp_post_samps): {len(vic_pulse_resp_post_samps)}")
+            print(f"nDFE: {nDFE}")
+            raise
+        print(f"len(hISI): {len(hISI):10d}; ", end="")
         py = p(hISI)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
+        varISI = varX * sum(hISI**2)  # (93A-31)
 
         # - Crosstalk
+        self.set_status("Crosstalk")
         self.rslts['py0'] = py.copy()  # For debugging.
         xt_samps = []
         pks = []  # For debugging.
         for pulse_resp in pulse_resps[1:]:  # (93A-44)
-            i = np.argmax([sum(np.array(self.filt_pr_samps(pulse_resp[m::M], As))**2) for m in range(M)])  # (93A-33)
-            samps = self.filt_pr_samps(pulse_resp[i::M], As)
+            i = np.argmax([sum(np.array(pulse_resp[m::M])**2) for m in range(M)])  # (93A-33)
+            samps = pulse_resp[i::M]
             xt_samps.append(samps)
             pk = p(samps)  # For debugging.
             pks.append(pk)
@@ -1536,25 +1626,28 @@ class COM(HasTraits):
         py = np.convolve(py, pN, mode='same')  # (93A-45)
 
         # Final calculation
+        self.set_status("Final calculation")
         Py = np.cumsum(py)
         Py /= Py[-1]  # Enforce cumulative probability distribution.
 
         # Store some results.
-        self.pulse_resps = pulse_resps
+        self.pulse_resps   = pulse_resps
         self.com_cursor_ix = cursor_ix
-        self.com_sigma_Tx = np.sqrt(varTx)
-        self.com_sigma_G = np.sqrt(varG)
-        self.com_sigma_N = np.sqrt(varN)
+        self.com_sigma_Tx  = np.sqrt(varTx)
+        self.com_sigma_G   = np.sqrt(varG)
+        self.com_sigma_N   = np.sqrt(varN)
+        self.com_sigma_ISI = np.sqrt(varISI)
         self.rslts['pG'] = pG
         self.rslts['pN'] = pN
         self.rslts['py'] = py
         self.rslts['Py'] = Py
-        self.rslts['y'] = y
+        self.rslts['y']  = y
         self.com_dfe_taps = print_taps(dfe_tap_weights)
         self.com_As = As
-        self.rslts['sigma_G'] = self.com_sigma_G * 1e3
-        self.rslts['sigma_Tx'] = self.com_sigma_Tx * 1e3
-        self.rslts['sigma_N'] = self.com_sigma_N * 1e3
+        self.rslts['sigma_G']   = self.com_sigma_G  * 1e3
+        self.rslts['sigma_Tx']  = self.com_sigma_Tx * 1e3
+        self.rslts['sigma_N']   = self.com_sigma_N  * 1e3
+        self.rslts['sigma_ISI'] = self.com_sigma_ISI  * 1e3
 
         return (As,
                 abs(np.where(Py >= self.DER0)[0][0] - npts // 2) * ystep,
