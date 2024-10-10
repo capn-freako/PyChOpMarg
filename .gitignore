@@ -164,6 +164,6 @@ cython_debug/
 # Misc.
 .DS_Store
 *.sublime-workspace
-*.html
+# *.html
 chnl_data/example1.s32p
 enable-6.0.0/
