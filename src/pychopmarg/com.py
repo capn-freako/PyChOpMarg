@@ -808,10 +808,10 @@ class COM(HasTraits):
         self.opt_mode = opt_mode
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps, opt_mode=opt_mode), RuntimeError(
             "EQ optimization failed!")
-        print(f"After EQ optimization, sigma_ISI: {self.rslts['sigma_ISI']} mV", flush=True)
+        # print(f"After EQ optimization, sigma_ISI: {self.rslts['sigma_ISI']} mV", flush=True)
         self.set_status("Calculating noise...")
         As, Ani, self.cursor_ix = self.calc_noise()
-        print(f"After noise calculation, sigma_ISI: {self.rslts['sigma_ISI']} mV", flush=True)
+        # print(f"After noise calculation, sigma_ISI: {self.rslts['sigma_ISI']} mV", flush=True)
         com = 20 * np.log10(As / Ani)
         self.As = As
         self.Ani = Ani
@@ -1020,7 +1020,7 @@ class COM(HasTraits):
         Hctf = self.calc_Hctf(gDC=gDC, gDC2=gDC2)
         Hrx  = calc_Hffe(np.array(rx_taps).flatten(), self.nRxTaps - self.nRxPreTaps - 1, isRx=True)
         Hdfe = calc_Hdfe(dfe_taps)
-        rslt = Htx * H21 * Hr * Hctf * Hrx * Hdfe
+        rslt = Htx * H21 * Hr * Hctf * Hrx  # * Hdfe
         if max(abs(rslt)) == 0:
             print(f"max(abs(Htx)): {max(abs(Htx))}")
             print(f"max(abs(H21)): {max(abs(H21))}")
@@ -1544,10 +1544,12 @@ class COM(HasTraits):
         self.rx_taps  = rx_taps
         self.dfe_taps = dfe_taps
         self.pr_samps = pr_samps
-        pulse_resps = self.gen_pulse_resps()  # Include all EQ.
+        # pulse_resps = self.gen_pulse_resps()  # Include all EQ.
+        pulse_resps = self.gen_pulse_resps(dfe_taps=[])  # DFE taps are included explicitly, below.
         vic_pulse_resp = pulse_resps[0]
         if cursor_ix is None:
             cursor_ix = self.loc_curs(vic_pulse_resp)
+        curs_uis, curs_ofst = divmod(cursor_ix, M)
         vic_curs_val = vic_pulse_resp[cursor_ix]
         As = self.RLM * vic_curs_val / (L - 1)
         npts = 2 * max(int(As / 0.001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
@@ -1618,35 +1620,23 @@ class COM(HasTraits):
         # Sec. 93A.1.7.3
         self.set_status("Sec. 93A.1.7.3")
         # - ISI (Inconsistent w/ IEEE 802.3-22, but consistent w/ v2.60 of MATLAB code.)
-        n_pre = min(2, cursor_ix // M)
-        first_pre_ix = cursor_ix - n_pre * M
-        vic_pulse_resp_isi_samps = np.concatenate((vic_pulse_resp[first_pre_ix:cursor_ix:M],
-                                                   vic_pulse_resp[cursor_ix + M::M]))
-        vic_pulse_resp_isi_samps = vic_pulse_resp_isi_samps[:102]  # Ignore everything beyond 100 UI after cursor.
-        vic_pulse_resp_post_samps = vic_pulse_resp_isi_samps[n_pre:]
-        if len(vic_pulse_resp_post_samps) == 0:
-            print(f"len(vic_pulse_resp_isi_samps): {len(vic_pulse_resp_isi_samps)}")
-            print(f"n_pre: {n_pre}")
-            raise RuntimeError("Debugging stop.")
-
+        n_pre = min(5, curs_uis)
+        isi_sample_slice = slice(curs_ofst, len(vic_pulse_resp), M)  # Sample every M points, such that we include our identified cursor sample.
+        isi_select_slice = slice(curs_uis - n_pre, curs_uis + 101)   # Ignore everything beyond 100 UI after cursor.
+        tISI = self.times[isi_sample_slice][isi_select_slice]
+        hISI = vic_pulse_resp[isi_sample_slice][isi_select_slice].copy()
+        hISI[n_pre] = 0  # No ISI at cursor.
+        dfe_slice = slice(n_pre + 1, n_pre + 1 + nDFE)
         dfe_tap_weights = np.maximum(  # (93A-26)
             self.bmin,
             np.minimum(
                 self.bmax,
-                (vic_pulse_resp_post_samps[:nDFE] / vic_curs_val)))
-        try:
-            hISI = vic_pulse_resp_isi_samps \
-                 - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
-                                         (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
-                                         mode='constant',
-                                         constant_values=0)  # (93A-27)
-        except Exception:
-            print(f"n_pre: {n_pre}")
-            print(f"len(vic_pulse_resp_post_samps): {len(vic_pulse_resp_post_samps)}")
-            print(f"nDFE: {nDFE}")
-            raise
+                (hISI[dfe_slice] / vic_curs_val)))
+        hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val
         py = p(hISI)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
         varISI = varX * sum(hISI**2)  # (93A-31)
+        self.com_tISI = tISI
+        self.com_hISI = hISI
 
         # - Crosstalk
         self.rslts['py0'] = py.copy()  # For debugging.
@@ -1688,7 +1678,8 @@ class COM(HasTraits):
         self.rslts['sigma_N']   = self.com_sigma_N  * 1e3
         self.rslts['sigma_ISI'] = self.com_sigma_ISI  * 1e3
 
-        return (As,
+        # return (As,
+        return (1.0,
                 abs(np.where(Py >= self.DER0)[0][0] - npts // 2) * ystep,
                 cursor_ix)
 

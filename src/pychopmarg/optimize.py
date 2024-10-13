@@ -156,7 +156,7 @@ def przf(
     h0 = H[d]
     Hb = H[d + 1: d + 1 + nDFETaps]
     try:
-        w, _, _, _ = lstsq(H, fv)
+        w, _, _, _ = lstsq(H, fv, rcond=None)
         wn = clip_taps(w, nPreTaps, tap_mins, tap_maxs)
     except Exception:
         print(f"H.shape: {H.shape}; fv.shape: {fv.shape}; w.shape: {w.shape}")
