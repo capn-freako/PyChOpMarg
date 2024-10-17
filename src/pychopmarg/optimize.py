@@ -232,11 +232,13 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
         dh, first_samp = divmod(ts_ix, nspui)
         h = vic_pr[first_samp::nspui]
         d = dw + dh
-        H = toeplitz(concatenate((h, zeros(Nw - 1))), insert(zeros(Nw - 1), 0, h[0]))
+        # H = toeplitz(concatenate((h, zeros(Nw - 1))), insert(zeros(Nw - 1), 0, h[0]))
+        first_col = concatenate((h, zeros(Nw - 1)))
+        H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
         h0 = H[d]
         Hb = H[d + 1: d + 1 + Nb]
         varX = theNoiseCalc.varX
-        Rn = theNoiseCalc.Rn(theNoiseCalc.agg_pulse_resps)[:Nw]
+        Rn = theNoiseCalc.Rn()[:Nw]
         R = H.T @ H + toeplitz(Rn) / varX
         Ib = identity(Nb)
         zb = zeros(Nb)

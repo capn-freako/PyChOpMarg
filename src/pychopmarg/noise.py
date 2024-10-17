@@ -8,8 +8,8 @@ Original date:   September 2, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from numpy                  import argmax, argmin, array, concatenate, diff, mean, sinc, sum, where
-from numpy.fft              import irfft, rfft
+from numpy                  import argmax, argmin, array, concatenate, diff, mean, roll, sinc, sum, where
+from numpy.fft              import irfft, rfft, fftshift
 from scipy.interpolate      import interp1d
 from scipy.linalg           import toeplitz
 from traits.api             import Array, Float, HasTraits, Int, List, Property, cached_property  # type: ignore
@@ -143,26 +143,44 @@ class NoiseCalc(HasTraits):
 
     def from_irfft(self, x: Rvec) -> Rvec:
         """
-        Interpolate `irfft()` output to `t`.
+        Interpolate `irfft()` output to `t` and subsample at fBaud.
 
         Args:
-            x: `irfft()` to be interpolated.
+            x: `irfft()` results to be interpolated and subsampled.
 
         Returns:
-            y: interpolated vector.
+            y: interpolated and subsampled vector.
 
         Raises:
             IndexError: If length of input doesn't match length of `t_irfft` vector.
+
+        Notes:
+            1. Input vector is `fftshift()`-ed and the associated time vector recentered,
+                before interpolation and subsampling, to ensure we don't omit any non-causal behavior,
+                which ends up at the end of an IFFT output vector.
+            2. The sub-sampling phase is adjusted, so as to ensure that we catch the peak.
         """
 
+        def shift_t(t):
+            return t - t[len(t) // 2]
+
+        def unshift_t(t):
+            return t - t[0]
+        
+        t = self.t
+        t_shift = shift_t(t)
         t_irfft = self.t_irfft
+        t_irfft_shift = shift_t(t_irfft)
+        nspui = self.nspui
 
         assert len(x) == len(t_irfft), IndexError(
             f"Length of input ({len(x)}) must match length of `t_irfft` vector ({len(t_irfft)})!")
         
-        krnl = interp1d(t_irfft, x, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
-        
-        return krnl(self.t)
+        krnl = interp1d(t_irfft_shift, fftshift(x), bounds_error=False, fill_value="extrapolate", assume_sorted=True)
+        y = krnl(t_shift)
+        # curs_uis, curs_ofst = divmod(where(t_shift == 0)[0][0], nspui)  # Ensure we capture the first sample in the next step.
+        curs_uis, curs_ofst = divmod(argmax(y), nspui)  # Ensure that we capture the peak in the next step.
+        return roll(y[curs_ofst::nspui], -curs_uis)  # Sampled at fBaud. (Note: `fftshift()` does not work, in place of `roll()`!)
 
     Srn = Property(observe=["fN", "eta0", "Hr", "Hctf", "f"])
 
@@ -178,7 +196,8 @@ class NoiseCalc(HasTraits):
         """
         nspui = self.nspui
         rslt  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2  # "/ 2" in [1] omitted, since we're only considering: m >= 0.
-        return abs(rfft(self.from_irfft(irfft(rslt))[nspui // 2::nspui])) * 2 * self.f[-1] * self.t[1]
+        _rslt = abs(rfft(self.from_irfft(irfft(rslt)))) * 2 * self.f[-1] * self.Tb
+        return _rslt  # * len(rslt) / len(_rslt)
 
     def Sxn(self, agg_pulse_resp: Rvec) -> Rvec:
         """
@@ -196,7 +215,7 @@ class NoiseCalc(HasTraits):
         sampled_agg_prs = [agg_pulse_resp[m::nspui] for m in range(nspui)]
         best_m = argmax(list(map(lambda pr_samps: sum(array(pr_samps)**2), sampled_agg_prs)))
 
-        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.t[1]**2 * self.Tb  # i.e. - / fB
+        return self.varX * abs(rfft(sampled_agg_prs[best_m]) * self.Tb)**2 * self.Tb  # i.e. - / fB
 
     Stn = Property(observe=["Tb", "f", "Ht", "H21", "Hr", "Hctf", "Av", "ts_ix", "nspui", "varX", "snr_tx"])
 
@@ -212,10 +231,12 @@ class NoiseCalc(HasTraits):
         nspui = self.nspui
 
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf
-        _htn = self.Av * irfft(Tb * sinc(f * Tb) * Htn) * 2 * f[-1]  # See `_get_Srn()`.
-        htn  = self.from_irfft(_htn)[self.ts_ix % nspui::nspui]
+        # _htn = self.Av * irfft(Tb * sinc(f * Tb) * Htn) * 2 * f[-1]  # See `_get_Srn()`.
+        _htn = irfft(sinc(f * Tb) * Htn) * 2  # * f[-1]  # See `_get_Srn()`. But, note that `* df` is not appropriate here.
+        # htn  = self.from_irfft(_htn)[self.ts_ix % nspui::nspui]
+        htn  = self.from_irfft(_htn)  # ToDo: Do I need to honor `ts_ix`?
 
-        return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * self.t[1]**2 * Tb  # i.e. - / fB
+        return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * Tb  # i.e. - / fB
 
     Sjn = Property(observe=["Tb", "t", "vic_pulse_resp", "ts_ix", "nspui", "varX", "Add", "sigma_Rj"])
 
@@ -243,18 +264,10 @@ class NoiseCalc(HasTraits):
         self.hJ = hJ
         self.dV = dV
 
-        return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * t[1])**2 * Tb  # i.e. - / fB
+        return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
 
 
-    def Rn(self, agg_pulse_resps: list[Rvec]) -> Rvec:
-        """
-        Noise autocorrelation vector at Rx FFE input.
-
-        Args:
-            agg_pulse_resps: Aggressor pulse responses (V).
-
-        Returns:
-            Rn: Noise autocorrelation vector at Rx FFE input.
-        """
+    def Rn(self) -> Rvec:
+        """Noise autocorrelation vector at Rx FFE input."""
         Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0) + self.Stn + self.Sjn
         return irfft(Sn) / self.Tb  # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.

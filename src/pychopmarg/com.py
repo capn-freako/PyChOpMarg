@@ -1331,10 +1331,12 @@ class COM(HasTraits):
 
         # Step h - Spectral noise.
         df = freqs[1]
-        varN = self.eta0 * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * (df / 1e9)  # (93A-35)
+        # varN = self.eta0 * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * (df / 1e9)  # (93A-35)
+        varN = (self.eta0 / 1e9) * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * df
 
         # Step i - FOM calculation.
-        fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
+        # fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
+        fom = -10 * np.log10(varTx + varISI + varJ + varXT + varN)  # Assumes unit peak victim pulse response amplitude.
 
         # Stash our calculation results.
         self.fom_rslts['pulse_resps'] = pulse_resps
@@ -1343,12 +1345,12 @@ class COM(HasTraits):
         self.fom_rslts['cursor_ix'] = cursor_ix
         self.fom_rslts['As'] = As
         self.fom_rslts['varTx'] = varTx
-        self.fom_rslts['dfe_tap_weights'] = dfe_tap_weights
         self.fom_rslts['varISI'] = varISI
         self.fom_rslts['varJ'] = varJ
         self.fom_rslts['varXT'] = varXT
         self.fom_rslts['varN'] = varN
         self.fom_rslts['rx_taps'] = rx_taps
+        self.fom_rslts['dfe_tap_weights'] = dfe_tap_weights
 
         return fom
 
@@ -1437,6 +1439,7 @@ class COM(HasTraits):
                             # TEMPORARY DEBUGGING ONLY!:
                             if opt_mode == OptMode.MMSE:
                                 self.mmse_rslt = rslt
+                                self.theNoiseCalc = theNoiseCalc
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
             fom = self.calc_fom(tx_taps)
