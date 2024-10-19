@@ -277,12 +277,13 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
             rslt["dfe_tap_weights"] = b_lim
             rslt["vic_pulse_resp"] = vic_pr
             rslt["cursor_ix"] = ts_ix
-            df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
+            # df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
+            df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
             rslt["varTx"] = sum(theNoiseCalc.Stn) * df
             rslt["varISI"] = 0
             rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
             rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
-            rslt["varN"] = 0
+            rslt["varN"] = sum(theNoiseCalc.Srn) * df
             # DEBUGGING:
             rslt["h"] = h
             rslt["h0"] = h0

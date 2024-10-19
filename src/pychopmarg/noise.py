@@ -155,32 +155,32 @@ class NoiseCalc(HasTraits):
             IndexError: If length of input doesn't match length of `t_irfft` vector.
 
         Notes:
-            1. Input vector is `fftshift()`-ed and the associated time vector recentered,
-                before interpolation and subsampling, to ensure we don't omit any non-causal behavior,
-                which ends up at the end of an IFFT output vector.
+            1. Input vector is shifted, such that its peak occurs at `0.1 * max(t)`, before interpolating.
+                This is done to:
+                    - ensure that we don't omit any non-causal behavior,
+                    which ends up at the end of an IFFT output vector
+                    when the peak is very near the beginning, and
+                    - to ensure that the majority of our available time span
+                    is available for capturing reflections.
             2. The sub-sampling phase is adjusted, so as to ensure that we catch the peak.
         """
 
-        def shift_t(t):
-            return t - t[len(t) // 2]
-
-        def unshift_t(t):
-            return t - t[0]
-        
-        t = self.t
-        t_shift = shift_t(t)
+        t       = self.t
         t_irfft = self.t_irfft
-        t_irfft_shift = shift_t(t_irfft)
-        nspui = self.nspui
+        nspui   = self.nspui
 
         assert len(x) == len(t_irfft), IndexError(
             f"Length of input ({len(x)}) must match length of `t_irfft` vector ({len(t_irfft)})!")
-        
-        krnl = interp1d(t_irfft_shift, fftshift(x), bounds_error=False, fill_value="extrapolate", assume_sorted=True)
-        y = krnl(t_shift)
-        # curs_uis, curs_ofst = divmod(where(t_shift == 0)[0][0], nspui)  # Ensure we capture the first sample in the next step.
+
+        t_pk = 0.1 * t[-1]                      # target peak location time
+        targ_ix = where(t_irfft >= t_pk)[0][0]  # target peak vector index, in `x`
+        curr_ix = argmax(x)                     # current peak vector index, in `x`
+        _x = roll(x, targ_ix - curr_ix)         # `x` with peak repositioned
+
+        krnl = interp1d(t_irfft, _x, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
+        y = krnl(t)
         curs_uis, curs_ofst = divmod(argmax(y), nspui)  # Ensure that we capture the peak in the next step.
-        return roll(y[curs_ofst::nspui], -curs_uis)  # Sampled at fBaud. (Note: `fftshift()` does not work, in place of `roll()`!)
+        return y[curs_ofst::nspui]                      # Sampled at fBaud, w/ peak captured.
 
     Srn = Property(observe=["fN", "eta0", "Hr", "Hctf", "f"])
 
@@ -215,7 +215,7 @@ class NoiseCalc(HasTraits):
         sampled_agg_prs = [agg_pulse_resp[m::nspui] for m in range(nspui)]
         best_m = argmax(list(map(lambda pr_samps: sum(array(pr_samps)**2), sampled_agg_prs)))
 
-        return self.varX * abs(rfft(sampled_agg_prs[best_m]) * self.Tb)**2 * self.Tb  # i.e. - / fB
+        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
 
     Stn = Property(observe=["Tb", "f", "Ht", "H21", "Hr", "Hctf", "Av", "ts_ix", "nspui", "varX", "snr_tx"])
 

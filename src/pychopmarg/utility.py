@@ -11,6 +11,8 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 import numpy as np  # type: ignore
 import skrf as rf
 
+from typing import Optional
+
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
 
 
@@ -246,3 +248,95 @@ def sDieLadderSegment(freqs: list[float], trip: tuple[float, float, float]) -> r
     """
     R0, Cd, Ls = trip
     return sCshunt(freqs, Cd, r0=R0) ** sLseries(freqs, Ls, r0=R0)
+
+
+def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
+    """
+    Filter a list of pulse response samples for minimum magnitude.
+
+    Args:
+        pr_samps: The pulse response samples to filter.
+        As: Signal amplitude, as per 93A.1.6.c.
+
+    Keyword Args:
+        rel_thresh: Filtration threshold (As).
+            Default: 0.001 (i.e. - 0.1%, as per Note 2 of 93A.1.7.1)
+
+    Returns:
+        The subset of `pr_samps` passing filtration.
+    """
+    thresh = As * rel_thresh
+    return np.array(list(filter(lambda x: abs(x) >= thresh, pr_samps)))
+
+
+def delta_pmf(
+    h_samps: Rvec, L: int = 4, RLM: float = 1.0,
+    curs_ix: Optional[int] = None, y: Optional[Rvec] = None
+) -> Rvec:
+    """
+    Calculate the "delta-pmf" for a set of pulse response samples,
+    as per (93A-40).
+
+    Args:
+        h_samps: Vector of pulse response samples.
+
+    Keyword Args:
+        L: Number of modulation levels.
+            Default: 4
+        RLM: Relative level mismatch.
+            Default: 1.0
+        curs_ix: Cursor index override.
+            Default: None (Means use `argmax()` to find cursor.)
+        y: y-values override vector.
+            Default: None (Means calculate appropriate y-value vector here.)
+
+    Returns:
+        A pair consisting of:
+        - the voltages corresponding to the bins, and
+        - their probabilities.
+
+    Raises:
+        None
+
+    Notes:
+        1. The input set of pulse response samples is filtered,
+            as per Note 2 of 93A.1.7.1, unless a y-values override
+            vector is provided.
+
+    ToDo:
+        1. Does this work for 802.3dj and its normalized pulse response amplitude?
+    """
+
+    assert not any(np.isnan(h_samps)), ValueError(
+        f"Input contains NaNs at: {np.where(np.isnan(h_samps))[0]}")
+    
+    if y is None:
+        curs_ix = curs_ix or np.argmax(h_samps)
+        curs_val = h_samps[curs_ix]
+        As = RLM * curs_val / (L - 1)
+        npts = 2 * max(int(As / 0.001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
+        y = np.linspace(-As, As, npts)
+        ystep = 2 * As / (npts - 1)
+        h_samps_filt = filt_pr_samps(h_samps, As)
+    else:
+        npts = len(y)
+        ystep = y[1] - y[0]
+        h_samps_filt = h_samps
+
+    delta = np.zeros(npts)
+    delta[npts // 2] = 1
+
+    def pn(hn: float) -> Rvec:
+        """
+        (93A-39)
+        """
+        return 1 / L * sum([np.roll(delta, int((2 * el / (L - 1) - 1) * hn / ystep))
+                            for el in range(L)])
+
+    rslt = delta
+    for hn in h_samps_filt:
+        _pn = pn(hn)
+        rslt = np.convolve(rslt, _pn, mode='same')
+    rslt /= sum(rslt)  # Enforce a PMF. (Commenting out didn't make a difference.)
+
+    return y, rslt

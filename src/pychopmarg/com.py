@@ -52,7 +52,7 @@ from traits.api        import (
 from pychopmarg.common   import Rvec, Cvec, COMParams, PI, TWOPI
 from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import mmse, przf
-from pychopmarg.utility  import import_s32p, sdd_21, sDieLadderSegment
+from pychopmarg.utility  import import_s32p, sdd_21, sDieLadderSegment, delta_pmf
 
 # Globals
 # These are used by `calc_Hffe()`, to minimize the size of its cache.
@@ -1478,7 +1478,7 @@ class COM(HasTraits):
         self.sigma_ISI = np.sqrt(varISI_best)
         self.sigma_J = np.sqrt(varJ_best)
         self.sigma_XT = np.sqrt(varXT_best)
-        # These two are also calculated by `calc_noise()`.
+        # These two are also calculated by `calc_noise()`, but are not overwritten.
         self.sigma_Tx = np.sqrt(varTx_best)
         self.sigma_N = np.sqrt(varN_best)
         self.foms = foms
@@ -1522,6 +1522,7 @@ class COM(HasTraits):
 
         L = self.L
         M = self.nspui
+        RLM = self.RLM
         freqs = self.freqs
         nDFE = len(self.bmin)
 
@@ -1534,10 +1535,10 @@ class COM(HasTraits):
                 rx_taps, dfe_taps, pr_samps = przf(pulse_resps[0], M, self.nRxTaps, self.nRxPreTaps, nDFE, self.rx_taps_min, self.rx_taps_max, self.bmin, self.bmax)
             case OptMode.MMSE:
                 theNoiseCalc = NoiseCalc(
-                    self.L, 1/self.fb, 0, self.times, pulse_resps[0], pulse_resps[1:],
+                    L, 1/self.fb, 0, self.times, pulse_resps[0], pulse_resps[1:],
                     self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.Hctf,
                     self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
-                rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb, self.RLM, self.L,
+                rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb, RLM, L,
                             self.bmin, self.bmax, self.rx_taps_min, self.rx_taps_max)
                 rx_taps  = rslt["rx_taps"]
                 dfe_taps = rslt["dfe_tap_weights"]
@@ -1554,7 +1555,7 @@ class COM(HasTraits):
             cursor_ix = self.loc_curs(vic_pulse_resp)
         curs_uis, curs_ofst = divmod(cursor_ix, M)
         vic_curs_val = vic_pulse_resp[cursor_ix]
-        As = self.RLM * vic_curs_val / (L - 1)
+        As = RLM * vic_curs_val / (L - 1)
         npts = 2 * max(int(As / 0.001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
         y = np.linspace(-As, As, npts)
         ystep = 2 * As / (npts - 1)
@@ -1564,60 +1565,16 @@ class COM(HasTraits):
         varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
         df = freqs[1] - freqs[0]
 
-        def pn(hn: float) -> Rvec:
-            """
-            (93A-39)
-            """
-            return 1 / L * sum([np.roll(delta, int((2 * el / (L - 1) - 1) * hn / ystep))
-                                for el in range(L)])
-
-        def p(h_samps: Rvec) -> Rvec:
-            """
-            Calculate the "delta-pmf" for a set of pulse response samples,
-            as per (93A-40).
-
-            Args:
-                h_samps: Vector of pulse response samples.
-
-            Returns:
-                Vector of "deltas" giving amplitude probability distribution.
-
-            Raises:
-                None
-
-            Notes:
-                1. The input set of pulse response samples is filtered,
-                    as per Note 2 of 93A.1.7.1.
-            """
-
-            pns = []
-            rslts = []
-            rslt = delta
-            rslts.append(rslt)
-            h_samps_filt = self.filt_pr_samps(h_samps, As)
-            for hn in h_samps_filt:
-                _pn = pn(hn)
-                pns.append(_pn)
-                rslt = np.convolve(rslt, _pn, mode='same')
-                rslts.append(rslt)
-            rslt /= sum(rslt)  # Enforce a PMF. (Commenting out didn't make a difference.)
-            self.dbg['pns'] = pns
-            self.dbg['rslts'] = rslts
-            return rslt
-
         # Sec. 93A.1.7.2
-        self.set_status("Sec. 93A.1.7.2")
+        # ToDo: `pG` and `pN` are both very large, relative to `pJ`; am I mixing PDFs w/ PMFs?
         varN = self.eta0 * sum(abs(self.Hr * self.Hctf)**2) * (df / 1e9)    # (93A-35)
         varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)                 # (93A-30)
-        self.set_status("Calling calc_hJ()...")
         hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
-        self.set_status(f"len(vic_pulse_resp): {len(vic_pulse_resp)}; len(hJ): {len(hJ)}; calling p()...")
-        pJ = p(self.Add * hJ)
-        self.set_status("Done")
+        _, pJ = delta_pmf(self.Add * hJ, L=L, RLM=RLM, y=y)
         self.dbg['pJ'] = pJ
         self.dbg['hJ'] = hJ
         varG = varTx + self.sigma_Rj**2 * varX * sum(hJ**2) + varN          # (93A-41)
-        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG)             # (93A-42)
+        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep     # (93A-42), but converted to PMF.
         pN = np.convolve(pG, pJ, mode='same')                               # (93A-43)
 
         # Sec. 93A.1.7.3
@@ -1636,7 +1593,7 @@ class COM(HasTraits):
                 self.bmax,
                 (hISI[dfe_slice] / vic_curs_val)))
         hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val
-        py = p(hISI)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
+        _, py = delta_pmf(hISI, L=L, RLM=RLM, y=y)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
         varISI = varX * sum(hISI**2)  # (93A-31)
         self.com_tISI = tISI
         self.com_hISI = hISI
@@ -1649,7 +1606,7 @@ class COM(HasTraits):
             i = np.argmax([sum(np.array(pulse_resp[m::M])**2) for m in range(M)])  # (93A-33)
             samps = pulse_resp[i::M]
             xt_samps.append(samps)
-            pk = p(samps)  # For debugging.
+            _, pk = delta_pmf(samps, L=L, RLM=RLM, y=y)  # For debugging.
             pks.append(pk)
             py = np.convolve(py, pk, mode='same')
         self.rslts['py1'] = py.copy()  # For debugging.
@@ -1681,8 +1638,8 @@ class COM(HasTraits):
         self.rslts['sigma_N']   = self.com_sigma_N  * 1e3
         self.rslts['sigma_ISI'] = self.com_sigma_ISI  * 1e3
 
-        # return (As,
-        return (1.0,
+        return (As,
+        # return (1.0,
                 abs(np.where(Py >= self.DER0)[0][0] - npts // 2) * ystep,
                 cursor_ix)
 
