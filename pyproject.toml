@@ -18,6 +18,7 @@ license = {text = "BSD3"}
 dependencies = [
     "click",
     "scikit-rf>=0.29",
+    "typing_extensions",  # SciKit-RF requires this, but doesn't include it itself.
 ]
 keywords=["com", "channel", "margin"]
 classifiers=[

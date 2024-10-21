@@ -11,9 +11,11 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 import numpy as np  # type: ignore
 import skrf as rf
 
-from typing import Optional
+from typing import Any, Optional, TypeVar
 
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
+
+T = TypeVar('T', Any, Any)
 
 
 def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Network:

@@ -24,9 +24,11 @@ ToDo:
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
 
-from enum   import enum
-from typing import Any, Optional, TypeVar
+from enum    import Enum
+from pathlib import Path
+from typing  import Any, Optional, TypeVar
 
+from numpy             import array
 from numpy.typing      import NDArray
 from scipy.interpolate import interp1d
 
@@ -45,7 +47,7 @@ gNtaps: int = None  # type: ignore
 
 T = TypeVar('T', Any, Any)
 
-class OptMode(enum):
+class OptMode(Enum):
     PRZF = 1
     MMSE = 2
 
@@ -90,7 +92,7 @@ def calc_Hffe(tap_weights: Rvec, n_post: int, isRx: bool = False) -> Cvec:
         f"Called before global variables were initialized!\n\tgFreqs: \
         {gFreqs}, gFb: {gFb}, gC0min: {gC0min}, gNtaps: {gNtaps}")
 
-    cs = list(np.array(tap_weights).flatten())
+    cs = list(array(tap_weights).flatten())
     if not isRx:
         c0 = 1 - sum(list(map(abs, tap_weights)))
         if c0 < gC0min:
@@ -138,7 +140,7 @@ def print_taps(ws: list[float]) -> str:
 
 
 class COM():
-    "Encoding of the IEEE 802.3-22 Annex 93A/178A "Channel Operating Margin" (COM) specification."
+    "Encoding of the IEEE 802.3-22 Annex 93A/178A 'Channel Operating Margin' (COM) specification."
 
     status_str = str("Ready")
     debug = bool(False)
@@ -160,36 +162,35 @@ class COM():
     RLM = float(1.0)  # ratio level mismatch.
     tr = float(10e-12)  # Tx output risetime (s).
     # - Linear EQ
-    nTxTaps      = 6
+    nTxTaps      = 6  # Does not include cursor!
     tx_n_post    = int(3)
-    tx_taps_pos  = array(shape=(nTxTaps,), dtype=int,   value=[-3, -2, -1,    1,    2,  3])
-    tx_taps_min  = array(shape=(nTxTaps,), dtype=float, value=[ 0., 0., 0.,   0.,   0., 0.])
-    tx_taps_max  = array(shape=(nTxTaps,), dtype=float, value=[ 0., 0., 0.,   0.,   0., 0.])
-    tx_taps_step = array(shape=(nTxTaps,), dtype=float, value=[ 0., 0., 0.02, 0.02, 0., 0.])
-    tx_taps      = array(shape=(nTxTaps,), dtype=float, value=[ 0.] * nTxTaps)  # Tx FFE tap weights.
+    tx_taps_pos  = array(list(range(tx_n_post - nTxTaps, 0)) + list(range(1, tx_n_post + 1)), dtype=int)
+    tx_taps_min  = array([-1] * nTxTaps, dtype=float)
+    tx_taps_max  = array([1] * nTxTaps, dtype=float)
+    tx_taps_step = array([0.25] * nTxTaps, dtype=float)
+    tx_taps      = array([0] * nTxTaps, dtype=float)  # Tx FFE tap weights.
     c0_min = float(0)  # minimum allowed Tx FFE main tap value.
     fr = float(0.75)  # AFE corner frequency (fb)
     gDC_vals = list([-x for x in range(13)])  # D.C. gain of Rx CTLE first stage (dB).
-    gDC = enum(0, values="gDC_vals")
+    gDC = int(0)
     gDC2_vals = list([0.,])  # D.C. gain of Rx CTLE second stage (dB).
-    gDC2 = enum(0, values="gDC2_vals")
+    gDC2 = int(0)
     fz = float(FB / 4.)  # CTLE zero frequency.
     fp1 = float(FB / 4.)  # CTLE first pole frequency.
     fp2 = float(FB)  # CTLE second pole frequency.
     fLF = float(1e6)  # CTLE low-f corner frequency.
-    opt_mode_vals = list([OptMode.PRZF, OptMode.MMSE])
-    opt_mode = enum(OptMode.PRZF, values="opt_mode_vals")
+    opt_mode = OptMode(OptMode.PRZF)
     # - FFE/DFE
     N_DFE = 1  # DO NOT REMOVE! Initializing other Ints using `nDFE` doesn't work!
     nDFE = int(N_DFE)  # number of DFE taps.
     bmax = list([1.0] * N_DFE)  # DFE maximum tap values.
     bmin = list([-1.0] * N_DFE)  # DFE minimum tap values.
-    dfe_taps = array(shape=(N_DFE,), dtype=float, value=[0.] * N_DFE)  # Rx FFE tap weights.
+    dfe_taps = array([0] * N_DFE, dtype=float)  # Rx FFE tap weights.
     nRxTaps      = 15
     nRxPreTaps   = 3
-    rx_taps_min  = array(shape=(nRxTaps,), dtype=float, value=[0.] * nRxTaps)
-    rx_taps_max  = array(shape=(nRxTaps,), dtype=float, value=[0.] * nRxTaps)
-    rx_taps      = array(shape=(nRxTaps,), dtype=float, value=[0.] * nRxTaps)  # Rx FFE tap weights.
+    rx_taps_min  = array([-1] * nRxTaps, dtype=float)
+    rx_taps_max  = array([1] * nRxTaps, dtype=float)
+    rx_taps      = array([0] * nRxTaps, dtype=float)  # Rx FFE tap weights.
     
     # - Package & Die Modeling
     # -- MKS
@@ -201,7 +202,7 @@ class COM():
     Ls = list([0.13e-9, 0.15e-9, 0.14e-9])  # parasitic die inductances.
     # -- ns & mm
     zp_vals = list([12, 33])
-    zp = enum(values="zp_vals")
+    zp = int(12)
     zp_B = float(1.8)
     zc = list([87.5, 92.5])  # package transmission line characteristic impedances (Ohms).
     gamma0 = float(5.0e-4)   # propagation loss constant (1/mm)
@@ -215,20 +216,20 @@ class COM():
     TxSNR = float(27)  # Tx signal-to-noise ratio (dB).
     DER0 = float(1e-5)  # detector error rate threshold.
     # - Channel file(s)
-    chnl_s32p = file("", entries=5, filter=["*.s32p"], exists=False)
-    chnl_s4p_thru = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_fext1 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_fext2 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_fext3 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_fext4 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_fext5 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_fext6 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_next1 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_next2 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_next3 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_next4 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_next5 = file("", entries=5, filter=["*.s4p"], exists=True)
-    chnl_s4p_next6 = file("", entries=5, filter=["*.s4p"], exists=True)
+    chnl_s32p = Path("")
+    chnl_s4p_thru = Path("")
+    chnl_s4p_fext1 = Path("")
+    chnl_s4p_fext2 = Path("")
+    chnl_s4p_fext3 = Path("")
+    chnl_s4p_fext4 = Path("")
+    chnl_s4p_fext5 = Path("")
+    chnl_s4p_fext6 = Path("")
+    chnl_s4p_next1 = Path("")
+    chnl_s4p_next2 = Path("")
+    chnl_s4p_next3 = Path("")
+    chnl_s4p_next4 = Path("")
+    chnl_s4p_next5 = Path("")
+    chnl_s4p_next6 = Path("")
     vic_chnl_ix = int(1)
     # - Results
     # -- COM
@@ -283,14 +284,14 @@ class COM():
 
     # Dependent variable definitions
     # - Unit interval (s).
-    ui = property(float, depends_on=["fb"])
+    ui = property(float)
 
     def _get_ui(self):
         """Unit interval (s)."""
         return 1 / self.fb
 
     # - system time vector; decoupled from system frequency vector!
-    times = property(array, depends_on=["fb", "nspui", "tmax"])
+    times = property(array)
 
     def _get_times(self):
         """System times (s)."""
@@ -300,7 +301,7 @@ class COM():
         return rslt
 
     # - system frequency vector; decoupled from system time vector!
-    freqs = property(array, depends_on=["fstep", "fmax"])
+    freqs = property(array)
 
     def _get_freqs(self):
         """System frequencies (Hz)."""
@@ -310,15 +311,15 @@ class COM():
         return freqs
 
     # - `irfft()` time vector; decoupled from system time vector!
-    t_irfft = property(array, depends_on=["freqs"])
+    t_irfft = property(array)
 
     def _get_t_irfft(self):
         """`irfft()` result time index (s)."""
         Ts = 0.5 / self.fmax  # Sample period satisfying Nyquist criteria.
-        return np.array([n * Ts for n in range(2 * (len(self.freqs) - 1))])
+        return array([n * Ts for n in range(2 * (len(self.freqs) - 1))])
 
     # - Rect(ui) in the frequency domain.
-    Xsinc = property(array, depends_on=["ui", "freqs"])
+    Xsinc = property(array)
 
     def _get_Xsinc(self):
         """Frequency domain sinc(f) corresponding to Rect(ui)."""
@@ -328,7 +329,7 @@ class COM():
         return w * np.sinc(ui * self.freqs)
 
     # - Tx risetime transfer function.
-    Ht = property(array, depends_on=['tr'])
+    Ht = property(array)
 
     def _get_Ht(self):
         """
@@ -339,7 +340,7 @@ class COM():
         return np.exp(-2 * (PI * f * self.tr / 1.6832)**2)
 
     # - Rx AFE voltage transfer function.
-    Hr = property(array, depends_on=['freqs'])
+    Hr = property(array)
 
     def _get_Hr(self):
         """
@@ -350,7 +351,7 @@ class COM():
         return 1 / (1 - 3.414214 * f**2 + f**4 + 2.613126j * (f - f**3))
 
     # - Rx CTLE voltage transfer function.
-    Hctf = property(array, depends_on=['freqs', 'gDC', 'gDC2', 'fz', 'fp1', 'fp2', 'fLF'])
+    Hctf = property(array)
 
     def _get_Hctf(self):
         return self.calc_Hctf(self.gDC, self.gDC2)
@@ -386,7 +387,7 @@ class COM():
         return num / den
 
     # - All possible Tx/Rx tap weight combinations.
-    tx_combs = property(list, depends_on=['tx_taps_min', 'tx_taps_max', 'tx_taps_step'])
+    tx_combs = property(list)
 
     def _get_tx_combs(self):
         """
@@ -396,8 +397,8 @@ class COM():
         return mk_combs(trips)
 
     # - Reflection coefficients
-    gamma1 = property(float, depends_on=['Rd', 'R0'])
-    gamma2 = property(float, depends_on=['gamma1'])
+    gamma1 = property(float)
+    gamma2 = property(float)
 
     def _get_gamma1(self):
         """
@@ -414,12 +415,12 @@ class COM():
         return self.gamma1
 
     # - Die/Package response
-    sDieLadder = property(depends_on=['R0', 'freqs', 'Cd', 'Ls'])  # noqa E221
-    sPkgRx   = property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp', 'Ls'])  # noqa E221
-    sPkgTx   = property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp', 'Ls'])  # noqa E221
-    sPkgNEXT = property(depends_on=['zc', 'R0', 'zp', 'freqs', 'Cd', 'Cp', 'Ls'])  # noqa E221
-    sZp      = property(depends_on=['zc', 'R0', 'zp', 'freqs'])  # noqa E221
-    sZpNEXT  = property(depends_on=['zc', 'R0', 'zp', 'freqs'])  # noqa E221
+    sDieLadder = property(rf.Network)  # noqa E221
+    sPkgRx   = property(rf.Network)  # noqa E221
+    sPkgTx   = property(rf.Network)  # noqa E221
+    sPkgNEXT = property(rf.Network)  # noqa E221
+    sZp      = property(rf.Network)  # noqa E221
+    sZpNEXT  = property(rf.Network)  # noqa E221
 
     def _get_sDieLadder(self) -> rf.Network:
         """
@@ -505,7 +506,7 @@ class COM():
             else:
                 return gamma0 + gamma1 * np.sqrt(f) + gamma2(f) * f
 
-        g = np.array(list(map(gamma, f_GHz)))
+        g = array(list(map(gamma, f_GHz)))
 
         def mk_s2p(z_pair: tuple[float, float]) -> rf.Network:
             """
@@ -523,7 +524,7 @@ class COM():
             rho = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
             s11 = s22 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
             s21 = s12 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
-            return rf.Network(s=np.array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)
+            return rf.Network(s=array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)
 
         return rf.network.cascade_list(list(map(mk_s2p, zip(zc, zps))))
 
@@ -807,8 +808,8 @@ class COM():
         freqs = self.freqs
         w = TWOPI * freqs
         s = 1j * w
-        s2p = np.array(
-            [1 / (2 + _s * c * r0) * np.array(
+        s2p = array(
+            [1 / (2 + _s * c * r0) * array(
                 [[-_s * c * r0, 2],
                  [2, -_s * c * r0]])
              for _s in s])
@@ -895,11 +896,11 @@ class COM():
             rx_taps = self.rx_taps
         if dfe_taps is None:
             dfe_taps = self.dfe_taps
-        Htx  = calc_Hffe(np.array(tx_taps).flatten(), self.tx_n_post)
+        Htx  = calc_Hffe(array(tx_taps).flatten(), self.tx_n_post)
         H21  = self.H21(s2p)
         Hr   = self.Hr
         Hctf = self.calc_Hctf(gDC=gDC, gDC2=gDC2)
-        Hrx  = calc_Hffe(np.array(rx_taps).flatten(), self.nRxTaps - self.nRxPreTaps - 1, isRx=True)
+        Hrx  = calc_Hffe(array(rx_taps).flatten(), self.nRxTaps - self.nRxPreTaps - 1, isRx=True)
         Hdfe = calc_Hdfe(dfe_taps)
         rslt = Htx * H21 * Hr * Hctf * Hrx  # * Hdfe
         if max(abs(rslt)) == 0:
@@ -1039,7 +1040,7 @@ class COM():
         """
 
         thresh = As * rel_thresh
-        return np.array(list(filter(lambda x: abs(x) >= thresh, pr_samps)))
+        return array(list(filter(lambda x: abs(x) >= thresh, pr_samps)))
 
     def calc_hJ(self, pulse_resp: Rvec, As: float, cursor_ix: int, rel_thresh: float = 0.001) -> Rvec:
         """
@@ -1060,7 +1061,7 @@ class COM():
 
         M = self.nspui
         thresh = As * rel_thresh
-        valid_pr_samp_ixs = np.array(list(filter(lambda ix: abs(pulse_resp[ix]) >= thresh,
+        valid_pr_samp_ixs = array(list(filter(lambda ix: abs(pulse_resp[ix]) >= thresh,
                                                  range(cursor_ix, len(pulse_resp) - 1, M))))
         m1s = pulse_resp[valid_pr_samp_ixs - 1]
         p1s = pulse_resp[valid_pr_samp_ixs + 1]
@@ -1157,13 +1158,13 @@ class COM():
 
         # Step a - Pulse response construction.
         if rx_taps is None:
-            pulse_resps = self.gen_pulse_resps(chnls, tx_taps=np.array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0])  # ToDo: Check this.
+            pulse_resps = self.gen_pulse_resps(chnls, tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0])  # ToDo: Check this.
             rx_taps, dfe_taps, _ = przf(pulse_resps[0], M, self.nRxTaps, self.nRxPreTaps, nDFE, self.rx_taps_min, self.rx_taps_max, self.bmin, self.bmax)
-        pulse_resps = self.gen_pulse_resps(chnls, tx_taps=np.array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=np.array(rx_taps))
+        pulse_resps = self.gen_pulse_resps(chnls, tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps))
 
         # Step b - Cursor identification.
         try:
-            vic_pulse_resp = np.array(pulse_resps[0])
+            vic_pulse_resp = array(pulse_resps[0])
         except Exception:
             print(len(pulse_resps), len(chnls))
             raise
@@ -1207,7 +1208,7 @@ class COM():
         # Step g - Crosstalk.
         varXT = 0
         for pulse_resp in pulse_resps[1:]:  # (93A-34)
-            varXT += max([sum(np.array(self.filt_pr_samps(pulse_resp[m::M], As))**2) for m in range(M)])  # (93A-33)
+            varXT += max([sum(array(self.filt_pr_samps(pulse_resp[m::M], As))**2) for m in range(M)])  # (93A-33)
         varXT *= varX
 
         # Step h - Spectral noise.
@@ -1259,7 +1260,7 @@ class COM():
         if do_opt_eq:
             # Run the nested optimization loops.
             def check_taps(tx_taps: Rvec, t0_min: float = self.c0_min) -> bool:
-                if (1 - sum(abs(np.array(tx_taps)))) < t0_min:
+                if (1 - sum(abs(array(tx_taps)))) < t0_min:
                     return False
                 else:
                     return True
@@ -1270,14 +1271,14 @@ class COM():
             for gDC2 in self.gDC2_vals:
                 for gDC in self.gDC_vals:
                     for tx_taps in self.tx_combs:
-                        if not check_taps(np.array(tx_taps)):
+                        if not check_taps(array(tx_taps)):
                             continue
                         match opt_mode:
                             case OptMode.PRZF:
                                 fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2)
                                 rx_taps = self.fom_rslts['rx_taps']
                             case OptMode.MMSE:
-                                pulse_resps = self.gen_pulse_resps(tx_taps=np.array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0], dfe_taps=[])
+                                pulse_resps = self.gen_pulse_resps(tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0], dfe_taps=[])
                                 theNoiseCalc = NoiseCalc(
                                     self.L, 1/self.fb, 0, self.times, pulse_resps[0], pulse_resps[1:],
                                     self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.calc_Hctf(gDC, gDC2),
@@ -1407,7 +1408,6 @@ class COM():
         freqs = self.freqs
         nDFE = len(self.bmin)
 
-        # pulse_resps = self.gen_pulse_resps(self.chnls, np.array(self.tx_taps))  # ToDo: Add rx_taps.
         self.set_status("Calculating COM...")
         pulse_resps = self.gen_pulse_resps(rx_taps=[1.0], dfe_taps=[])  # No Rx FFE/DFE.
         self.vic_pulse_resp_noRxFFE = pulse_resps[0]
@@ -1484,7 +1484,7 @@ class COM():
         xt_samps = []
         pks = []  # For debugging.
         for pulse_resp in pulse_resps[1:]:  # (93A-44)
-            i = np.argmax([sum(np.array(pulse_resp[m::M])**2) for m in range(M)])  # (93A-33)
+            i = np.argmax([sum(array(pulse_resp[m::M])**2) for m in range(M)])  # (93A-33)
             samps = pulse_resp[i::M]
             xt_samps.append(samps)
             _, pk = delta_pmf(samps, L=L, RLM=RLM, y=y)  # For debugging.

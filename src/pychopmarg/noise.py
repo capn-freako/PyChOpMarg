@@ -12,43 +12,36 @@ from numpy                  import argmax, argmin, array, concatenate, diff, mea
 from numpy.fft              import irfft, rfft, fftshift
 from scipy.interpolate      import interp1d
 from scipy.linalg           import toeplitz
-from traits.api             import Array, Float, HasTraits, Int, List, Property, cached_property  # type: ignore
 
 from pychopmarg.common      import Rvec, Cvec, Rmat
 
 
-class NoiseCalc(HasTraits):
-    """
-    Noise calculator for COM
-
-    Notes:
-        1. Subclassing `HasTraits` to support any future desire to have
-            this class function as a stand-alone GUI applet.
-    """
+class NoiseCalc():
+    "Noise calculator for COM"
 
     # Independent variables, set during instance initialization.
-    L               = Int(4)                # Number of modulation levels.
-    Tb              = Float(9.412e-12)      # UI (s)
-    ts_ix           = Int(0)                # Main pulse sampling index
-    t               = Array(dtype=float)    # System time vector (s)
-    vic_pulse_resp  = Array(dtype=float)    # Victim pulse response (V)
-    agg_pulse_resps = List()                # Aggressor pulse responses (V)
-    f               = Array(dtype=float)    # System frequency vector (Hz)
-    Ht              = Array(dtype=complex)  # Transfer function of Tx output driver risetime
-    H21             = Array(dtype=complex)  # Transfer function of terminated interconnect
-    Hr              = Array(dtype=complex)  # Transfer function of Rx AFE
-    Hctf            = Array(dtype=complex)  # Transfer function of Rx CTLE
-    eta0            = Float(0)              # Noise density at Rx AFE input (V^2/GHz)
-    Av              = Float(0.6)            # Victim drive level (V)
-    snr_tx          = Float(25)             # Tx signal-to-noise ratio (dB)
-    Add             = Float(0)              # Dual-Dirac peak amplitude (V)
-    sigma_Rj        = Float(0)              # Dual-Dirac random stdev (V)
+    L               = int(4)                # Number of modulation levels.
+    Tb              = float(9.412e-12)      # UI (s)
+    ts_ix           = int(0)                # Main pulse sampling index
+    t               = array([0], dtype=float)    # System time vector (s)
+    vic_pulse_resp  = array([0], dtype=float)    # Victim pulse response (V)
+    agg_pulse_resps = list()                # Aggressor pulse responses (V)
+    f               = array([0], dtype=float)    # System frequency vector (Hz)
+    Ht              = array([0], dtype=complex)  # Transfer function of Tx output driver risetime
+    H21             = array([0], dtype=complex)  # Transfer function of terminated interconnect
+    Hr              = array([0], dtype=complex)  # Transfer function of Rx AFE
+    Hctf            = array([0], dtype=complex)  # Transfer function of Rx CTLE
+    eta0            = float(0)              # Noise density at Rx AFE input (V^2/GHz)
+    Av              = float(0.6)            # Victim drive level (V)
+    snr_tx          = float(25)             # Tx signal-to-noise ratio (dB)
+    Add             = float(0)              # Dual-Dirac peak amplitude (V)
+    sigma_Rj        = float(0)              # Dual-Dirac random stdev (V)
 
     # Invariant dependent variables, set during instance initialization.
-    fN       = Float(53.125e9)       # Nyquist frequency (Hz)
-    nspui    = Int(32)               # Number of samples per UI
-    varX     = Float(0)              # Signal power (V^2)
-    t_irfft  = Array(dtype=float)    # Time vector for indexing `irfft()` result.
+    fN       = float(53.125e9)       # Nyquist frequency (Hz)
+    nspui    = int(32)               # Number of samples per UI
+    varX     = float(0)              # Signal power (V^2)
+    t_irfft  = array([0], dtype=float)    # Time vector for indexing `irfft()` result.
 
     def __init__(self, L: int, Tb: float, ts_ix: int, t: Rvec,
                  vic_pulse_resp: Rvec, agg_pulse_resps: list[Rvec],
@@ -64,7 +57,7 @@ class NoiseCalc(HasTraits):
             ts_ix: Main pulse sampling index.
             t: System time vector (for indexing pulse responses) (s).
             vic_pulse_resp: Victim pulse response (V).
-            agg_pulse_resps: List of aggressor pulse responses (V).
+            agg_pulse_resps: list of aggressor pulse responses (V).
             f: System frequency vector (for indexing transfer functions) (Hz).
             Ht: Risetime filter transfer function.
             H21: Terminated interconnect transfer function.
@@ -182,9 +175,8 @@ class NoiseCalc(HasTraits):
         curs_uis, curs_ofst = divmod(argmax(y), nspui)  # Ensure that we capture the peak in the next step.
         return y[curs_ofst::nspui]                      # Sampled at fBaud, w/ peak captured.
 
-    Srn = Property(observe=["fN", "eta0", "Hr", "Hctf", "f"])
+    Srn = property()
 
-    @cached_property
     def _get_Srn(self) -> Rvec:
         """
         One-sided folded noise PSD at Rx sampler input,
@@ -217,9 +209,8 @@ class NoiseCalc(HasTraits):
 
         return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
 
-    Stn = Property(observe=["Tb", "f", "Ht", "H21", "Hr", "Hctf", "Av", "ts_ix", "nspui", "varX", "snr_tx"])
+    Stn = property()
 
-    @cached_property
     def _get_Stn(self) -> Rvec:
         """
         One-sided Tx noise PSD at Rx FFE input,
@@ -238,9 +229,8 @@ class NoiseCalc(HasTraits):
 
         return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * Tb  # i.e. - / fB
 
-    Sjn = Property(observe=["Tb", "t", "vic_pulse_resp", "ts_ix", "nspui", "varX", "Add", "sigma_Rj"])
+    Sjn = property()
 
-    @cached_property
     def _get_Sjn(self) -> Rvec:
         """
         One-sided Noise PSD due to jitter at Rx FFE input,
