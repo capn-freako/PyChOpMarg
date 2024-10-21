@@ -267,71 +267,43 @@ class COM():
         </UL>
     """
 
-    def _fb_changed(self):
-        "Keep global version in sync."
-        global gFb
-        gFb = self.fb
-
-    def _c0_min_changed(self):
-        "Keep global version in sync."
-        global gC0min
-        gC0min = self.c0_min
-
-    def _tx_taps_min_changed(self):
-        "Keep global version in sync."
-        global gNtaps
-        gNtaps = len(self.tx_taps_min.flatten())
-
     # Dependent variable definitions
-    # - Unit interval (s).
-    ui = property(float)
-
-    def _get_ui(self):
-        """Unit interval (s)."""
+    @property
+    def ui(self) -> float:
+        "Unit interval (s)."
         return 1 / self.fb
 
-    # - system time vector; decoupled from system frequency vector!
-    times = property(array)
-
-    def _get_times(self):
-        """System times (s)."""
+    @property
+    def times(self) -> Rvec:
+        "System time vector (s); decoupled from system frequency vector!"
         tstep = self.ui / self.nspui
         rslt = np.arange(0, self.tmax + tstep, tstep)
-        self.plotdata.set_data("t_ns", rslt * 1e9)
         return rslt
 
-    # - system frequency vector; decoupled from system time vector!
-    freqs = property(array)
-
-    def _get_freqs(self):
-        """System frequencies (Hz)."""
+    @property
+    def freqs(self) -> Rvec:
+        "System frequency vector (Hz); decoupled from system time vector!"
         global gFreqs
         freqs = np.arange(0, self.fmax + self.fstep, self.fstep)
         gFreqs = freqs
         return freqs
 
-    # - `irfft()` time vector; decoupled from system time vector!
-    t_irfft = property(array)
-
-    def _get_t_irfft(self):
-        """`irfft()` result time index (s)."""
+    @property
+    def t_irfft(self) -> Rvec:
+        "`irfft()` result time index (s) (i.e. - time vector coupled to frequency vector)."
         Ts = 0.5 / self.fmax  # Sample period satisfying Nyquist criteria.
         return array([n * Ts for n in range(2 * (len(self.freqs) - 1))])
 
-    # - Rect(ui) in the frequency domain.
-    Xsinc = property(array)
-
-    def _get_Xsinc(self):
-        """Frequency domain sinc(f) corresponding to Rect(ui)."""
+    @property
+    def Xsinc(self) -> Rvec:
+        """Frequency domain sinc(f) corresponding to Rect(ui) in time domain."""
         ui = self.ui
         Ts = self.t_irfft[1]
         w = int(ui / Ts)
         return w * np.sinc(ui * self.freqs)
 
-    # - Tx risetime transfer function.
-    Ht = property(array)
-
-    def _get_Ht(self):
+    @property
+    def Ht(self) -> Cvec:
         """
         Return the voltage transfer function, H(f), associated w/ the Tx risetime,
         according to (93A-46).
@@ -339,10 +311,8 @@ class COM():
         f = self.freqs / 1e9  # 93A-46 calls for f in GHz.
         return np.exp(-2 * (PI * f * self.tr / 1.6832)**2)
 
-    # - Rx AFE voltage transfer function.
-    Hr = property(array)
-
-    def _get_Hr(self):
+    @property
+    def Hr(self) -> Cvec:
         """
         Return the voltage transfer function, H(f), of the Rx AFE,
         according to (93A-20).
@@ -350,10 +320,8 @@ class COM():
         f = self.freqs / (self.fr * self.fb)
         return 1 / (1 - 3.414214 * f**2 + f**4 + 2.613126j * (f - f**3))
 
-    # - Rx CTLE voltage transfer function.
-    Hctf = property(array)
-
-    def _get_Hctf(self):
+    @property
+    def Hctf(self) -> Cvec:
         return self.calc_Hctf(self.gDC, self.gDC2)
 
     def calc_Hctf(self, gDC: Optional[float] = None, gDC2: Optional[float] = None) -> Cvec:
@@ -386,78 +354,56 @@ class COM():
         den = (1 + 1j * f / fp1) * (1 + 1j * f / fp2) * (1 + 1j * f / fLF)
         return num / den
 
-    # - All possible Tx/Rx tap weight combinations.
-    tx_combs = property(list)
-
-    def _get_tx_combs(self):
-        """
-        All possible Tx tap weight combinations.
-        """
-        trips = list(zip(self.tx_taps_min.flatten(), self.tx_taps_max.flatten(), self.tx_taps_step.flatten()))
+    @property
+    def tx_combs(self) -> list[list[float]]:
+        "All possible Tx tap weight combinations."
+        trips = list(zip(self.tx_taps_min, self.tx_taps_max, self.tx_taps_step))
         return mk_combs(trips)
 
-    # - Reflection coefficients
-    gamma1 = property(float)
-    gamma2 = property(float)
-
-    def _get_gamma1(self):
-        """
-        Reflection coefficient looking out of the left end of the channel.
-        """
+    @property
+    def gamma1(self) -> float:
+        "Reflection coefficient looking out of the left end of the channel."
         Rd = self.Rd
         R0 = self.R0
         return (Rd - R0) / (Rd + R0)
 
-    def _get_gamma2(self):
-        """
-        Reflection coefficient looking out of the right end of the channel.
-        """
+    @property
+    def gamma2(self) -> float:
+        "Reflection coefficient looking out of the right end of the channel."
         return self.gamma1
 
-    # - Die/Package response
-    sDieLadder = property(rf.Network)  # noqa E221
-    sPkgRx   = property(rf.Network)  # noqa E221
-    sPkgTx   = property(rf.Network)  # noqa E221
-    sPkgNEXT = property(rf.Network)  # noqa E221
-    sZp      = property(rf.Network)  # noqa E221
-    sZpNEXT  = property(rf.Network)  # noqa E221
-
-    def _get_sDieLadder(self) -> rf.Network:
-        """
-        On-die parasitic capacitance/inductance ladder network.
-        """
-
+    @property
+    def sDieLadder(self) -> rf.Network:
+        "On-die parasitic capacitance/inductance ladder network."
         Cd = self.Cd
         Ls = self.Ls
         R0 = [self.R0] * len(Cd)
         rslt = rf.network.cascade_list(list(map(lambda trip: sDieLadderSegment(self.freqs, trip), zip(R0, Cd, Ls))))
         return rslt
 
-    def _get_sPkgRx(self) -> rf.Network:
-        """
-        Rx package response.
-        """
-        # return self.sC(self.Cp) ** self.sZp ** self.sC(self.Cd)
+    @property
+    def sPkgRx(self) -> rf.Network:
+        "Rx package response."
         return self.sC(self.Cp) ** self.sZp ** self.sDieLadder
 
-    def _get_sPkgTx(self) -> rf.Network:
-        """
-        Tx package response.
-        """
-        # return self.sC(self.Cd) ** self.sZp ** self.sC(self.Cp)
+    @property
+    def sPkgTx(self) -> rf.Network:
+        "Tx package response."
         return self.sDieLadder ** self.sZp ** self.sC(self.Cp)
 
-    def _get_sPkgNEXT(self) -> rf.Network:
-        """
-        NEXT package response.
-        """
-        # return self.sC(self.Cd) ** self.sZpNEXT ** self.sC(self.Cp)
+    @property
+    def sPkgNEXT(self) -> rf.Network:
+        "NEXT package response."
         return self.sDieLadder ** self.sZpNEXT ** self.sC(self.Cp)
 
-    def _get_sZp(self) -> rf.Network:
+    @property
+    def sZp(self) -> rf.Network:
+        "THRU/FEXT package transmission line."
         return self.calc_sZp()
 
-    def _get_sZpNEXT(self) -> rf.Network:
+    @property
+    def sZpNEXT(self) -> rf.Network:
+        "NEXT package transmission line."
         return self.calc_sZp(NEXT=True)
 
     def calc_sZp(self, NEXT: bool = False) -> rf.Network:
@@ -531,7 +477,8 @@ class COM():
     # - Channels
     def get_chnls(self) -> list[tuple[rf.Network, str]]:
         """Import all channels from Touchstone file(s)."""
-        if self.chnl_s32p:
+        chnl_s32p = self.chnl_s32p
+        if chnl_s32p.exists() and chnl_s32p.is_file():
             return self.get_chnls_s32p_wPkg()
         else:
             return self.get_chnls_s4p_wPkg()
@@ -553,7 +500,6 @@ class COM():
 
         # Generate the pulse responses before adding the packages, for reference.
         pulse_resps_nopkg = self.gen_pulse_resps(ntwks, apply_eq=False)
-        self.plotdata.set_data("pulse_raw", pulse_resps_nopkg[0])
         self.pulse_resps_nopkg = pulse_resps_nopkg
 
         return ntwks
@@ -566,14 +512,14 @@ class COM():
         fmax = ntwks[0][0].f[-1]
         for fname in [self.chnl_s4p_fext1, self.chnl_s4p_fext2, self.chnl_s4p_fext3,
                       self.chnl_s4p_fext4, self.chnl_s4p_fext5, self.chnl_s4p_fext6]:
-            if fname:
+            if fname.exists() and fname.is_file():
                 ntwk = sdd_21(rf.Network(fname))
                 ntwks.append((ntwk, 'FEXT'))
                 if ntwk.f[-1] < fmax:
                     fmax = ntwk.f[-1]
         for fname in [self.chnl_s4p_next1, self.chnl_s4p_next2, self.chnl_s4p_next3,
                       self.chnl_s4p_next4, self.chnl_s4p_next5, self.chnl_s4p_next6]:
-            if fname:
+            if fname.exists() and fname.is_file():
                 ntwk = sdd_21(rf.Network(fname))
                 ntwks.append((sdd_21(rf.Network(fname)), 'NEXT'))
                 if ntwk.f[-1] < fmax:
@@ -582,7 +528,6 @@ class COM():
 
         # Generate the pulse responses before adding the packages, for reference.
         pulse_resps_nopkg = self.gen_pulse_resps(ntwks, apply_eq=False)
-        self.plotdata.set_data("pulse_raw", pulse_resps_nopkg[0])
         self.pulse_resps_nopkg = pulse_resps_nopkg
 
         return ntwks
@@ -595,7 +540,6 @@ class COM():
         pulse_resps_noeq = self.gen_pulse_resps(_ntwks, apply_eq=False)
         self.rslts['vic_pulse_pk'] = max(pulse_resps_noeq[0]) * 1_000  # (mV)
         self.pulse_resps_noeq = pulse_resps_noeq
-        self.plotdata.set_data("pulse_pkg", pulse_resps_noeq[0])
         return _ntwks
 
     def add_pkg(self, ntwk: tuple[rf.Network, str]) -> tuple[rf.Network, str]:
@@ -787,6 +731,16 @@ class COM():
 
         # Stash input parameters, for future reference.
         self.params = params
+
+        # Set global variables.
+        global gFb
+        gFb = self.fb
+
+        global gC0min
+        gC0min = self.c0_min
+
+        global gNtaps
+        gNtaps = np.size(self.tx_taps_min)
 
     # General functions
     def sC(self, c: float) -> rf.Network:
@@ -1001,6 +955,10 @@ class COM():
             rx_taps = self.rx_taps
         if dfe_taps is None:
             dfe_taps = self.dfe_taps
+
+        tx_taps = array(tx_taps)
+        rx_taps = array(rx_taps)
+        dfe_taps = array(dfe_taps)
 
         pulse_resps = []
         for ntwk, ntype in ntwks:
@@ -1364,7 +1322,6 @@ class COM():
         self.sigma_Tx = np.sqrt(varTx_best)
         self.sigma_N = np.sqrt(varN_best)
         self.foms = foms
-        self.plotdata.set_data("pulse_eq", vic_pulse_resp)
         self.vic_pulse_resp = vic_pulse_resp
         self.rslts['fom'] = fom_max
         self.rslts['gDC'] = gDC_best

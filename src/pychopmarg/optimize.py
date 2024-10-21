@@ -86,8 +86,12 @@ def clip_taps(
 
     if w_min is None:
         w_min = -ones(len(w))
+    else:
+        w_min = array(w_min)
     if w_max is None:
         w_max = ones(len(w))
+    else:
+        w_max = array(w_max)
 
     assert len(w) == len(w_min) == len(w_max), ValueError(
         f"Lengths of: `w` ({len(w)}), `w_min` ({len(w_min)}), and `w_max` ({len(w_max)}), must be equal!")

@@ -175,9 +175,8 @@ class NoiseCalc():
         curs_uis, curs_ofst = divmod(argmax(y), nspui)  # Ensure that we capture the peak in the next step.
         return y[curs_ofst::nspui]                      # Sampled at fBaud, w/ peak captured.
 
-    Srn = property()
-
-    def _get_Srn(self) -> Rvec:
+    @property
+    def Srn(self) -> Rvec:
         """
         One-sided folded noise PSD at Rx sampler input,
         uniformly sampled over [0, PI] (rads./s norm.).
@@ -209,9 +208,8 @@ class NoiseCalc():
 
         return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
 
-    Stn = property()
-
-    def _get_Stn(self) -> Rvec:
+    @property
+    def Stn(self) -> Rvec:
         """
         One-sided Tx noise PSD at Rx FFE input,
         uniformly sampled over [0, PI] (rads./s norm.).
@@ -229,9 +227,8 @@ class NoiseCalc():
 
         return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * Tb  # i.e. - / fB
 
-    Sjn = property()
-
-    def _get_Sjn(self) -> Rvec:
+    @property
+    def Sjn(self) -> Rvec:
         """
         One-sided Noise PSD due to jitter at Rx FFE input,
         uniformly sampled over [0, PI] (rads./s norm.).
