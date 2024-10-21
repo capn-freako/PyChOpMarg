@@ -13,23 +13,23 @@ from pathlib import Path
 import click  # type: ignore
 
 from pychopmarg import __version__
-from pychopmarg.view import traits_view
 from pychopmarg.com import COM
 
 
-@click.group(invoke_without_command=True, context_settings=dict(help_option_names=["-h", "--help"]))
-@click.pass_context
-@click.version_option(version=__version__)
-def cli(ctx):
-    """
-    PyChOpMarg GUI.
-    """
+# ToDo: Activate when new `PyChOpMargUI` package is ready.
+# @click.group(invoke_without_command=True, context_settings=dict(help_option_names=["-h", "--help"]))
+# @click.pass_context
+# @click.version_option(version=__version__)
+# def cli(ctx):
+#     """
+#     PyChOpMargUI GUI.
+#     """
 
-    if ctx.invoked_subcommand is None:  # No sub-command like `sim` given open the GUI like default.
-        theCOM = COM()
+#     if ctx.invoked_subcommand is None:  # No sub-command like `sim` given open the GUI like default.
+#         theCOM = COM()
 
-        # Show the GUI.
-        theCOM.configure_traits(view=traits_view)
+#         # Show the GUI.
+#         theCOM.configure_traits(view=traits_view)
 
 
 @cli.command(context_settings=dict(help_option_names=["-h", "--help"]))

@@ -340,3 +340,46 @@ def delta_pmf(
     rslt /= sum(rslt)  # Enforce a PMF. (Commenting out didn't make a difference.)
 
     return y, rslt
+
+
+def from_dB(x: float) -> float:
+    """Convert from (dB) to real, assuming square law applies."""
+    return pow(10, x / 20)
+
+
+def all_combs(xss: list[list[T]]) -> list[list[T]]:
+    """
+    Generate all combinations of input.
+
+    Args:
+        xss([[T]]): The lists of candidates for each position in the final output.
+
+    Returns:
+        All possible combinations of input lists.
+    """
+    if not xss:
+        return [[]]
+    head, *tail = xss
+    yss = all_combs(tail)
+    return [[x] + ys for x in head for ys in yss]
+
+
+def mk_combs(trips: list[tuple[float, float, float]]) -> list[list[float]]:
+    """
+    Make all possible combinations of tap weights, given a list of "(min, max, step)" triples.
+
+    Args:
+        trips: A list of "(min, max, step)" triples, one per weight.
+
+    Returns:
+        combs: A list of lists of tap weights, including all possible combinations.
+    """
+    ranges = []
+    for trip in trips:
+        if trip[2]:  # non-zero step?
+            ranges.append(list(np.arange(trip[0], trip[1] + trip[2], trip[2])))
+        else:
+            ranges.append([0.0])
+    return all_combs(ranges)
+
+

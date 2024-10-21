@@ -1,5 +1,5 @@
 """
-A Python implementation of COM, as per IEEE 802.3-22 Annex 93A.
+A Python implementation of COM, as per IEEE 802.3-22 Annex 93A/178A.
 
 .. moduleauthor:: David Banas <capn.freako@gmail.com>
 
@@ -18,6 +18,6 @@ try:
 except Exception:
     __version__ = "(dev)"
 
-__date__ = "March 25, 2024"
+__date__ = "October 21, 2024"
 __authors__ = "David Banas"
 __copy__ = "Copyright (c) 2024 David Banas"
