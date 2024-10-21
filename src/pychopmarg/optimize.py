@@ -249,17 +249,23 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
         y = concatenate((h0, zeros(Nb), ones(1)))
         x = solve(A, y)
         w = x[:Nw]
+        lam = x[-1]
 
         # Check DFE tap weights, enforcing limits if necessary.
         b = x[Nw: Nw + Nb]
         b_lim = maximum(b_min, minimum(b_max, b))
+        delta_w = zeros(len(w))
+        hit_b_limit = False
         if not array_equal(b_lim, b):
+            hit_b_limit = True
             _A = concatenate((concatenate((R, -h0.reshape((Nw, 1))), axis=1),
                               concatenate((h0, zeros(1))).reshape((1, -1))))
             _y = concatenate((h0 + Hb.T @ b_lim, ones(1)))
             _x = solve(_A, _y)
-            w = _x[:Nw]
-        
+            _w = _x[:Nw]
+            delta_w = _w - w
+            lam = _x[-1]
+            w = _w
         # Check and enforce tap weight limits.
         w_lim = clip_taps(w, dw, w_min, w_max)
         if not array_equal(w_lim, w):
@@ -273,11 +279,13 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
             max_fom = fom
             rslt["fom"] = fom
             rslt["mse"] = mse
+            rslt["lambda"] = lam  # Should be `mse / varX`.
+            rslt["delta_w"] = delta_w
+            rslt["hit_b_limit"] = hit_b_limit
             rslt["rx_taps"] = w_lim
             rslt["dfe_tap_weights"] = b_lim
             rslt["vic_pulse_resp"] = vic_pr
             rslt["cursor_ix"] = ts_ix
-            # df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
             df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
             rslt["varTx"] = sum(theNoiseCalc.Stn) * df
             rslt["varISI"] = 0
@@ -293,9 +301,6 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
             rslt["A"] = A
             rslt["y"] = y
             rslt["x"] = x
-            # rslt["_A"] = _A
-            # rslt["_y"] = _y
-            # rslt["_x"] = _x
             rslt["b"] = b
             rslt["theNoiseCalc"] = theNoiseCalc
             rslt["varX"] = varX
