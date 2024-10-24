@@ -1116,7 +1116,7 @@ class COM():
 
         # Step a - Pulse response construction.
         if rx_taps is None:
-            pulse_resps = self.gen_pulse_resps(chnls, tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0])  # ToDo: Check this.
+            pulse_resps = self.gen_pulse_resps(chnls, tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0])
             rx_taps, dfe_taps, _ = przf(pulse_resps[0], M, self.nRxTaps, self.nRxPreTaps, nDFE, self.rx_taps_min, self.rx_taps_max, self.bmin, self.bmax)
         pulse_resps = self.gen_pulse_resps(chnls, tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps))
 
@@ -1386,25 +1386,20 @@ class COM():
         self.rx_taps  = rx_taps
         self.dfe_taps = dfe_taps
         self.pr_samps = pr_samps
-        # pulse_resps = self.gen_pulse_resps()  # Include all EQ.
         pulse_resps = self.gen_pulse_resps(dfe_taps=[])  # DFE taps are included explicitly, below.
         vic_pulse_resp = pulse_resps[0]
         if cursor_ix is None:
             cursor_ix = self.loc_curs(vic_pulse_resp)
         curs_uis, curs_ofst = divmod(cursor_ix, M)
         vic_curs_val = vic_pulse_resp[cursor_ix]
-        As = RLM * vic_curs_val / (L - 1)
-        npts = 2 * max(int(As / 0.001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
+        As = 3 * RLM * vic_curs_val / (L - 1)
+        npts = 2 * min(int(As / 0.00001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
         y = np.linspace(-As, As, npts)
         ystep = 2 * As / (npts - 1)
 
-        delta = np.zeros(npts)
-        delta[npts // 2] = 1
+        # Sec. 93A.1.7.2
         varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
         df = freqs[1] - freqs[0]
-
-        # Sec. 93A.1.7.2
-        # ToDo: `pG` and `pN` are both very large, relative to `pJ`; am I mixing PDFs w/ PMFs?
         varN = self.eta0 * sum(abs(self.Hr * self.Hctf)**2) * (df / 1e9)    # (93A-35)
         varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)                 # (93A-30)
         hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)

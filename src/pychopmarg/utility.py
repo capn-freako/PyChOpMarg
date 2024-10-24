@@ -298,12 +298,14 @@ def delta_pmf(
         - their probabilities.
 
     Raises:
-        None
+        `ValueError` if the given pulse response contains any NaNs.
+        `ValueError` if a needed shift exceeds half the result vector length.
 
     Notes:
         1. The input set of pulse response samples is filtered,
             as per Note 2 of 93A.1.7.1, unless a y-values override
-            vector is provided.
+            vector is provided, in which case it is assumed that
+            the caller has already done the filtering.
 
     ToDo:
         1. Does this work for 802.3dj and its normalized pulse response amplitude?
@@ -315,11 +317,11 @@ def delta_pmf(
     if y is None:
         curs_ix = curs_ix or np.argmax(h_samps)
         curs_val = h_samps[curs_ix]
-        As = RLM * curs_val / (L - 1)
-        npts = 2 * max(int(As / 0.001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
-        y = np.linspace(-As, As, npts)
-        ystep = 2 * As / (npts - 1)
-        h_samps_filt = filt_pr_samps(h_samps, As)
+        max_y = 1.1 * curs_val
+        npts = 2 * min(int(max_y / 0.00001), 10_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
+        y = np.linspace(-max_y, max_y, npts)
+        ystep = 2 * max_y / (npts - 1)
+        h_samps_filt = filt_pr_samps(h_samps, max_y)
     else:
         npts = len(y)
         ystep = y[1] - y[0]
@@ -328,18 +330,25 @@ def delta_pmf(
     delta = np.zeros(npts)
     delta[npts // 2] = 1
 
-    def pn(hn: float) -> Rvec:
+    def pn(hn: float, dbg=False) -> Rvec:
         """
         (93A-39)
         """
-        return 1 / L * sum([np.roll(delta, int((2 * el / (L - 1) - 1) * hn / ystep))
-                            for el in range(L)])
+        _rslt = np.zeros(npts)
+        for el in range(L):
+            _shift = int((2 * el / (L - 1) - 1) * hn / ystep)
+            assert abs(_shift) < npts // 2, ValueError(
+                f"Wrap around: _shift: {_shift}, npts: {npts}.")
+            _rslt += np.roll(delta, _shift)
+            if dbg and hn == curs_val and el == 0:
+                print(f"{_shift}", flush=True)
+        return 1 / L * _rslt
 
     rslt = delta
     for hn in h_samps_filt:
         _pn = pn(hn)
         rslt = np.convolve(rslt, _pn, mode='same')
-    rslt /= sum(rslt)  # Enforce a PMF. (Commenting out didn't make a difference.)
+    rslt /= sum(rslt)  # Enforce a PMF.
 
     return y, rslt
 

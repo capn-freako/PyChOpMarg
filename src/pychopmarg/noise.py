@@ -188,7 +188,7 @@ class NoiseCalc():
         nspui = self.nspui
         rslt  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2  # "/ 2" in [1] omitted, since we're only considering: m >= 0.
         _rslt = abs(rfft(self.from_irfft(irfft(rslt)))) * 2 * self.f[-1] * self.Tb
-        return _rslt  # * len(rslt) / len(_rslt)
+        return _rslt
 
     def Sxn(self, agg_pulse_resp: Rvec) -> Rvec:
         """

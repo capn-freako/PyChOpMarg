@@ -151,9 +151,10 @@ def przf(
 
     # Create the appropriate forcing vector.
     fv = zeros(len_h)
-    no_force_ixs = slice(dh, dh + nDFETaps + 1)  # indices of cursor and DFE taps
-    fv[no_force_ixs] = h[no_force_ixs]           # Don't force the cursor, or DFE taps, to zero.
-    fv = pad(fv, (nPreTaps, 0))[:len_h]          # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
+    fv[dh] = h[dh]                                            # Don't force the cursor to zero.
+    dfe_ixs = slice(dh + 1, dh + nDFETaps + 1)                # indices of DFE taps
+    fv[dfe_ixs] = minimum(b_max, maximum(b_min, h[dfe_ixs]))  # Bound first `nDFETaps` post-cursor taps to DFE tap weight ranges.
+    fv = pad(fv, (nPreTaps, 0))[:len_h]                       # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
 
     # Find the optimum FFE tap weights, enforcing min/max limits and scaling for unit pulse response amplitude.
     H = convolution_matrix(h, nTaps, mode='full')[:len_h]
