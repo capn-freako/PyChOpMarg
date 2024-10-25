@@ -8,8 +8,10 @@ Original date:   August 30, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from typing import Any, Optional
 import warnings
+
+from enum       import Enum
+from typing     import Any, Optional
 
 import numpy as np
 from numpy        import(
@@ -20,6 +22,12 @@ from scipy.linalg import LinAlgWarning, convolution_matrix, solve, solve_toeplit
 
 from pychopmarg.common  import Rvec
 from pychopmarg.noise   import NoiseCalc
+
+class NormMode(Enum):
+    "Tap weight normalization mode used by `mmse()`."
+    P8023dj   = 1  # As per standard (i.e. - clip then renormalize for unit amplitude pulse response.)
+    Scaled    = 2  # Uniformly and minimally scaled to bring tap weights just within their limits.
+    Unaltered = 3  # Use constrained optimization solution, unchanged.
 
 
 def scale_taps(w: Rvec, w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = None) -> Rvec:
@@ -175,10 +183,13 @@ def przf(
     return wn, bn, h[dh - nPreTaps: dh - nPreTaps + nTaps]
 
 
-def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
-         b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec, ts_sweep: float = 0.5) -> dict[str, Any]:
+def mmse(
+    theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
+    b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
+    ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj
+) -> dict[str, Any]:
     """
-    Optimize linear equalization, via _Minimum Mean Squared Error_ (MMSE).
+    Optimize Rx FFE tap weights, via _Minimum Mean Squared Error_ (MMSE).
 
     Args:
         theNoiseCalc: Initialized instance of ``NoiseCalc`` class.
@@ -195,6 +206,8 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     Keyword Args:
         ts_sweep: The cursor sampling time "search radius" around the peak pulse response amplitude (UI).
             Default: 0.5 (i.e. - `ts` within [-UI/2, +UI/2] of peak location)
+        norm_mode: The tap weight normalization mode to use.
+            Default: P8023dj
 
     Returns:
         A dictionary containing:
@@ -210,7 +223,7 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     Notes:
         1. The optimization technique encoded here is taken from the following references:
             [1] Healey, A., Hegde, R., _Reference receiver framework for 200G/lane electrical interfaces and PHYs_, IEEE P802.3dj Task Force, Jan. 2024
-            [2] D1.1 of P802.3dj, IEEE P802.3dj Task Force, Aug. 2024
+            [2] D1.2 of P802.3dj, IEEE P802.3dj Task Force, Aug. 2024
     """
 
     assert Nw > dw, ValueError(
@@ -237,7 +250,6 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
         dh, first_samp = divmod(ts_ix, nspui)
         h = vic_pr[first_samp::nspui]
         d = dw + dh
-        # H = toeplitz(concatenate((h, zeros(Nw - 1))), insert(zeros(Nw - 1), 0, h[0]))
         first_col = concatenate((h, zeros(Nw - 1)))
         H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
         h0 = H[d]
@@ -271,10 +283,20 @@ def mmse(theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
             delta_w = _w - w
             lam = _x[-1]
             w = _w
-        # Check and enforce tap weight limits.
-        w_lim = clip_taps(w, dw, w_min, w_max)
+
+        # Check and enforce FFE tap weight limits, according to given normalization mode.
+        match norm_mode:
+            case NormMode.P8023dj:
+                w_lim = clip_taps(w, dw, w_min, w_max)
+                w_lim /= dot(h0, w_lim)
+            case NormMode.Scaled:
+                w_lim = scale_taps(w, w_min, w_max)
+            case NormMode.Unaltered:
+                w_lim = w
+            case _:
+                raise RuntimeError(
+                    f"Received unknown normalization mode: {norm_mode}!")
         if not array_equal(w_lim, w):
-            w_lim /= dot(h0, w_lim)
             b = Hb @ w_lim.flatten()
             b_lim = maximum(b_min, minimum(b_max, b))
 

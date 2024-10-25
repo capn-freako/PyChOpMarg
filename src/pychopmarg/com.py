@@ -34,8 +34,8 @@ from scipy.interpolate import interp1d
 
 from pychopmarg.common   import Rvec, Cvec, COMParams, PI, TWOPI
 from pychopmarg.noise    import NoiseCalc
-from pychopmarg.optimize import mmse, przf
-from pychopmarg.utility  import import_s32p, sdd_21, sDieLadderSegment, delta_pmf, from_dB, all_combs, mk_combs
+from pychopmarg.optimize import NormMode, mmse, przf
+from pychopmarg.utility  import import_s32p, sdd_21, sDieLadderSegment, delta_pmf, from_dB, all_combs, mk_combs, calc_Hffe
 
 # Globals
 # These are used by `calc_Hffe()`, to minimize the size of its cache.
@@ -50,56 +50,6 @@ T = TypeVar('T', Any, Any)
 class OptMode(Enum):
     PRZF = 1
     MMSE = 2
-
-
-def calc_Hffe(tap_weights: Rvec, n_post: int, isRx: bool = False) -> Cvec:
-    """
-    Calculate the voltage transfer function, H(f), for a FFE, according to (93A-21).
-
-    Args:
-        tap_weights: The vector of filter tap weights, excluding the cursor tap.
-        n_post: The number of post-cursor taps.
-
-    Keyword Args:
-        isRx: Tap weights include cursor when True.
-            Default: False
-
-    Returns:
-        The complex voltage transfer function, H(f), for the FFE.
-
-    Raises:
-        RuntimeError: If certain global variables haven't been initialized.
-            (See Note 1, below.)
-
-    Notes:
-        1. This function has been (awkwardly) pulled outside of the
-            `COM` class and made to use global variables, strictly for
-            performance reasons.
-            (Note that `@cached_property` decorated instance functions
-            of `HasTraits` subclasses are not actually memoized, like
-            `@cache` decorated ordinary functions are.)
-            (It is used in the innermost layer of the nested loop structure
-            used to find the optimal EQ solution. And its input argument
-            is repeated often.)
-            (See the `opt_eq()` method of the `COM` class.)
-
-    ToDo:
-        1. Pull this function back inside the `COM` class, and do manual memoization.
-        2. Fix broken usage for Rx FFE.
-    """
-
-    assert len(gFreqs) and gFb and gC0min and gNtaps, RuntimeError(
-        f"Called before global variables were initialized!\n\tgFreqs: \
-        {gFreqs}, gFb: {gFb}, gC0min: {gC0min}, gNtaps: {gNtaps}")
-
-    cs = list(array(tap_weights).flatten())
-    if not isRx:
-        c0 = 1 - sum(list(map(abs, tap_weights)))
-        if c0 < gC0min:
-            raise ValueError(f"Calculated `c0` for Tx FFE ({c0}) is below allowed minimum ({gC0min})!")
-        cs.insert(-n_post, c0)
-    return sum(list(map(lambda n_c: n_c[1] * np.exp(-1j * TWOPI * n_c[0] * gFreqs / gFb),
-                        enumerate(cs))))
 
 
 def calc_Hdfe(tap_weights: Rvec) -> Cvec:
@@ -608,7 +558,8 @@ class COM():
     def __call__(self,
                  do_opt_eq: bool    = True,
                  tx_taps:   Rvec    = None,
-                 opt_mode:  OptMode = OptMode.PRZF
+                 opt_mode:  OptMode = OptMode.PRZF,
+                 norm_mode: NormMode = NormMode.P8023dj,
                 ) -> float:
         """
         Calculate the COM value.
@@ -634,10 +585,10 @@ class COM():
         self.chnls = self.get_chnls()
         self.set_status("Optimizing EQ...")
         self.opt_mode = opt_mode
-        assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps, opt_mode=opt_mode), RuntimeError(
+        assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps, opt_mode=opt_mode, norm_mode=norm_mode), RuntimeError(
             "EQ optimization failed!")
         self.set_status("Calculating noise...")
-        As, Ani, self.cursor_ix = self.calc_noise()
+        As, Ani, self.cursor_ix = self.calc_noise(norm_mode=norm_mode)
         com = 20 * np.log10(As / Ani)
         self.As = As
         self.Ani = Ani
@@ -804,7 +755,8 @@ class COM():
 
     def H(self, s2p: rf.Network, tx_taps: Optional[Rvec] = None,
           gDC: Optional[float] = None, gDC2: Optional[float] = None,
-          rx_taps: Optional[Rvec] = None, dfe_taps: Optional[Rvec] = None) -> Cvec:
+          rx_taps: Optional[Rvec] = None, dfe_taps: Optional[Rvec] = None,
+          passive_RxFFE: bool = False) -> Cvec:
         """
         Return the voltage transfer function, H(f), of a complete COM signal path,
         according to (93A-19).
@@ -823,6 +775,8 @@ class COM():
                 Default: None (i.e. - Use `self.rx_taps`.)
             dfe_taps: Rx DFE tap weights.
                 Default: None (i.e. - Use `self.dfe_taps`.)
+            passive_RxFFE: Enforce passivity of Rx FFE when True.
+                Default: True
 
         Returns:
             Complex voltage transfer function of complete path.
@@ -850,11 +804,13 @@ class COM():
             rx_taps = self.rx_taps
         if dfe_taps is None:
             dfe_taps = self.dfe_taps
-        Htx  = calc_Hffe(array(tx_taps).flatten(), self.tx_n_post)
+        Htx  = calc_Hffe(self.freqs, 1 / self.fb, array(tx_taps).flatten(), self.tx_n_post)
         H21  = self.H21(s2p)
         Hr   = self.Hr
         Hctf = self.calc_Hctf(gDC=gDC, gDC2=gDC2)
-        Hrx  = calc_Hffe(array(rx_taps).flatten(), self.nRxTaps - self.nRxPreTaps - 1, isRx=True)
+        Hrx  = calc_Hffe(self.freqs, 1 / self.fb, array(rx_taps).flatten(), self.nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
+        if passive_RxFFE:
+            Hrx /= max(abs(Hrx))
         Hdfe = calc_Hdfe(dfe_taps)
         rslt = Htx * H21 * Hr * Hctf * Hrx  # * Hdfe
         if max(abs(rslt)) == 0:
@@ -1196,7 +1152,7 @@ class COM():
 
     def opt_eq(
         self, do_opt_eq: bool = True, tx_taps: Optional[Rvec] = None,
-        opt_mode: OptMode = OptMode.PRZF
+        opt_mode: OptMode = OptMode.PRZF, norm_mode: NormMode = NormMode.P8023dj
     ) -> bool:
         """
         Find the optimum values for the linear equalization parameters:
@@ -1210,6 +1166,8 @@ class COM():
                 Default: None
             opt_mode: Optimization mode.
                 Default: PRZF
+            norm_mode: The tap weight normalization mode to use, when using MMSE.
+                Default: P8023dj
 
         Returns:
             True if no errors encountered; False otherwise.
@@ -1242,7 +1200,7 @@ class COM():
                                     self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.calc_Hctf(gDC, gDC2),
                                     self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
                                 rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb, self.RLM, self.L,
-                                            self.bmin, self.bmax, self.rx_taps_min, self.rx_taps_max)
+                                            self.bmin, self.bmax, self.rx_taps_min, self.rx_taps_max, norm_mode=norm_mode)
                                 fom = rslt["fom"]
                                 rx_taps = rslt["rx_taps"]
                                 # In the PRZF branch, these are set by calc_fom().
@@ -1334,7 +1292,10 @@ class COM():
         self.rslts['sigma_J'] = self.sigma_J * 1e3
         return True
 
-    def calc_noise(self, cursor_ix: Optional[int] = None) -> tuple[float, float, int]:
+    def calc_noise(self,
+        cursor_ix: Optional[int] = None,
+        norm_mode: NormMode = NormMode.P8023dj
+    ) -> tuple[float, float, int]:
         """
         Calculate the interference and noise for COM.
 
@@ -1377,7 +1338,7 @@ class COM():
                     self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.Hctf,
                     self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
                 rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb, RLM, L,
-                            self.bmin, self.bmax, self.rx_taps_min, self.rx_taps_max)
+                            self.bmin, self.bmax, self.rx_taps_min, self.rx_taps_max, norm_mode=norm_mode)
                 rx_taps  = rslt["rx_taps"]
                 dfe_taps = rslt["dfe_tap_weights"]
                 pr_samps = rslt["h"]
@@ -1400,9 +1361,12 @@ class COM():
         # Sec. 93A.1.7.2
         varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
         df = freqs[1] - freqs[0]
-        varN = self.eta0 * sum(abs(self.Hr * self.Hctf)**2) * (df / 1e9)    # (93A-35)
-        varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)                 # (93A-30)
-        hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
+        Hrx  = calc_Hffe(self.freqs, 1 / self.fb, array(self.rx_taps).flatten(), self.nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
+        varN = self.eta0 * sum(abs(self.Hr * self.Hctf * Hrx)**2) * (df / 1e9)    # (93A-35) + Hffe
+        # varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)                 # (93A-30)
+        varTx = pow(10, -self.TxSNR / 10)                                   # (93A-30), but assuming unit victim pulse response amplitude
+        # hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
+        hJ = self.calc_hJ(vic_pulse_resp, 1, cursor_ix)
         _, pJ = delta_pmf(self.Add * hJ, L=L, RLM=RLM, y=y)
         self.dbg['pJ'] = pJ
         self.dbg['hJ'] = hJ

@@ -394,3 +394,34 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[list[float]]:
     return all_combs(ranges)
 
 
+def calc_Hffe(
+    freqs: Rvec, td: float,
+    tap_weights: Rvec, n_post: int,
+    hasCurs: bool = False
+) -> Cvec:
+    """
+    Calculate the voltage transfer function, H(f), for a digital FFE, according to (93A-21).
+
+    Args:
+        freqs: Frequencies at which to calculate `Hffe` (Hz).
+        td: Tap delay time (s).
+        tap_weights: The filter tap weights.
+        n_post: The number of post-cursor taps.
+
+    Keyword Args:
+        hasCurs: `tap_weights` includes the cursor tap weight when True.
+            Default: False (Cursor tap weight will be calculated.)
+
+    Returns:
+        The complex voltage transfer function, H(f), for the FFE.
+
+    Raises:
+        None
+    """
+
+    bs = list(np.array(tap_weights).flatten())
+    if not hasCurs:
+        b0 = 1 - sum(list(map(abs, tap_weights)))
+        bs.insert(-n_post, b0)
+    return sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * n_b[0] * td * freqs),
+                        enumerate(bs))))
