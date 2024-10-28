@@ -24,11 +24,10 @@ from pychopmarg.common  import Rvec
 from pychopmarg.noise   import NoiseCalc
 
 class NormMode(Enum):
-    "Tap weight normalization mode used by `mmse()`."
+    "Tap weight normalization mode."
     P8023dj   = 1  # As per standard (i.e. - clip then renormalize for unit amplitude pulse response.)
     Scaled    = 2  # Uniformly and minimally scaled to bring tap weights just within their limits.
     Unaltered = 3  # Use constrained optimization solution, unchanged.
-
 
 def scale_taps(w: Rvec, w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = None) -> Rvec:
     """
@@ -113,7 +112,8 @@ def clip_taps(
 
 def przf(
     pulse_resp: Rvec, nspui: int, nTaps: int, nPreTaps: int, nDFETaps: int,
-    tap_mins: Rvec, tap_maxs: Rvec, b_min: Rvec, b_max: Rvec
+    tap_mins: Rvec, tap_maxs: Rvec, b_min: Rvec, b_max: Rvec,
+    norm_mode: NormMode = NormMode.Unaltered, unit_amp: bool = False
 ) -> Rvec:
     """
     Optimize FFE tap weights, via _Pulse Response Zero Forcing_ (PRZF).
@@ -129,6 +129,13 @@ def przf(
         b_min: Minimum allowed DFE tap values.
         b_max: Maximum allowed DFE tap values.
 
+    Keyword Args:
+        norm_mode: The tap weight normalization mode to use.
+            Default: Unaltered
+        unit_amp: Enforce unit pulse response amplitude when True.
+            (For comparing results to `mmse()`.)
+            Default: False
+
     Returns:
         A triple consisting of:
             - FFE tap weights: The optimum FFE tap weights.
@@ -140,45 +147,68 @@ def przf(
             Mellitz, R., Lusted, K., "RX FFE Implementation Algorithm for COM 4.1", IEEE P802.3dj Task Force, August 31, 2023.
 
     ToDo:
-        1. Add DFE tap weight max limiting.
-        2. Add sampling time as an input parameter?
+        1. Add sampling time as an input parameter?
     """
 
     assert len(pulse_resp) >= nTaps * nspui, ValueError(
         f"The pulse response length ({len(pulse_resp)}) must be at least: `nspui` ({nspui}) * `nTaps` ({nTaps}) = {nspui * nTaps}!")
-    assert nTaps > nPreTaps, ValueError(
+    assert nTaps == 0 and nPreTaps == 0 or nTaps > nPreTaps, ValueError(
         f"`nTaps` ({nTaps}) must be greater than `nPreTaps` ({nPreTaps})!")
-    assert (nPreTaps + nDFETaps) < (nTaps - 1), ValueError(
+    assert nTaps == 0 and nPreTaps == 0 or (nPreTaps + nDFETaps) < (nTaps - 1), ValueError(
         f"The sum of `nPreTaps` ({nPreTaps}) and `nDFETaps` ({nDFETaps}) must be less than: `nTaps` ({nTaps}) - 1!")
+
+    # Construct null filter, as default.
+    dw = nPreTaps
+    wn = zeros(nTaps)
+    if nTaps > 0:
+        wn[dw] = 1.0
 
     # Sample the given pulse response, assuming cursor coincides w/ maximum.
     dh, first_samp = divmod(argmax(pulse_resp), nspui)
     h = pulse_resp[first_samp::nspui]
+    bn = minimum(b_max, maximum(b_min, h[dh + 1: dh + 1 + nDFETaps]))  # default DFE tap weights
     len_h = len(h)
     d = dh + nPreTaps
 
-    # Create the appropriate forcing vector.
-    fv = zeros(len_h)
-    fv[dh] = h[dh]                                            # Don't force the cursor to zero.
-    dfe_ixs = slice(dh + 1, dh + nDFETaps + 1)                # indices of DFE taps
-    fv[dfe_ixs] = minimum(b_max, maximum(b_min, h[dfe_ixs]))  # Bound first `nDFETaps` post-cursor taps to DFE tap weight ranges.
-    fv = pad(fv, (nPreTaps, 0))[:len_h]                       # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
+    if nTaps > 0:
+        # Create the appropriate forcing vector.
+        h_norm = h.copy()
+        if unit_amp:
+            h_norm /= max(h_norm)
+        fv = zeros(len_h)
+        fv[dh] = h_norm[dh]                                 # Don't force the cursor to zero.
+        dfe_ixs = slice(dh + 1, dh + nDFETaps + 1)          # indices of DFE taps
+        try:
+            fv[dfe_ixs] = minimum(np.array(b_max) * h_norm[dh],
+                                  maximum(np.array(b_min) * h_norm[dh],
+                                          np.array(h_norm[dfe_ixs])))     # Bound first `nDFETaps` post-cursor taps to DFE's correction limits.
+        except:
+            print(f"b_max: {b_max}, h_norm: {h_norm}, dh: {dh}")
+            raise
+        fv = pad(fv, (nPreTaps, 0))[:len_h]                 # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
 
-    # Find the optimum FFE tap weights, enforcing min/max limits and scaling for unit pulse response amplitude.
-    H = convolution_matrix(h, nTaps, mode='full')[:len_h]
-    h0 = H[d]
-    Hb = H[d + 1: d + 1 + nDFETaps]
-    try:
+        # Find the optimum FFE tap weights.
+        H = convolution_matrix(h, nTaps, mode='full')[:len_h]
+        h0 = H[d]
+        Hb = H[d + 1: d + 1 + nDFETaps]
         w, _, _, _ = lstsq(H, fv, rcond=None)
-        wn = clip_taps(w, nPreTaps, tap_mins, tap_maxs)
-    except Exception:
-        print(f"H.shape: {H.shape}; fv.shape: {fv.shape}; w.shape: {w.shape}")
-        raise
-    wn /= dot(h0, wn)
 
-    # Calculate desired DFE tap weight values and enforce limits.
-    bn = Hb @ wn.flatten()
-    bn = minimum(b_max, maximum(b_min, bn))
+        # Check and enforce FFE tap weight limits, according to given normalization mode.
+        match norm_mode:
+            case NormMode.P8023dj:
+                wn = clip_taps(w, dw, tap_mins, tap_maxs)
+                wn /= dot(h0, wn)
+            case NormMode.Scaled:
+                wn = scale_taps(w, tap_mins, tap_maxs)
+            case NormMode.Unaltered:
+                wn = w
+            case _:
+                raise RuntimeError(
+                    f"Received unknown normalization mode: {norm_mode}!")
+
+        # Calculate desired DFE tap weight values and enforce limits.
+        bn = Hb @ wn.flatten()
+        bn = minimum(b_max, maximum(b_min, bn))
 
     return wn, bn, h[dh - nPreTaps: dh - nPreTaps + nTaps]
 
@@ -186,7 +216,7 @@ def przf(
 def mmse(
     theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
-    ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj
+    ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.Unaltered
 ) -> dict[str, Any]:
     """
     Optimize Rx FFE tap weights, via _Minimum Mean Squared Error_ (MMSE).
@@ -207,7 +237,7 @@ def mmse(
         ts_sweep: The cursor sampling time "search radius" around the peak pulse response amplitude (UI).
             Default: 0.5 (i.e. - `ts` within [-UI/2, +UI/2] of peak location)
         norm_mode: The tap weight normalization mode to use.
-            Default: P8023dj
+            Default: Unaltered
 
     Returns:
         A dictionary containing:

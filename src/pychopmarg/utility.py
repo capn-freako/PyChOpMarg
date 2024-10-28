@@ -11,7 +11,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 import numpy as np  # type: ignore
 import skrf as rf
 
-from typing import Any, Optional, TypeVar
+from typing import Any, Dict, Optional, TypeVar
 
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
 
@@ -273,7 +273,8 @@ def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
 
 def delta_pmf(
     h_samps: Rvec, L: int = 4, RLM: float = 1.0,
-    curs_ix: Optional[int] = None, y: Optional[Rvec] = None
+    curs_ix: Optional[int] = None, y: Optional[Rvec] = None,
+    dbg_dict: Dict[str, Any] = None
 ) -> Rvec:
     """
     Calculate the "delta-pmf" for a set of pulse response samples,
@@ -291,6 +292,9 @@ def delta_pmf(
             Default: None (Means use `argmax()` to find cursor.)
         y: y-values override vector.
             Default: None (Means calculate appropriate y-value vector here.)
+        dbg_dict: Optional dictionary into which debugging values may be stashed,
+            for later analysis.
+            Default: None
 
     Returns:
         A pair consisting of:
@@ -306,9 +310,6 @@ def delta_pmf(
             as per Note 2 of 93A.1.7.1, unless a y-values override
             vector is provided, in which case it is assumed that
             the caller has already done the filtering.
-
-    ToDo:
-        1. Does this work for 802.3dj and its normalized pulse response amplitude?
     """
 
     assert not any(np.isnan(h_samps)), ValueError(
@@ -330,18 +331,26 @@ def delta_pmf(
     delta = np.zeros(npts)
     delta[npts // 2] = 1
 
-    def pn(hn: float, dbg=False) -> Rvec:
+    if dbg_dict is not None:
+        dbg_dict.update({"h_samps":      h_samps})
+        dbg_dict.update({"h_samps_filt": h_samps_filt})
+        dbg_dict.update({"ystep":        ystep})
+
+    def pn(hn: float) -> Rvec:
         """
         (93A-39)
         """
+        if dbg_dict:
+            dbg_dict.update({"hn":     hn})
+            dbg_dict.update({"shifts": []})
         _rslt = np.zeros(npts)
         for el in range(L):
             _shift = int((2 * el / (L - 1) - 1) * hn / ystep)
+            if dbg_dict:
+                dbg_dict["shifts"].append(_shift)
             assert abs(_shift) < npts // 2, ValueError(
                 f"Wrap around: _shift: {_shift}, npts: {npts}.")
             _rslt += np.roll(delta, _shift)
-            if dbg and hn == curs_val and el == 0:
-                print(f"{_shift}", flush=True)
         return 1 / L * _rslt
 
     rslt = delta
@@ -363,7 +372,7 @@ def all_combs(xss: list[list[T]]) -> list[list[T]]:
     Generate all combinations of input.
 
     Args:
-        xss([[T]]): The lists of candidates for each position in the final output.
+        xss: The lists of candidates for each position in the final output.
 
     Returns:
         All possible combinations of input lists.
@@ -425,3 +434,29 @@ def calc_Hffe(
         bs.insert(-n_post, b0)
     return sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * n_b[0] * td * freqs),
                         enumerate(bs))))
+
+
+def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
+    """
+    Construct a null filter w/ `nTaps` taps and (optionally) `nPreTaps` pre-cursor taps.
+
+    Args:
+        nTaps: Total number of taps, including the cursor tap.
+
+    Keyword Args:
+        nPreTaps: Number of pre-cursor taps.
+            Default: 0
+
+    Returns:
+        taps: The filter tap weight vector, including the cursor tap weight.
+    """
+
+    assert nTaps > 0, ValueError(
+        f"`nTaps` ({nTaps}) must be greater than zero!")
+    assert nPreTaps < nTaps, ValueError(
+        f"`nPreTaps` ({nPreTaps}) must be less than `nTaps` ({nTaps})!")
+
+    taps = zeros(nTaps)
+    taps[nPreTaps] = 1.0
+
+    return taps
