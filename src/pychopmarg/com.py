@@ -882,15 +882,16 @@ class COM():
         Xsinc = self.Xsinc
         Ts = self.t_irfft[1]
         p = np.fft.irfft(Xsinc * H)
-        p_mag = np.abs(p)
-        try:
-            p_beg = np.where(p_mag > 0.01 * max(p_mag))[0][0] - int(5 * self.ui / Ts)  # Give it some "front porch".
-        except Exception:
-            print(f"max(p_mag): {max(p_mag)}; len(p_mag): {len(p_mag)}")
-            print(f"max(abs(H)): {max(abs(H))}; len(H): {len(H)}")
-            raise
-        spln = interp1d(self.t_irfft, np.roll(p, -p_beg))  # `p` is not yet in our system time domain!
-        return spln(self.times)                            # Now, it is.
+        # p_mag = np.abs(p)
+        # try:
+        #     p_beg = np.where(p_mag > 0.01 * max(p_mag))[0][0] - int(5 * self.ui / Ts)  # Give it some "front porch".
+        # except Exception:
+        #     print(f"max(p_mag): {max(p_mag)}; len(p_mag): {len(p_mag)}")
+        #     print(f"max(abs(H)): {max(abs(H))}; len(H): {len(H)}")
+        #     raise
+        # spln = interp1d(self.t_irfft, np.roll(p, -p_beg))  # `p` is not yet in our system time domain!
+        spln = interp1d(self.t_irfft, p)  # `p` is not yet in our system time domain!
+        return spln(self.times)           # Now, it is.
 
     def gen_pulse_resps(
         self, ntwks: Optional[list[tuple[rf.Network, str]]] = None,

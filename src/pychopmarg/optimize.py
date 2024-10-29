@@ -28,6 +28,8 @@ class NormMode(Enum):
     P8023dj   = 1  # As per standard (i.e. - clip then renormalize for unit amplitude pulse response.)
     Scaled    = 2  # Uniformly and minimally scaled to bring tap weights just within their limits.
     Unaltered = 3  # Use constrained optimization solution, unchanged.
+    UnitDcGain = 4  # Tap weights are uniformly scaled, to yield unity gain at d.c.
+
 
 def scale_taps(w: Rvec, w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = None) -> Rvec:
     """
@@ -72,7 +74,8 @@ def scale_taps(w: Rvec, w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = No
 
 def clip_taps(
     w: Rvec, curs_ix: int,
-    w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = None
+    w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = None,
+    obey_spec: bool = True
 ) -> Rvec:
     """
     Clip tap weights to the given min/max limits, as per (178A-26).
@@ -86,6 +89,8 @@ def clip_taps(
             Default: None (Use `-ones(len(w))`.)
         w_max: Maximum tap weights.
             Default: None (Use `ones(len(w))`.)
+        obey_spec: Allow cursor tap weight to grow w/o bound, as per D1.2, when True.
+            Default: True
 
     Returns:
         w_lim: Tap weights, clipped accordingly.
@@ -103,9 +108,25 @@ def clip_taps(
     assert len(w) == len(w_min) == len(w_max), ValueError(
         f"Lengths of: `w` ({len(w)}), `w_min` ({len(w_min)}), and `w_max` ({len(w_max)}), must be equal!")
 
-    w_lim_curs_val = min(w_max[curs_ix], max(w_min[curs_ix], w[curs_ix]))
-    w_lim = minimum(w_max * w_lim_curs_val, maximum(w_min * w_lim_curs_val, w))
-    w_lim[curs_ix] = w_lim_curs_val
+    if obey_spec:
+        # With cursor tap weight limits normalized to current cursor tap weight, which IS what D1.2 (and D1.1) specify.
+        # Note that this allows the filter gain to grow without bound, since:
+        #     a) the cursor tap weight is never clipped, and
+        #     b) the other taps grow ratiometrically w/ the cursor tap.
+        #
+        #   1. Is that correct/intended?
+        #
+        #   2. What effect might the resultant variation in noise amplification thru the FFE
+        #      have on our otherwise apples-to-apples comparison of tap weight "bestness"?
+        w_lim_curs_val = w[curs_ix]
+        w_lim = minimum(w_max * w_lim_curs_val, maximum(w_min * w_lim_curs_val, w))
+    else:
+        # With cursor tap weight bound to absolute limits, which is NOT what D1.2 (or D1.1) specifies,
+        # but WAS the intent in some previous presentations on this topic.
+        w_lim_curs_val = min(w_max[curs_ix], max(w_min[curs_ix], w[curs_ix]))
+        w_lim = minimum(w_max * w_lim_curs_val, maximum(w_min * w_lim_curs_val, w))
+        w_lim[curs_ix] = w_lim_curs_val
+
 
     return w_lim
 
@@ -178,13 +199,9 @@ def przf(
         fv = zeros(len_h)
         fv[dh] = h_norm[dh]                                 # Don't force the cursor to zero.
         dfe_ixs = slice(dh + 1, dh + nDFETaps + 1)          # indices of DFE taps
-        try:
-            fv[dfe_ixs] = minimum(np.array(b_max) * h_norm[dh],
-                                  maximum(np.array(b_min) * h_norm[dh],
-                                          np.array(h_norm[dfe_ixs])))     # Bound first `nDFETaps` post-cursor taps to DFE's correction limits.
-        except:
-            print(f"b_max: {b_max}, h_norm: {h_norm}, dh: {dh}")
-            raise
+        fv[dfe_ixs] = minimum(np.array(b_max) * h_norm[dh], # Bound first `nDFETaps` post-cursor taps to DFE's correction limits.
+                              maximum(np.array(b_min) * h_norm[dh],
+                                      np.array(h_norm[dfe_ixs])))
         fv = pad(fv, (nPreTaps, 0))[:len_h]                 # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
 
         # Find the optimum FFE tap weights.
@@ -202,6 +219,8 @@ def przf(
                 wn = scale_taps(w, tap_mins, tap_maxs)
             case NormMode.Unaltered:
                 wn = w
+            case NormMode.UnitDcGain:
+                wn = w / sum(w)
             case _:
                 raise RuntimeError(
                     f"Received unknown normalization mode: {norm_mode}!")
@@ -314,18 +333,16 @@ def mmse(
             lam = _x[-1]
             w = _w
 
-        # Check and enforce FFE tap weight limits, according to given normalization mode.
-        match norm_mode:
-            case NormMode.P8023dj:
-                w_lim = clip_taps(w, dw, w_min, w_max)
-                w_lim /= dot(h0, w_lim)
-            case NormMode.Scaled:
-                w_lim = scale_taps(w, w_min, w_max)
-            case NormMode.Unaltered:
-                w_lim = w
-            case _:
-                raise RuntimeError(
-                    f"Received unknown normalization mode: {norm_mode}!")
+        # Clip to limits if apropos.
+        if norm_mode == NormMode.P8023dj:
+            w_lim = clip_taps(w, dw, w_min, w_max)
+        else:
+            w_lim = w
+
+        # Maintain unit pulse response amplitude, regardless of normalization mode, through end of optimization.
+        w_lim /= dot(h0, w_lim)
+
+        # Adjust DFE tap weights if necessary.
         if not array_equal(w_lim, w):
             b = Hb @ w_lim.flatten()
             b_lim = maximum(b_min, minimum(b_max, b))
@@ -362,5 +379,21 @@ def mmse(
             rslt["theNoiseCalc"] = theNoiseCalc
             rslt["varX"] = varX
             rslt["Rn"] = Rn
+
+    # Apply desired normalization to tap weights.
+    w = rslt["rx_taps"]
+    match norm_mode:
+        case NormMode.P8023dj:
+            w_lim = w  # Done above as part of optimization loop.
+        case NormMode.Scaled:
+            w_lim = scale_taps(w, w_min, w_max)
+        case NormMode.Unaltered:
+            w_lim = w
+        case NormMode.UnitDcGain:
+            w_lim = w / sum(w)
+        case _:
+            raise RuntimeError(
+                f"Received unknown normalization mode: {norm_mode}!")
+    rslt["rx_taps"] = w_lim
 
     return rslt
