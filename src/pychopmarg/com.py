@@ -882,14 +882,6 @@ class COM():
         Xsinc = self.Xsinc
         Ts = self.t_irfft[1]
         p = np.fft.irfft(Xsinc * H)
-        # p_mag = np.abs(p)
-        # try:
-        #     p_beg = np.where(p_mag > 0.01 * max(p_mag))[0][0] - int(5 * self.ui / Ts)  # Give it some "front porch".
-        # except Exception:
-        #     print(f"max(p_mag): {max(p_mag)}; len(p_mag): {len(p_mag)}")
-        #     print(f"max(abs(H)): {max(abs(H))}; len(H): {len(H)}")
-        #     raise
-        # spln = interp1d(self.t_irfft, np.roll(p, -p_beg))  # `p` is not yet in our system time domain!
         spln = interp1d(self.t_irfft, p)  # `p` is not yet in our system time domain!
         return spln(self.times)           # Now, it is.
 
@@ -1186,8 +1178,7 @@ class COM():
 
         # Step h - Spectral noise.
         df = freqs[1]
-        # varN = self.eta0 * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * (df / 1e9)  # (93A-35)
-        varN = (self.eta0 / 1e9) * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * df
+        varN = (self.eta0 / 1e9) * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * df  # (93A-35)
 
         # Step i - FOM calculation.
         # fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
@@ -1423,29 +1414,6 @@ class COM():
         nDFE = len(self.bmin)
 
         self.set_status("Calculating COM...")
-        # pulse_resps = self.gen_pulse_resps(rx_taps=[1.0], dfe_taps=[])  # No Rx FFE/DFE. ToDo: Shift null FFE tap, to respect `nRxPreTaps`?
-        # self.vic_pulse_resp_noRxFFE = pulse_resps[0]
-        # match opt_mode:  # ToDo: Can we eliminate this block, using the FOM results?
-        #     case OptMode.PRZF:
-        #         rx_taps, dfe_taps, pr_samps = przf(
-        #             pulse_resps[0], M, self.nRxTaps, self.nRxPreTaps, nDFE,
-        #             self.rx_taps_min, self.rx_taps_max, self.bmin, self.bmax,
-        #             norm_mode=norm_mode, unit_amp=unit_amp)
-        #     case OptMode.MMSE:
-        #         theNoiseCalc = NoiseCalc(
-        #             L, 1/self.fb, 0, self.times, pulse_resps[0], pulse_resps[1:],
-        #             self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.Hctf,
-        #             self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
-        #         rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb, RLM, L,
-        #                     self.bmin, self.bmax, self.rx_taps_min, self.rx_taps_max, norm_mode=norm_mode)
-        #         rx_taps  = rslt["rx_taps"]
-        #         dfe_taps = rslt["dfe_tap_weights"]
-        #         pr_samps = rslt["h"]
-        #     case _:
-        #         raise ValueError(f"Unrecognized optimization mode: {self.opt_mode}, requested!")                    
-        # self.rx_taps  = rx_taps
-        # self.dfe_taps = dfe_taps
-        # self.pr_samps = pr_samps
         pulse_resps = self.gen_pulse_resps(dfe_taps=[])  # DFE taps are included explicitly, below.
         vic_pulse_resp = pulse_resps[0]
         if cursor_ix is None:
@@ -1453,7 +1421,6 @@ class COM():
         curs_uis, curs_ofst = divmod(cursor_ix, M)
         vic_curs_val = vic_pulse_resp[cursor_ix]
         As = RLM * vic_curs_val / (L - 1)  # Missing `2*` is also missing from `Ani` definition; so, they cancel in COM calc.
-        # ymax = 1.1 * max(abs(vic_pulse_resp))
         ymax = 1.1 * As
         npts = 2 * min(int(ymax / 0.00001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
         y = np.linspace(-ymax, ymax, npts)
@@ -1465,9 +1432,7 @@ class COM():
         Hrx  = calc_Hffe(self.freqs, 1 / self.fb, array(self.rx_taps).flatten(), self.nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
         varN = self.eta0 * sum(abs(self.Hr * self.Hctf * Hrx)**2) * (df / 1e9)    # (93A-35) + Hffe
         varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)                 # (93A-30)
-        # varTx = pow(10, -self.TxSNR / 10)                                   # (93A-30), but assuming unit victim pulse response amplitude
         hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
-        # hJ = self.calc_hJ(vic_pulse_resp, 1, cursor_ix)
         _, pJ = delta_pmf(self.Add * hJ, L=L, RLM=RLM, y=y)
         self.dbg['pJ'] = pJ
         self.dbg['hJ'] = hJ
@@ -1550,10 +1515,7 @@ class COM():
         self.rslts['sigma_ISI'] = self.com_sigma_ISI  * 1e3
 
         return (As,
-        # return (1.0,
-                # abs(np.where(Py >= self.DER0)[0][0] - npts // 2) * ystep,
                 -y[np.where(Py >= self.DER0)[0][0]],
-                # -y[np.where(Py >= self.DER0 / 2)[0][0]],
                 cursor_ix)
 
 if __name__ == "__main__":

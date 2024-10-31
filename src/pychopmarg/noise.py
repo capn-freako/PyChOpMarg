@@ -220,9 +220,7 @@ class NoiseCalc():
         nspui = self.nspui
 
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf
-        # _htn = self.Av * irfft(Tb * sinc(f * Tb) * Htn) * 2 * f[-1]  # See `_get_Srn()`.
         _htn = irfft(sinc(f * Tb) * Htn) * 2  # * f[-1]  # See `_get_Srn()`. But, note that `* df` is not appropriate here.
-        # htn  = self.from_irfft(_htn)[self.ts_ix % nspui::nspui]
         htn  = self.from_irfft(_htn)  # ToDo: Do I need to honor `ts_ix`?
 
         return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * Tb  # i.e. - / fB

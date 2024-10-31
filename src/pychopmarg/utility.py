@@ -13,6 +13,8 @@ import skrf as rf
 
 from typing import Any, Dict, Optional, TypeVar
 
+from scipy.interpolate import interp1d
+
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
 
 T = TypeVar('T', Any, Any)
@@ -460,3 +462,44 @@ def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
     taps[nPreTaps] = 1.0
 
     return taps
+
+
+def from_irfft(x: Rvec, t_irfft: Rvec, t: Rvec, nspui: int) -> Rvec:
+    """
+    Interpolate `irfft()` output to `t` and subsample at fBaud.
+
+    Args:
+        x: `irfft()` results to be interpolated and subsampled.
+        t_irfft: Time index vector for `x`.
+        t: Desired new time index vector (same units as `t_irfft`).
+        nspui: Number of samples per unit interval.
+
+    Returns:
+        y: interpolated and subsampled vector.
+
+    Raises:
+        IndexError: If length of input doesn't match length of `t_irfft` vector.
+
+    Notes:
+        1. Input vector is shifted, such that its peak occurs at `0.1 * max(t)`, before interpolating.
+            This is done to:
+                - ensure that we don't omit any non-causal behavior,
+                which ends up at the end of an IFFT output vector
+                when the peak is very near the beginning, and
+                - to ensure that the majority of our available time span
+                is available for capturing reflections.
+        2. The sub-sampling phase is adjusted, so as to ensure that we catch the peak.
+    """
+
+    assert len(x) == len(t_irfft), IndexError(
+        f"Length of input ({len(x)}) must match length of `t_irfft` vector ({len(t_irfft)})!")
+
+    t_pk = 0.1 * t[-1]                      # target peak location time
+    targ_ix = np.where(t_irfft >= t_pk)[0][0]  # target peak vector index, in `x`
+    curr_ix = np.argmax(x)                     # current peak vector index, in `x`
+    _x = np.roll(x, targ_ix - curr_ix)         # `x` with peak repositioned
+
+    krnl = interp1d(t_irfft, _x, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
+    y = krnl(t)
+    curs_uis, curs_ofst = divmod(np.argmax(y), nspui)  # Ensure that we capture the peak in the next step.
+    return y[curs_ofst::nspui]                         # Sampled at fBaud, w/ peak captured.

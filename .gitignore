@@ -170,3 +170,4 @@ chnl_data/P8023dj
 enable-6.0.0/
 *.pdf
 COM_MATLAB/
+*.pickle
