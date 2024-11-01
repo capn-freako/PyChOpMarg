@@ -35,58 +35,13 @@ from scipy.interpolate import interp1d
 from pychopmarg.common   import Rvec, Cvec, COMParams, PI, TWOPI
 from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import NormMode, mmse, przf
-from pychopmarg.utility  import import_s32p, sdd_21, sDieLadderSegment, delta_pmf, from_dB, all_combs, mk_combs, calc_Hffe
-
-# Globals
-# These are used by `calc_Hffe()`, to minimize the size of its cache.
-# They are initialized by `COM.__init__()`.
-gFreqs: Rvec = None  # type: ignore
-gFb: float = None  # type: ignore
-gC0min: float = None  # type: ignore
-gNtaps: int = None  # type: ignore
+from pychopmarg.utility  import import_s32p, sdd_21, sDieLadderSegment, sPkgTline, delta_pmf, from_dB, all_combs, mk_combs, calc_Hffe, calc_Hctle
 
 T = TypeVar('T', Any, Any)
 
 class OptMode(Enum):
     PRZF = 1
     MMSE = 2
-
-
-def calc_Hdfe(tap_weights: Rvec) -> Cvec:
-    """
-    Calculate the voltage transfer function, H(f), for a DFE.
-
-    Args:
-        tap_weights: The vector of filter tap weights.
-
-    Returns:
-        The complex voltage transfer function, H(f), for the DFE.
-    """
-
-    assert len(gFreqs) and gFb, RuntimeError(
-        f"Called before global variables were initialized!\n\tgFreqs: {gFreqs}, gFb: {gFb}")
-
-    return 1 / (1 - sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * (n_b[0] + 1) * gFreqs / gFb),
-                                 enumerate(tap_weights)))))
-
-
-def print_taps(ws: list[float]) -> str:
-    """Return formatted tap weight values."""
-    n_ws = len(ws)
-    if n_ws == 0:
-        return ""
-    res = f"{ws[0]:5.2f}"
-    if n_ws > 1:
-        if n_ws > 8:
-            for w in ws[1:8]:
-                res += f" {w:5.2f}"
-            res += f"\n{ws[8]:5.2f}"
-            for w in ws[9:]:
-                res += f" {w:5.2f}"
-        else:
-            for w in ws[1:]:
-                res += f" {w:5.2f}"
-    return res
 
 
 class COM():
@@ -130,16 +85,16 @@ class COM():
     fp2 = float(FB)  # CTLE second pole frequency.
     fLF = float(1e6)  # CTLE low-f corner frequency.
     opt_mode = OptMode(OptMode.MMSE)
-    norm_mode = NormMode(NormMode.Unaltered)
-    unit_amp = bool(False)
+    norm_mode = NormMode(NormMode.P8023dj)
+    unit_amp = bool(True)
     # - FFE/DFE
     N_DFE = 1  # DO NOT REMOVE! Initializing other Ints using `nDFE` doesn't work!
     nDFE = int(N_DFE)  # number of DFE taps.
     bmax = list([1.0] * N_DFE)  # DFE maximum tap values.
     bmin = list([-1.0] * N_DFE)  # DFE minimum tap values.
     dfe_taps = array([0] * N_DFE, dtype=float)  # Rx FFE tap weights.
-    nRxTaps      = 15
-    nRxPreTaps   = 3
+    nRxTaps      = 16
+    nRxPreTaps   = 5
     rx_taps_min  = array([-1] * nRxTaps, dtype=float)
     rx_taps_max  = array([1] * nRxTaps, dtype=float)
     rx_taps      = array([0] * nRxTaps, dtype=float)  # Rx FFE tap weights.
@@ -191,7 +146,6 @@ class COM():
     com_sigma_Tx = float(0.0)
     com_sigma_G = float(0.0)
     com_sigma_N = float(0.0)
-    com_dfe_taps = str(print_taps([0.0] * N_DFE))
     # -- FOM
     fom = float(0.0)
     fom_As = float(0.0)
@@ -202,14 +156,12 @@ class COM():
     sigma_XT = float(0.0)
     sigma_Tx = float(0.0)
     sigma_N = float(0.0)
-    fom_tx_taps = str(print_taps([0.0] * nTxTaps))
-    fom_dfe_taps = str(print_taps([0.0] * N_DFE))
 
     about_str = """
-      <H2><em>PyChOpMarg</em> - A Python implementation of COM, as per IEEE 802.3-22 Annex 93A.</H2>\n
+      <H2><em>PyChOpMarg</em> - A Python implementation of COM, as per IEEE 802.3-22 Annex 93A/178A.</H2>\n
       <strong>By:</strong> David Banas <capn.freako@gmail.com><p>\n
-      <strong>On:</strong> August 12, 2024<p>\n
-      <strong>At:</strong> v1.1.3\n
+      <strong>On:</strong> November 1, 2024<p>\n
+      <strong>At:</strong> v2.0.1\n
       <H3>Useful Links</H3>\n
       (You'll probably need to: right click, select <em>Copy link address</em>, and paste into your browser.)
         <UL>\n
@@ -229,16 +181,12 @@ class COM():
     def times(self) -> Rvec:
         "System time vector (s); decoupled from system frequency vector!"
         tstep = self.ui / self.nspui
-        rslt = np.arange(0, self.tmax + tstep, tstep)
-        return rslt
+        return np.arange(0, self.tmax + tstep, tstep)
 
     @property
     def freqs(self) -> Rvec:
         "System frequency vector (Hz); decoupled from system time vector!"
-        global gFreqs
-        freqs = np.arange(0, self.fmax + self.fstep, self.fstep)
-        gFreqs = freqs
-        return freqs
+        return np.arange(0, self.fmax + self.fstep, self.fstep)
 
     @property
     def t_irfft(self) -> Rvec:
@@ -274,6 +222,10 @@ class COM():
 
     @property
     def Hctf(self) -> Cvec:
+        """
+        Return the voltage transfer function, H(f), of the Rx CTLE,
+        according to (93A-22).
+        """
         return self.calc_Hctf(self.gDC, self.gDC2)
 
     def calc_Hctf(self, gDC: Optional[float] = None, gDC2: Optional[float] = None) -> Cvec:
@@ -295,16 +247,7 @@ class COM():
             gDC = self.gDC
         if gDC2 is None:
             gDC2 = self.gDC2
-        g1 = from_dB(gDC)
-        g2 = from_dB(gDC2)
-        f = self.freqs
-        fz = self.fz
-        fp1 = self.fp1
-        fp2 = self.fp2
-        fLF = self.fLF
-        num = (g1 + 1j * f / fz) * (g2 + 1j * f / fLF)
-        den = (1 + 1j * f / fp1) * (1 + 1j * f / fp2) * (1 + 1j * f / fLF)
-        return num / den
+        return calc_Hctle(self.freqs, self.fz, self.fp1, self.fp2, self.fLF, gDC, gDC2)
 
     @property
     def tx_combs(self) -> list[list[float]]:
@@ -384,47 +327,7 @@ class COM():
         else:
             zps = [zp, self.zp_B]
 
-        f      = self.freqs
-        f_GHz  = f / 1e9               # noqa E221
-        r0     = self.R0
-        a1     = self.a1      # sqrt(ns)/mm
-        a2     = self.a2      # ns/mm
-        tau    = self.tau     # ns/mm
-        gamma0 = self.gamma0  # 1/mm
-        gamma1 = a1 * (1 + 1j)
-
-        def gamma2(f: float) -> complex:
-            "f in GHz!"
-            return a2 * (1 - 1j * (2 / PI) * np.log(f)) + 1j * TWOPI * tau
-
-        def gamma(f: float) -> complex:
-            "Return complex propagation coefficient at frequency f (GHz)."
-            if f == 0:
-                return gamma0
-            else:
-                return gamma0 + gamma1 * np.sqrt(f) + gamma2(f) * f
-
-        g = array(list(map(gamma, f_GHz)))
-
-        def mk_s2p(z_pair: tuple[float, float]) -> rf.Network:
-            """
-            Make two port network for a leg of T-line.
-
-            Args:
-                z_pair: Pair consisting of:
-                    - zc: Characteristic impedance of leg (Ohms).
-                    - zp: Length of leg (mm).
-
-            Returns:
-                s2p: Two port network for the leg.
-            """
-            zc, zp = z_pair
-            rho = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
-            s11 = s22 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
-            s21 = s12 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
-            return rf.Network(s=array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)
-
-        return rf.network.cascade_list(list(map(mk_s2p, zip(zc, zps))))
+        return sPkgTline(self.freqs, self.R0, self.a1, self.a2, self.tau, self.gamma0, zip(zc, zps))
 
     # - Channels
     def get_chnls(self) -> list[tuple[rf.Network, str]]:
@@ -708,16 +611,6 @@ class COM():
         # Stash input parameters, for future reference.
         self.params = params
 
-        # Set global variables.
-        global gFb
-        gFb = self.fb
-
-        global gC0min
-        gC0min = self.c0_min
-
-        global gNtaps
-        gNtaps = np.size(self.tx_taps_min)
-
     # General functions
     def sC(self, c: float) -> rf.Network:
         """
@@ -843,15 +736,6 @@ class COM():
             if passive_RxFFE:
                 Hrx /= max(abs(Hrx))
             rslt *= Hrx
-
-        # TEMP DEBUG
-        if max(abs(rslt)) == 0:
-            print(f"max(abs(Htx)): {max(abs(Htx))}")
-            print(f"max(abs(H21)): {max(abs(H21))}")
-            print(f"max(abs(Hr)): {max(abs(Hr))}")
-            print(f"max(abs(Hctf)): {max(abs(Hctf))}")
-            print(f"max(abs(Hrx)): {max(abs(Hrx))}")
-            raise RuntimeError("Null response from `H()`!")
 
         return rslt
 
@@ -1335,8 +1219,6 @@ class COM():
         self.tx_taps = tx_taps_best
         self.rx_taps = rx_taps_best
         self.pr_samps = pr_samps_best
-        self.fom_tx_taps = print_taps(tx_taps_best)
-        self.fom_dfe_taps = print_taps(dfe_tap_weights_best)
         self.dfe_taps = dfe_tap_weights_best
         self.fom_cursor_ix = cursor_ix_best
         self.fom_As = As_best
@@ -1506,7 +1388,6 @@ class COM():
         self.rslts['py'] = py
         self.rslts['Py'] = Py
         self.rslts['y']  = y
-        self.com_dfe_taps = print_taps(dfe_tap_weights)
         self.dfe_taps = dfe_tap_weights
         self.com_As = As
         self.rslts['sigma_G']   = self.com_sigma_G  * 1e3
@@ -1515,7 +1396,7 @@ class COM():
         self.rslts['sigma_ISI'] = self.com_sigma_ISI  * 1e3
 
         return (As,
-                -y[np.where(Py >= self.DER0)[0][0]],
+                -y[np.where(Py >= self.DER0)[0][0]],  # ToDo: `DER0 / 2`?
                 cursor_ix)
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ import skrf as rf
 
 from typing import Any, Dict, Optional, TypeVar
 
+from numpy import array
 from scipy.interpolate import interp1d
 
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
@@ -254,6 +255,66 @@ def sDieLadderSegment(freqs: list[float], trip: tuple[float, float, float]) -> r
     return sCshunt(freqs, Cd, r0=R0) ** sLseries(freqs, Ls, r0=R0)
 
 
+def sPkgTline(
+    f: Rvec, r0: float, a1: float, a2: float, tau: float,
+    gamma0: float, z_pairs: list[tuple[float, float]]
+) -> rf.Network:
+    """
+    Return the 2-port network corresponding to a package transmission line,
+    according to (93A-9:14).
+
+    Args:
+        f: Frequencies at which to calculate S-parameters (Hz).
+        r0: System reference impedance (Ohms).
+        a1: First polynomial coefficient (sqrt_ns/mm).
+        a2: Second polynomial coefficient (ns/mm).
+        tau: Propagation delay (ns/mm).
+        gamma0: Propagation loss constant (1/mm).
+        z_pairs: List of pairs defining the T-line segments, each containing:
+            - zc: Characteristic impedance of segment (Ohms).
+            - zp: Length of segment (mm).
+
+    Returns:
+        2-port network equivalent to package transmission line.
+    """
+
+    f_GHz  = f / 1e9  # noqa E221
+    gamma1 = a1 * (1 + 1j)
+
+    def gamma2(f: float) -> complex:
+        "f in GHz!"
+        return a2 * (1 - 1j * (2 / PI) * np.log(f)) + 1j * TWOPI * tau
+
+    def gamma(f: float) -> complex:
+        "Return complex propagation coefficient at frequency f (GHz)."
+        if f == 0:
+            return gamma0
+        else:
+            return gamma0 + gamma1 * np.sqrt(f) + gamma2(f) * f
+
+    g = array(list(map(gamma, f_GHz)))
+
+    def mk_s2p(z_pair: tuple[float, float]) -> rf.Network:
+        """
+        Make two port network for a leg of T-line.
+
+        Args:
+            z_pair: Pair consisting of:
+                - zc: Characteristic impedance of leg (Ohms).
+                - zp: Length of leg (mm).
+
+        Returns:
+            s2p: Two port network for the leg.
+        """
+        zc, zp = z_pair
+        rho = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
+        s11 = s22 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
+        s21 = s12 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
+        return rf.Network(s=array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)
+
+    return rf.network.cascade_list(list(map(mk_s2p, z_pairs)))
+
+
 def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
     """
     Filter a list of pulse response samples for minimum magnitude.
@@ -405,6 +466,33 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[list[float]]:
     return all_combs(ranges)
 
 
+def calc_Hctle(f: Rvec, fz: float, fp1: float, fp2: float, fLF: float, gDC: float, gDC2: float) -> Cvec:
+    """
+    Return the voltage transfer function, H(f), of the Rx CTLE,
+    according to (93A-22).
+
+    Args:
+        f: Frequencies at which to calculate `Hctle(f)` (Hz).
+        fz: First stage zero frequency (Hz).
+        fp1: First stage lower pole frequency (Hz).
+        fp2: First stage upper pole frequency (Hz).
+        fLF: Second stage pole/zero frequency (Hz).
+        gDC: CTLE first stage d.c. gain (dB).
+        gDC2: CTLE second stage d.c. gain (dB).
+
+    Returns:
+        The complex voltage transfer function, H(f), for the CTLE.
+
+    Raises:
+        None
+    """
+    g1 = from_dB(gDC)
+    g2 = from_dB(gDC2)
+    num = (g1 + 1j * f / fz) * (g2 + 1j * f / fLF)
+    den = (1 + 1j * f / fp1) * (1 + 1j * f / fp2) * (1 + 1j * f / fLF)
+    return num / den
+
+
 def calc_Hffe(
     freqs: Rvec, td: float,
     tap_weights: Rvec, n_post: int,
@@ -436,6 +524,24 @@ def calc_Hffe(
         bs.insert(-n_post, b0)
     return sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * n_b[0] * td * freqs),
                         enumerate(bs))))
+
+
+def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
+    """
+    Calculate the voltage transfer function, H(f), for a _Decision Feedback Equalizer_ (DFE).
+
+    Args:
+        freqs: Frequencies at which to calculate `Hdfe` (Hz).
+        td: Tap delay time (s).
+        tap_weights: The vector of filter tap weights.
+
+    Returns:
+        The complex voltage transfer function, H(f), for the DFE.
+    """
+
+    bs = list(np.array(tap_weights).flatten())
+    return 1 / (1 - sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * (n_b[0] + 1) * td * freqs),
+                                 enumerate(bs)))))
 
 
 def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
@@ -503,3 +609,22 @@ def from_irfft(x: Rvec, t_irfft: Rvec, t: Rvec, nspui: int) -> Rvec:
     y = krnl(t)
     curs_uis, curs_ofst = divmod(np.argmax(y), nspui)  # Ensure that we capture the peak in the next step.
     return y[curs_ofst::nspui]                         # Sampled at fBaud, w/ peak captured.
+
+
+def print_taps(ws: list[float]) -> str:
+    """Return formatted tap weight values."""
+    n_ws = len(ws)
+    if n_ws == 0:
+        return ""
+    res = f"{ws[0]:5.2f}"
+    if n_ws > 1:
+        if n_ws > 8:
+            for w in ws[1:8]:
+                res += f" {w:5.2f}"
+            res += f"\n{ws[8]:5.2f}"
+            for w in ws[9:]:
+                res += f" {w:5.2f}"
+        else:
+            for w in ws[1:]:
+                res += f" {w:5.2f}"
+    return res
