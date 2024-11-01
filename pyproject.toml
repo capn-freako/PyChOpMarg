@@ -1,31 +1,29 @@
 [build-system]
 requires = [
-    "Cython<3",
+    "Cython",
     "setuptools>=45",
-    "swig<4",
+    "swig",
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "PyChOpMarg"
-description = "Python implementation of COM, as per IEEE 802.3-22 Annex 93A."
-version = "1.1.3"
+description = "Python implementation of COM, as per IEEE 802.3-22 Annex 93A/178A."
+version = "2.0.1"
 authors = [{name = "David Banas", email = "capn.freako@gmail.com"}]
 urls = { documentation = "https://pychopmarg.readthedocs.io/en/latest/"}
 readme = "README.md"
-requires-python = ">=3.9,<3.12"
+requires-python = ">=3.10,<3.14"
 license = {text = "BSD3"}
 dependencies = [
-    "chaco>=6.0.0",
     "click",
-    "numpy<2",
-    "pyside6",
+    "numpy",
     "scikit-rf>=0.29",
-    "traitsui>=8",
+    "typing_extensions",  # SciKit-RF requires this, but doesn't include it itself.
 ]
 keywords=["com", "channel", "margin"]
 classifiers=[
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: Education",
@@ -34,9 +32,10 @@ classifiers=[
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Adaptive Technologies",
     "Topic :: Scientific/Engineering",
