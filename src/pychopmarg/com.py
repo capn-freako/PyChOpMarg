@@ -243,10 +243,8 @@ class COM():
             1. The instance's current value(s) for `gDC` and `gDC2` are used if not provided.
                 (Necessary, to accommodate sweeping when optimizing EQ.)
         """
-        if gDC is None:  # ToDo: Simplify syntax.
-            gDC = self.gDC
-        if gDC2 is None:
-            gDC2 = self.gDC2
+        gDC = gDC or self.gDC
+        gDC2 = gDC2 or self.gDC2
         return calc_Hctle(self.freqs, self.fz, self.fp1, self.fp2, self.fLF, gDC, gDC2)
 
     @property
@@ -949,7 +947,7 @@ class COM():
         unit_amp: Optional[bool] = None
     ) -> float:
         """
-        Calculate the *figure of merit* (FOM), given the existing linear EQ settings.
+        Calculate the **figure of merit** (FOM), given the existing linear EQ settings.
         Optimize Rx FFE taps if they aren't specified by caller.
 
         Args:
@@ -958,19 +956,18 @@ class COM():
 
         Keyword Args:
             gDC: CTLE first stage d.c. gain.
-                Default: None (i.e. - Use `self.gDC`.)
+                Default: None (i.e. - Use ``self.gDC``.)
             gDC2: CTLE second stage d.c. gain.
-                Default: None (i.e. - Use `self.gDC2`.)
+                Default: None (i.e. - Use ``self.gDC2``.)
             rx_taps: Rx FFE tap weight overrides.
                 Default: None (i.e. - Optimize Rx FFE tap weights.)
             opt_mode: Optimization mode.
-                Default: None (i.e. - Use `self.opt_mode`.)
-                Note: Currently, unused; see `ToDo` #1, below.
+                Default: None (i.e. - Use ``self.opt_mode``.)
             norm_mode: The tap weight normalization mode to use.
-                Default: None (i.e. - Use `self.norm_mode`.)
+                Default: None (i.e. - Use ``self.norm_mode``.)
             unit_amp: Enforce unit pulse response amplitude when True.
-                (For comparing `przf()` results to `mmse()` results.)
-                Default: None (i.e. - Use `self.unit_amp`.)
+                (For comparing `optimize.przf()` results to `optimize.mmse()` results.)
+                Default: None (i.e. - Use ``self.unit_amp``.)
 
         Returns:
             The resultant figure of merit.
@@ -980,12 +977,9 @@ class COM():
 
         Notes:
             1. See: IEEE 802.3-2022 93A.1.6.
-            2. When not provided, the values for `gDC` and `gDC2` are taken from the `COM` instance.
-            3. Unlike other member functions of the ``COM`` class,
-                this function _optimizes_ the Rx FFE tap weights when they are not provided.
-
-        ToDo:
-            1. Integrate MMSE, for less confusing code structure/flow.
+            2. When not provided, the values for ``gDC`` and ``gDC2`` are taken from the `COM` instance.
+            3. Unlike other member functions of the `COM` class,
+                this function **optimizes** the Rx FFE tap weights when they are not provided.
         """
 
         # Honor any mode overrides.
@@ -997,79 +991,107 @@ class COM():
         # Copy instance variables.
         L = self.L
         M = self.nspui
+        times = self.times
         freqs = self.freqs
-        chnls = self.chnls
         nDFE = len(self.bmin)
+        nRxTaps = self.nRxTaps
+        nRxPreTaps = self.nRxPreTaps
+        rx_taps_min = self.rx_taps_min
+        rx_taps_max = self.rx_taps_max
+        bmin = self.bmin
+        bmax = self.bmax
+        tb = 1 / self.fb
 
-        # Step a - Pulse response construction.
-        pulse_resps = self.gen_pulse_resps(chnls, tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0])  # Assumes no Rx FFE.
-        if self.nRxTaps:
-            if rx_taps is None:
-                rx_taps, dfe_taps, pr_samps = przf(
-                    pulse_resps[0], M, self.nRxTaps, self.nRxPreTaps, nDFE,
-                    self.rx_taps_min, self.rx_taps_max, self.bmin, self.bmax,
-                    norm_mode=norm_mode, unit_amp=unit_amp)
-            pulse_resps = self.gen_pulse_resps(chnls, tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps))
+        pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
+            tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0], dfe_taps=[])
+        match opt_mode:
+            case OptMode.PRZF:
+                # Step a - Pulse response construction.
+                if nRxTaps:              # If we have an Rx FFE...
+                    if rx_taps is None:  # If we received no explicit override of the Rx FFE tap weight values,
+                        rx_taps, dfe_taps, pr_samps = przf(  # then optimize them.
+                            pulse_resps_preFFE[0], M, nRxTaps, nRxPreTaps, nDFE,
+                            rx_taps_min, rx_taps_max, bmin, bmax,
+                            norm_mode=norm_mode, unit_amp=unit_amp)
+                    pulse_resps = self.gen_pulse_resps(
+                        tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps), dfe_taps=[])
 
-        # Step b - Cursor identification.
-        try:
-            vic_pulse_resp = array(pulse_resps[0])
-        except Exception:
-            print(len(pulse_resps), len(chnls))
-            raise
-        vic_peak_loc = np.argmax(vic_pulse_resp)
-        cursor_ix = self.loc_curs(vic_pulse_resp)
+                # Step b - Cursor identification.
+                vic_pulse_resp = array(pulse_resps[0])  # Note: Includes any Rx FFE, but not DFE.
+                vic_peak_loc = np.argmax(vic_pulse_resp)
+                cursor_ix = self.loc_curs(vic_pulse_resp)
 
-        # Step c - As.
-        vic_curs_val = vic_pulse_resp[cursor_ix]
-        As = self.RLM * vic_curs_val / (L - 1)
+                # Step c - As.
+                vic_curs_val = vic_pulse_resp[cursor_ix]
+                As = self.RLM * vic_curs_val / (L - 1)
 
-        # Step d - Tx noise.
-        varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
-        varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)  # (93A-30)
+                # Step d - Tx noise.
+                varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
+                varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)  # (93A-30)
 
-        # Step e - ISI.
-        # This is not compliant to the standaard, but is consistent w/ v2.60 of MATLAB code.
-        n_pre = cursor_ix // M
-        first_pre_ix = cursor_ix - n_pre * M
-        vic_pulse_resp_isi_samps = np.concatenate((vic_pulse_resp[first_pre_ix:cursor_ix:M],
-                                                   vic_pulse_resp[cursor_ix + M::M]))
-        vic_pulse_resp_post_samps = vic_pulse_resp_isi_samps[n_pre:]
-        dfe_tap_weights = np.maximum(  # (93A-26)
-            self.bmin,
-            np.minimum(
-                self.bmax,
-                (vic_pulse_resp_post_samps[:nDFE] / vic_curs_val)))
-        hISI = vic_pulse_resp_isi_samps \
-             - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
-                                     (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
-                                     mode='constant',
-                                     constant_values=0)  # (93A-27)
-        varISI = varX * sum(hISI**2)  # (93A-31)
-        self.dbg['vic_pulse_resp_isi_samps'] = vic_pulse_resp_isi_samps
-        self.dbg['vic_pulse_resp_post_samps'] = vic_pulse_resp_post_samps
-        self.dbg['hISI'] = hISI
+                # Step e - ISI.
+                # This is not compliant to the standaard, but is consistent w/ v2.60 of MATLAB code.
+                n_pre = cursor_ix // M
+                first_pre_ix = cursor_ix - n_pre * M
+                vic_pulse_resp_isi_samps = np.concatenate((vic_pulse_resp[first_pre_ix:cursor_ix:M],
+                                                           vic_pulse_resp[cursor_ix + M::M]))
+                vic_pulse_resp_post_samps = vic_pulse_resp_isi_samps[n_pre:]
+                dfe_tap_weights = np.maximum(  # (93A-26)
+                    self.bmin,
+                    np.minimum(
+                        self.bmax,
+                        (vic_pulse_resp_post_samps[:nDFE] / vic_curs_val)))
+                hISI = vic_pulse_resp_isi_samps \
+                     - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
+                                             (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
+                                             mode='constant',
+                                             constant_values=0)  # (93A-27)
+                varISI = varX * sum(hISI**2)  # (93A-31)
 
-        # Step f - Jitter noise.
-        hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
-        varJ = (self.Add**2 + self.sigma_Rj**2) * varX * sum(hJ**2)  # (93A-32)
+                # Step f - Jitter noise.
+                hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
+                varJ = (self.Add**2 + self.sigma_Rj**2) * varX * sum(hJ**2)  # (93A-32)
 
-        # Step g - Crosstalk.
-        varXT = 0
-        for pulse_resp in pulse_resps[1:]:  # (93A-34)
-            varXT += max([sum(array(self.filt_pr_samps(pulse_resp[m::M], As))**2) for m in range(M)])  # (93A-33)
-        varXT *= varX
+                # Step g - Crosstalk.
+                varXT = 0
+                for pulse_resp in pulse_resps[1:]:  # (93A-34)
+                    varXT += max([sum(array(self.filt_pr_samps(pulse_resp[m::M], As))**2) for m in range(M)])  # (93A-33)
+                varXT *= varX
 
-        # Step h - Spectral noise.
-        df = freqs[1]
-        varN = (self.eta0 / 1e9) * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * df  # (93A-35)
+                # Step h - Spectral noise.
+                df = freqs[1]
+                varN = (self.eta0 / 1e9) * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * df  # (93A-35)
 
-        # Step i - FOM calculation.
-        # fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
-        fom = -10 * np.log10(varTx + varISI + varJ + varXT + varN)  # Assumes unit peak victim pulse response amplitude.
+                # Step i - FOM calculation.
+                fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
+                # fom = -10 * np.log10(varTx + varISI + varJ + varXT + varN)  # Assumes unit peak victim pulse response amplitude.
+
+            case OptMode.MMSE:
+                theNoiseCalc = NoiseCalc(
+                    L, tb, 0, times, pulse_resps_preFFE[0], pulse_resps_preFFE[1:],
+                    freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.calc_Hctf(gDC, gDC2),
+                    self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
+                rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, self.Nb, self.RLM, self.L,
+                            bmin, bmax, rx_taps_min, rx_taps_max, norm_mode=norm_mode)
+                fom = rslt["fom"]
+                rx_taps = rslt["rx_taps"]
+                dfe_tap_weights = rslt["dfe_tap_weights"]
+                pr_samps = rslt["h"]
+                vic_pulse_resp = rslt["vic_pulse_resp"]  # Note: Does not include Rx FFE/DFE!
+                vic_peak_loc = np.argmax(vic_pulse_resp)
+                cursor_ix = rslt["cursor_ix"]
+                As = 1.0
+                varTx = rslt["varTx"]
+                varISI = rslt["varISI"]
+                varJ = rslt["varJ"]
+                varXT = rslt["varXT"]
+                varN = rslt["varN"]
+                self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else None
+            case _:
+                raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
 
         # Stash our calculation results.
-        self.fom_rslts['pulse_resps'] = pulse_resps
+        self.fom_rslts['pulse_resps'] = pulse_resps_preFFE
         self.fom_rslts['vic_pulse_resp'] = vic_pulse_resp
         self.fom_rslts['vic_peak_loc'] = vic_peak_loc
         self.fom_rslts['cursor_ix'] = cursor_ix
@@ -1130,50 +1152,20 @@ class COM():
 
             fom_max = -1000.0
             fom_max_changed = False
-            foms = []
             for gDC2 in self.gDC2_vals:
                 for gDC in self.gDC_vals:
                     for tx_taps in self.tx_combs:
                         if not check_taps(array(tx_taps)):
                             continue
-                        match opt_mode:  # ToDo: Can we invert this, moving the `match opt_mode` inside `calc_fom()`?
-                            case OptMode.PRZF:
-                                fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2, opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
-                                rx_taps = self.fom_rslts['rx_taps']
-                                pr_samps = self.fom_rslts['pr_samps']
-                            case OptMode.MMSE:
-                                pulse_resps = self.gen_pulse_resps(tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0], dfe_taps=[])
-                                theNoiseCalc = NoiseCalc(
-                                    self.L, 1/self.fb, 0, self.times, pulse_resps[0], pulse_resps[1:],
-                                    self.freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.calc_Hctf(gDC, gDC2),
-                                    self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
-                                rslt = mmse(theNoiseCalc, self.nRxTaps, self.nRxPreTaps, self.Nb, self.RLM, self.L,
-                                            self.bmin, self.bmax, self.rx_taps_min, self.rx_taps_max, norm_mode=norm_mode)
-                                fom = rslt["fom"]
-                                rx_taps = rslt["rx_taps"]
-                                pr_samps = rslt["h"]
-                                # In the PRZF branch, these are set by calc_fom().
-                                self.fom_rslts['dfe_tap_weights'] = rslt["dfe_tap_weights"]
-                                self.fom_rslts['vic_pulse_resp'] = rslt["vic_pulse_resp"]
-                                self.fom_rslts['cursor_ix'] = rslt["cursor_ix"]
-                                self.fom_rslts['As'] = self.RLM * rslt["vic_pulse_resp"][rslt["cursor_ix"]] / (self.L - 1)
-                                self.fom_rslts['varTx'] = rslt["varTx"]
-                                self.fom_rslts['varISI'] = rslt["varISI"]
-                                self.fom_rslts['varJ'] = rslt["varJ"]
-                                self.fom_rslts['varXT'] = rslt["varXT"]
-                                self.fom_rslts['varN'] = rslt["varN"]
-                                self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else 0
-                            case _:
-                                raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
-                        foms.append(fom)
+                        fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2, opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
                         if fom > fom_max:
                             fom_max_changed = True
                             fom_max = fom
                             gDC2_best = gDC2
                             gDC_best = gDC
                             tx_taps_best = tx_taps
-                            rx_taps_best = rx_taps
-                            pr_samps_best = pr_samps
+                            rx_taps_best = self.fom_rslts['rx_taps']
+                            pr_samps_best = self.fom_rslts['pr_samps']
                             dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
                             cursor_ix_best = self.fom_rslts['cursor_ix']
                             As_best = self.fom_rslts['As']
@@ -1184,14 +1176,9 @@ class COM():
                             varN_best = self.fom_rslts['varN']
                             vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
                             mse_best = self.fom_rslts['mse'] if 'mse' in self.fom_rslts else 0
-                            # TEMPORARY DEBUGGING ONLY!:
-                            if opt_mode == OptMode.MMSE:
-                                self.mmse_rslt = rslt
-                                self.theNoiseCalc = theNoiseCalc
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
             fom = self.calc_fom(tx_taps)
-            foms = [fom]
             fom_max = fom
             fom_max_changed = True
             gDC2_best = self.gDC2
@@ -1228,7 +1215,6 @@ class COM():
         # These two are also calculated by `calc_noise()`, but are not overwritten.
         self.sigma_Tx = np.sqrt(varTx_best)
         self.sigma_N = np.sqrt(varN_best)
-        self.foms = foms
         self.vic_pulse_resp = vic_pulse_resp
         self.rslts['fom'] = fom_max
         self.rslts['gDC'] = gDC_best
