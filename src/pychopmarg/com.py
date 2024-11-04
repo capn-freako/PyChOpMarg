@@ -984,6 +984,9 @@ class COM():
 
         ToDo:
             1. Integrate MMSE, for less confusing code structure/flow.
+            2. Unify the returned victim pulse response. Currently,
+                - PRZF includes any Rx FFE, but not the DFE, while
+                - MMSE includes neither.
         """
 
         # Honor any mode overrides.
@@ -1006,84 +1009,94 @@ class COM():
         bmax = self.bmax
         tb = 1 / self.fb
 
-        # Step a - Pulse response construction.
-        pulse_resps = self.gen_pulse_resps(tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0], dfe_taps=[])  # Assumes no Rx FFE/DFE.
-        if nRxTaps:
-            if rx_taps is None:
-                match opt_mode:
-                    case OptMode.PRZF:
-                        rx_taps, dfe_taps, pr_samps = przf(
+        pulse_resps = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
+            tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0], dfe_taps=[])
+        match opt_mode:
+            case OptMode.PRZF:
+                # Step a - Pulse response construction.
+                if nRxTaps:              # If we have an Rx FFE...
+                    if rx_taps is None:  # If we received no explicit override of the Rx FFE tap weight values,
+                        rx_taps, dfe_taps, pr_samps = przf(  # then optimize them.
                             pulse_resps[0], M, nRxTaps, nRxPreTaps, nDFE,
                             rx_taps_min, rx_taps_max, bmin, bmax,
                             norm_mode=norm_mode, unit_amp=unit_amp)
-                    case OptMode.MMSE:
-                        theNoiseCalc = NoiseCalc(
-                            L, tb, 0, times, pulse_resps[0], pulse_resps[1:],
-                            freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.calc_Hctf(gDC, gDC2),
-                            self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
-                        rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, self.Nb, self.RLM, self.L,
-                                    bmin, bmax, rx_taps_min, rx_taps_max, norm_mode=norm_mode)
-                        fom = rslt["fom"]
-                        rx_taps = rslt["rx_taps"]
-                        pr_samps = rslt["h"]
-                        self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else None
-                    case _:
-                        raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
+                    pulse_resps = self.gen_pulse_resps(
+                        tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps), dfe_taps=[])
 
-            pulse_resps = self.gen_pulse_resps(tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps))
+                # Step b - Cursor identification.
+                vic_pulse_resp = array(pulse_resps[0])  # Note: Includes any Rx FFE, but not DFE.
+                vic_peak_loc = np.argmax(vic_pulse_resp)
+                cursor_ix = self.loc_curs(vic_pulse_resp)
 
-        # WORKING HERE.
-        # Do the following steps get run only in PRZF mode?
-        
-        # Step b - Cursor identification.
-        vic_pulse_resp = array(pulse_resps[0])
-        vic_peak_loc = np.argmax(vic_pulse_resp)
-        cursor_ix = self.loc_curs(vic_pulse_resp)
+                # Step c - As.
+                vic_curs_val = vic_pulse_resp[cursor_ix]
+                As = self.RLM * vic_curs_val / (L - 1)
 
-        # Step c - As.
-        vic_curs_val = vic_pulse_resp[cursor_ix]
-        As = self.RLM * vic_curs_val / (L - 1)
+                # Step d - Tx noise.
+                varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
+                varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)  # (93A-30)
 
-        # Step d - Tx noise.
-        varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
-        varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)  # (93A-30)
+                # Step e - ISI.
+                # This is not compliant to the standaard, but is consistent w/ v2.60 of MATLAB code.
+                n_pre = cursor_ix // M
+                first_pre_ix = cursor_ix - n_pre * M
+                vic_pulse_resp_isi_samps = np.concatenate((vic_pulse_resp[first_pre_ix:cursor_ix:M],
+                                                           vic_pulse_resp[cursor_ix + M::M]))
+                vic_pulse_resp_post_samps = vic_pulse_resp_isi_samps[n_pre:]
+                dfe_tap_weights = np.maximum(  # (93A-26)
+                    self.bmin,
+                    np.minimum(
+                        self.bmax,
+                        (vic_pulse_resp_post_samps[:nDFE] / vic_curs_val)))
+                hISI = vic_pulse_resp_isi_samps \
+                     - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
+                                             (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
+                                             mode='constant',
+                                             constant_values=0)  # (93A-27)
+                varISI = varX * sum(hISI**2)  # (93A-31)
 
-        # Step e - ISI.
-        # This is not compliant to the standaard, but is consistent w/ v2.60 of MATLAB code.
-        n_pre = cursor_ix // M
-        first_pre_ix = cursor_ix - n_pre * M
-        vic_pulse_resp_isi_samps = np.concatenate((vic_pulse_resp[first_pre_ix:cursor_ix:M],
-                                                   vic_pulse_resp[cursor_ix + M::M]))
-        vic_pulse_resp_post_samps = vic_pulse_resp_isi_samps[n_pre:]
-        dfe_tap_weights = np.maximum(  # (93A-26)
-            self.bmin,
-            np.minimum(
-                self.bmax,
-                (vic_pulse_resp_post_samps[:nDFE] / vic_curs_val)))
-        hISI = vic_pulse_resp_isi_samps \
-             - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
-                                     (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
-                                     mode='constant',
-                                     constant_values=0)  # (93A-27)
-        varISI = varX * sum(hISI**2)  # (93A-31)
+                # Step f - Jitter noise.
+                hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
+                varJ = (self.Add**2 + self.sigma_Rj**2) * varX * sum(hJ**2)  # (93A-32)
 
-        # Step f - Jitter noise.
-        hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
-        varJ = (self.Add**2 + self.sigma_Rj**2) * varX * sum(hJ**2)  # (93A-32)
+                # Step g - Crosstalk.
+                varXT = 0
+                for pulse_resp in pulse_resps[1:]:  # (93A-34)
+                    varXT += max([sum(array(self.filt_pr_samps(pulse_resp[m::M], As))**2) for m in range(M)])  # (93A-33)
+                varXT *= varX
 
-        # Step g - Crosstalk.
-        varXT = 0
-        for pulse_resp in pulse_resps[1:]:  # (93A-34)
-            varXT += max([sum(array(self.filt_pr_samps(pulse_resp[m::M], As))**2) for m in range(M)])  # (93A-33)
-        varXT *= varX
+                # Step h - Spectral noise.
+                df = freqs[1]
+                varN = (self.eta0 / 1e9) * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * df  # (93A-35)
 
-        # Step h - Spectral noise.
-        df = freqs[1]
-        varN = (self.eta0 / 1e9) * sum(abs(self.Hr * self.calc_Hctf(gDC=gDC, gDC2=gDC2))**2) * df  # (93A-35)
+                # Step i - FOM calculation.
+                fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
+                # fom = -10 * np.log10(varTx + varISI + varJ + varXT + varN)  # Assumes unit peak victim pulse response amplitude.
 
-        # Step i - FOM calculation.
-        fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
-        # fom = -10 * np.log10(varTx + varISI + varJ + varXT + varN)  # Assumes unit peak victim pulse response amplitude.
+            case OptMode.MMSE:
+                theNoiseCalc = NoiseCalc(
+                    L, tb, 0, times, pulse_resps[0], pulse_resps[1:],
+                    freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.calc_Hctf(gDC, gDC2),
+                    self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
+                rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, self.Nb, self.RLM, self.L,
+                            bmin, bmax, rx_taps_min, rx_taps_max, norm_mode=norm_mode)
+                fom = rslt["fom"]
+                rx_taps = rslt["rx_taps"]
+                dfe_tap_weights = rslt["dfe_tap_weights"]
+                pr_samps = rslt["h"]
+                vic_pulse_resp = rslt["vic_pulse_resp"]  # Note: Does not include Rx FFE/DFE!
+                vic_peak_loc = np.argmax(vic_pulse_resp)
+                pulse_resps = [vic_pulse_resp] + theNoiseCalc.agg_pulse_resps
+                cursor_ix = rslt["cursor_ix"]
+                As = 1.0
+                varTx = rslt["varTx"]
+                varISI = rslt["varISI"]
+                varJ = rslt["varJ"]
+                varXT = rslt["varXT"]
+                varN = rslt["varN"]
+                self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else None
+            case _:
+                raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
 
         # Stash our calculation results.
         self.fom_rslts['pulse_resps'] = pulse_resps

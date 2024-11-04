@@ -134,7 +134,7 @@ def clip_taps(
 def przf(
     pulse_resp: Rvec, nspui: int, nTaps: int, nPreTaps: int, nDFETaps: int,
     tap_mins: Rvec, tap_maxs: Rvec, b_min: Rvec, b_max: Rvec,
-    norm_mode: NormMode = NormMode.Unaltered, unit_amp: bool = False
+    norm_mode: NormMode = NormMode.P8023dj, unit_amp: bool = False
 ) -> Rvec:
     """
     Optimize FFE tap weights, via _Pulse Response Zero Forcing_ (PRZF).
@@ -235,7 +235,7 @@ def przf(
 def mmse(
     theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
-    ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.Unaltered
+    ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj
 ) -> dict[str, Any]:
     """
     Optimize Rx FFE tap weights, via _Minimum Mean Squared Error_ (MMSE).
@@ -308,7 +308,6 @@ def mmse(
         R = H.T @ H + toeplitz(Rn) / varX
         Ib = identity(Nb)
         zb = zeros(Nb)
-
         A = concatenate((concatenate(( R, -Hb.T,         -h0.reshape((Nw, 1))), axis=1),
                          concatenate((-Hb, ones((Nb, 1)), zeros((Nb, 1))),      axis=1),
                          concatenate(( h0, zeros(2))).reshape((1, Nw + 2))))
@@ -358,7 +357,7 @@ def mmse(
             rslt["hit_b_limit"] = hit_b_limit
             rslt["rx_taps"] = w_lim
             rslt["dfe_tap_weights"] = b_lim
-            rslt["vic_pulse_resp"] = vic_pr
+            rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
             rslt["cursor_ix"] = ts_ix
             df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
             rslt["varTx"] = sum(theNoiseCalc.Stn) * df

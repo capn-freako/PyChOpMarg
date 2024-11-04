@@ -20,27 +20,27 @@ class NoiseCalc():
     "Noise calculator for COM"
 
     # Independent variables, set during instance initialization.
-    L               = int(4)                # Number of modulation levels.
-    Tb              = float(9.412e-12)      # UI (s)
-    ts_ix           = int(0)                # Main pulse sampling index
+    L               = int(4)                     # Number of modulation levels.
+    Tb              = float(9.412e-12)           # UI (s)
+    ts_ix           = int(0)                     # Main pulse sampling index
     t               = array([0], dtype=float)    # System time vector (s)
     vic_pulse_resp  = array([0], dtype=float)    # Victim pulse response (V)
-    agg_pulse_resps = list()                # Aggressor pulse responses (V)
+    agg_pulse_resps = list()                     # Aggressor pulse responses (V)
     f               = array([0], dtype=float)    # System frequency vector (Hz)
     Ht              = array([0], dtype=complex)  # Transfer function of Tx output driver risetime
     H21             = array([0], dtype=complex)  # Transfer function of terminated interconnect
     Hr              = array([0], dtype=complex)  # Transfer function of Rx AFE
     Hctf            = array([0], dtype=complex)  # Transfer function of Rx CTLE
-    eta0            = float(0)              # Noise density at Rx AFE input (V^2/GHz)
-    Av              = float(0.6)            # Victim drive level (V)
-    snr_tx          = float(25)             # Tx signal-to-noise ratio (dB)
-    Add             = float(0)              # Dual-Dirac peak amplitude (V)
-    sigma_Rj        = float(0)              # Dual-Dirac random stdev (V)
+    eta0            = float(0)                   # Noise density at Rx AFE input (V^2/GHz)
+    Av              = float(0.6)                 # Victim drive level (V)
+    snr_tx          = float(25)                  # Tx signal-to-noise ratio (dB)
+    Add             = float(0)                   # Dual-Dirac peak amplitude (V)
+    sigma_Rj        = float(0)                   # Dual-Dirac random stdev (V)
 
     # Invariant dependent variables, set during instance initialization.
-    fN       = float(53.125e9)       # Nyquist frequency (Hz)
-    nspui    = int(32)               # Number of samples per UI
-    varX     = float(0)              # Signal power (V^2)
+    fN       = float(53.125e9)            # Nyquist frequency (Hz)
+    nspui    = int(32)                    # Number of samples per UI
+    varX     = float(0)                   # Signal power (V^2)
     t_irfft  = array([0], dtype=float)    # Time vector for indexing `irfft()` result.
 
     def __init__(self, L: int, Tb: float, ts_ix: int, t: Rvec,
