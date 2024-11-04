@@ -947,7 +947,7 @@ class COM():
         unit_amp: Optional[bool] = None
     ) -> float:
         """
-        Calculate the *figure of merit* (FOM), given the existing linear EQ settings.
+        Calculate the **figure of merit** (FOM), given the existing linear EQ settings.
         Optimize Rx FFE taps if they aren't specified by caller.
 
         Args:
@@ -956,19 +956,18 @@ class COM():
 
         Keyword Args:
             gDC: CTLE first stage d.c. gain.
-                Default: None (i.e. - Use `self.gDC`.)
+                Default: None (i.e. - Use ``self.gDC``.)
             gDC2: CTLE second stage d.c. gain.
-                Default: None (i.e. - Use `self.gDC2`.)
+                Default: None (i.e. - Use ``self.gDC2``.)
             rx_taps: Rx FFE tap weight overrides.
                 Default: None (i.e. - Optimize Rx FFE tap weights.)
             opt_mode: Optimization mode.
-                Default: None (i.e. - Use `self.opt_mode`.)
-                Note: Currently, unused; see `ToDo` #1, below.
+                Default: None (i.e. - Use ``self.opt_mode``.)
             norm_mode: The tap weight normalization mode to use.
-                Default: None (i.e. - Use `self.norm_mode`.)
+                Default: None (i.e. - Use ``self.norm_mode``.)
             unit_amp: Enforce unit pulse response amplitude when True.
-                (For comparing `przf()` results to `mmse()` results.)
-                Default: None (i.e. - Use `self.unit_amp`.)
+                (For comparing `optimize.przf()` results to `optimize.mmse()` results.)
+                Default: None (i.e. - Use ``self.unit_amp``.)
 
         Returns:
             The resultant figure of merit.
@@ -978,15 +977,9 @@ class COM():
 
         Notes:
             1. See: IEEE 802.3-2022 93A.1.6.
-            2. When not provided, the values for `gDC` and `gDC2` are taken from the `COM` instance.
-            3. Unlike other member functions of the ``COM`` class,
-                this function _optimizes_ the Rx FFE tap weights when they are not provided.
-
-        ToDo:
-            1. Integrate MMSE, for less confusing code structure/flow.
-            2. Unify the returned victim pulse response. Currently,
-                - PRZF includes any Rx FFE, but not the DFE, while
-                - MMSE includes neither.
+            2. When not provided, the values for ``gDC`` and ``gDC2`` are taken from the `COM` instance.
+            3. Unlike other member functions of the `COM` class,
+                this function **optimizes** the Rx FFE tap weights when they are not provided.
         """
 
         # Honor any mode overrides.
@@ -1009,7 +1002,7 @@ class COM():
         bmax = self.bmax
         tb = 1 / self.fb
 
-        pulse_resps = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
+        pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
             tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0], dfe_taps=[])
         match opt_mode:
             case OptMode.PRZF:
@@ -1017,7 +1010,7 @@ class COM():
                 if nRxTaps:              # If we have an Rx FFE...
                     if rx_taps is None:  # If we received no explicit override of the Rx FFE tap weight values,
                         rx_taps, dfe_taps, pr_samps = przf(  # then optimize them.
-                            pulse_resps[0], M, nRxTaps, nRxPreTaps, nDFE,
+                            pulse_resps_preFFE[0], M, nRxTaps, nRxPreTaps, nDFE,
                             rx_taps_min, rx_taps_max, bmin, bmax,
                             norm_mode=norm_mode, unit_amp=unit_amp)
                     pulse_resps = self.gen_pulse_resps(
@@ -1075,7 +1068,7 @@ class COM():
 
             case OptMode.MMSE:
                 theNoiseCalc = NoiseCalc(
-                    L, tb, 0, times, pulse_resps[0], pulse_resps[1:],
+                    L, tb, 0, times, pulse_resps_preFFE[0], pulse_resps_preFFE[1:],
                     freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.calc_Hctf(gDC, gDC2),
                     self.eta0, self.Av, self.TxSNR, self.Add, self.sigma_Rj)
                 rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, self.Nb, self.RLM, self.L,
@@ -1086,7 +1079,6 @@ class COM():
                 pr_samps = rslt["h"]
                 vic_pulse_resp = rslt["vic_pulse_resp"]  # Note: Does not include Rx FFE/DFE!
                 vic_peak_loc = np.argmax(vic_pulse_resp)
-                pulse_resps = [vic_pulse_resp] + theNoiseCalc.agg_pulse_resps
                 cursor_ix = rslt["cursor_ix"]
                 As = 1.0
                 varTx = rslt["varTx"]
@@ -1099,7 +1091,7 @@ class COM():
                 raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")                    
 
         # Stash our calculation results.
-        self.fom_rslts['pulse_resps'] = pulse_resps
+        self.fom_rslts['pulse_resps'] = pulse_resps_preFFE
         self.fom_rslts['vic_pulse_resp'] = vic_pulse_resp
         self.fom_rslts['vic_peak_loc'] = vic_peak_loc
         self.fom_rslts['cursor_ix'] = cursor_ix
