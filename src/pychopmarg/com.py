@@ -140,6 +140,7 @@ class COM():
     vic_chnl_ix = int(1)
     # - Results
     # -- COM
+    # ToDo: Clean up unused attributes.
     com = float(0.0)
     com_As = float(0.0)
     com_cursor_ix = int(0)
@@ -395,7 +396,6 @@ class COM():
             return []
         _ntwks = list(map(self.add_pkg, ntwks))
         pulse_resps_noeq = self.gen_pulse_resps(_ntwks, apply_eq=False)
-        self.rslts['vic_pulse_pk'] = max(pulse_resps_noeq[0]) * 1_000  # (mV)
         self.pulse_resps_noeq = pulse_resps_noeq
         return _ntwks
 
@@ -423,7 +423,7 @@ class COM():
 
         self.debug = debug
 
-        self.rslts = {}
+        self.com_rslts = {}
         self.fom_rslts = {}
         self.dbg = {}
 
@@ -516,12 +516,7 @@ class COM():
         self.set_status("Calculating noise...")
         As, Ani, self.cursor_ix = self.calc_noise(dbg_dict=dbg_dict)
         com = 20 * np.log10(As / Ani)
-        self.As = As
-        self.Ani = Ani
         self.com = com
-        self.rslts['com'] = com
-        self.rslts['As'] = As * 1e3
-        self.rslts['Ani'] = Ani * 1e3
         self.set_status(f"Ready; COM = {com: 5.1f} dB")
         return com
 
@@ -1198,33 +1193,23 @@ class COM():
 
         # Check for error and save the best results.
         if not fom_max_changed:
-            return False
+            return False  # Flags the caller that the next 5 settings have NOT been made.
         self.fom = fom_max
-        self.mse = mse_best
-        self.gDC2 = gDC2_best
-        self.gDC = gDC_best
-        self.tx_taps = tx_taps_best
-        self.rx_taps = rx_taps_best
-        self.pr_samps = pr_samps_best
+        self.gDC2     = gDC2_best
+        self.gDC      = gDC_best
+        self.tx_taps  = tx_taps_best
+        self.rx_taps  = rx_taps_best
         self.dfe_taps = dfe_tap_weights_best
-        self.fom_cursor_ix = cursor_ix_best
-        self.fom_As = As_best
-        self.sigma_ISI = np.sqrt(varISI_best)
-        self.sigma_J = np.sqrt(varJ_best)
-        self.sigma_XT = np.sqrt(varXT_best)
-        # These two are also calculated by `calc_noise()`, but are not overwritten.
-        self.sigma_Tx = np.sqrt(varTx_best)
-        self.sigma_N = np.sqrt(varN_best)
-        self.vic_pulse_resp = vic_pulse_resp
-        self.rslts['fom'] = fom_max
-        self.rslts['gDC'] = gDC_best
-        self.rslts['gDC2'] = gDC2_best
-        self.rslts['tx_taps'] = tx_taps_best[2:4]
-        self.rslts['rx_taps'] = rx_taps_best
-        self.rslts['dfe_taps'] = dfe_tap_weights_best
-        self.rslts['sigma_ISI'] = self.sigma_ISI * 1e3
-        self.rslts['sigma_XT'] = self.sigma_XT * 1e3
-        self.rslts['sigma_J'] = self.sigma_J * 1e3
+        self.fom_rslts['mse']            = mse_best
+        self.fom_rslts['pr_samps']       = pr_samps_best
+        self.fom_rslts['cursor_ix']      = cursor_ix_best
+        self.fom_rslts['As']             = As_best
+        self.fom_rslts['sigma_ISI']      = np.sqrt(varISI_best)
+        self.fom_rslts['sigma_J']        = np.sqrt(varJ_best)
+        self.fom_rslts['sigma_XT']       = np.sqrt(varXT_best)
+        self.fom_rslts['sigma_Tx']       = np.sqrt(varTx_best)
+        self.fom_rslts['sigma_N']        = np.sqrt(varN_best)
+        self.fom_rslts['vic_pulse_resp'] = vic_pulse_resp
         return True
 
     def calc_noise(self,
@@ -1265,7 +1250,7 @@ class COM():
                 - tx_taps
                 - rx_taps
                 (This assumption is embedded into the `gen_pulse_resps()` function.)
-            2. Warns if `2*As/npts` rises above 10 uV, against standard's recommendation.
+            2. Fills in the `com_results` dictionary w/ various useful values for debugging.
         """
 
         # Honor any mode overrides.
@@ -1302,9 +1287,6 @@ class COM():
         varTx = vic_curs_val**2 * pow(10, -self.TxSNR / 10)                 # (93A-30)
         hJ = self.calc_hJ(vic_pulse_resp, As, cursor_ix)
         _, pJ = delta_pmf(self.Add * hJ, L=L, RLM=RLM, y=y)
-        self.dbg['pJ'] = pJ
-        self.dbg['hJ'] = hJ
-        self.dbg['Hrx'] = Hrx
         varG = varTx + self.sigma_Rj**2 * varX * sum(hJ**2) + varN          # (93A-41)
         pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep     # (93A-42), but converted to PMF.
         pN = np.convolve(pG, pJ, mode='same')                               # (93A-43)
@@ -1326,26 +1308,13 @@ class COM():
                 (hISI[dfe_slice] / vic_curs_val)))
         hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val
         hISI *= As
-        try:
-            _, py = delta_pmf(hISI, L=L, RLM=RLM, y=y, dbg_dict=dbg_dict)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
-        except:
-            dbg_dict.update({
-                "tISI":  tISI,
-                "hISI":  hISI,
-                "n_pre": n_pre,
-                "dfe_tap_weights": dfe_tap_weights,
-                "vic_curs_val": vic_curs_val,
-                "vic_pulse_resp": vic_pulse_resp,
-            })
-            raise
+        _, pISI = delta_pmf(hISI, L=L, RLM=RLM, y=y, dbg_dict=dbg_dict)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
         varISI = varX * sum(hISI**2)  # (93A-31)
-        self.com_tISI = tISI
-        self.com_hISI = hISI
 
         # - Crosstalk
-        self.rslts['py0'] = py.copy()  # For debugging.
         xt_samps = []
         pks = []  # For debugging.
+        py = pISI.copy()
         for pulse_resp in pulse_resps[1:]:  # (93A-44)
             i = np.argmax([sum(array(pulse_resp[m::M])**2) for m in range(M)])  # (93A-33)
             samps = pulse_resp[i::M]
@@ -1353,38 +1322,39 @@ class COM():
             _, pk = delta_pmf(samps, L=L, RLM=RLM, y=y)  # For debugging.
             pks.append(pk)
             py = np.convolve(py, pk, mode='same')
-        self.rslts['py1'] = py.copy()  # For debugging.
-        self.xt_samps = xt_samps
-        self.pks = pks
         py = np.convolve(py, pN, mode='same')  # (93A-45)
 
         # Final calculation
         Py = np.cumsum(py)
         Py /= Py[-1]  # Enforce cumulative probability distribution.
+        Ani = -y[np.where(Py >= self.DER0)[0][0]]  # ToDo: `DER0 / 2`?
 
         # Store some results.
-        self.pulse_resps   = pulse_resps
-        self.com_cursor_ix = cursor_ix
-        self.com_sigma_Tx  = np.sqrt(varTx)
-        self.com_sigma_G   = np.sqrt(varG)
-        self.com_sigma_N   = np.sqrt(varN)
-        self.com_sigma_ISI = np.sqrt(varISI)
-        self.rslts['pG'] = pG
-        self.rslts['pN'] = pN
-        self.rslts['py'] = py
-        self.rslts['Py'] = Py
-        self.rslts['y']  = y
-        self.dfe_taps = dfe_tap_weights
-        self.com_As = As
-        self.rslts['sigma_G']   = self.com_sigma_G  * 1e3
-        self.rslts['sigma_Tx']  = self.com_sigma_Tx * 1e3
-        self.rslts['sigma_N']   = self.com_sigma_N  * 1e3
-        self.rslts['sigma_ISI'] = self.com_sigma_ISI  * 1e3
+        self.com_rslts['As']          = As
+        self.com_rslts['Ani']         = Ani
+        self.com_rslts['pulse_resps'] = pulse_resps
+        self.com_rslts['cursor_ix']   = cursor_ix
+        self.com_rslts['sigma_Tx']    = np.sqrt(varTx)
+        self.com_rslts['sigma_G']     = np.sqrt(varG)
+        self.com_rslts['sigma_N']     = np.sqrt(varN)
+        self.com_rslts['sigma_ISI']   = np.sqrt(varISI)
+        self.com_rslts['tISI']        = tISI
+        self.com_rslts['hISI']        = hISI
+        self.com_rslts['pG']          = pG
+        self.com_rslts['pN']          = pN
+        self.com_rslts['pJ']          = pJ
+        self.com_rslts['pISI']        = pISI
+        self.com_rslts['py']          = py
+        self.com_rslts['Py']          = Py
+        self.com_rslts['y']           = y
+        self.com_rslts['pks']         = pks
+        self.com_rslts['dfe_taps']    = dfe_tap_weights
+        self.com_rslts['xt_samps']    = xt_samps
 
-        return (As,
-                -y[np.where(Py >= self.DER0)[0][0]],  # ToDo: `DER0 / 2`?
-                cursor_ix)
+        return (As, Ani, cursor_ix)
 
 if __name__ == "__main__":
     from pychopmarg.cli import cli
-    cli()
+    # cli()
+    print("Sorry, the PyChOpMarg package is currently only usable as a library.")
+    print("It's GUI is currently broken.")
