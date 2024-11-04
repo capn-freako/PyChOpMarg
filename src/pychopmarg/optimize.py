@@ -135,7 +135,7 @@ def przf(
     pulse_resp: Rvec, nspui: int, nTaps: int, nPreTaps: int, nDFETaps: int,
     tap_mins: Rvec, tap_maxs: Rvec, b_min: Rvec, b_max: Rvec,
     norm_mode: NormMode = NormMode.P8023dj, unit_amp: bool = False
-) -> Rvec:
+) -> tuple[Rvec, Rvec, Rvec]:
     """
     Optimize FFE tap weights, via _Pulse Response Zero Forcing_ (PRZF).
 

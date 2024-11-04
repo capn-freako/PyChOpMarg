@@ -32,20 +32,20 @@ from pychopmarg.com import COM
 #         theCOM.configure_traits(view=traits_view)
 
 
-@cli.command(context_settings=dict(help_option_names=["-h", "--help"]))
-@click.argument("config-file", type=click.Path(exists=True))
-@click.option("--results", "-r", type=click.Path(), help="Override the results filename.")
-def run(config_file, results):
-    """
-    Run a COM calculation without opening the GUI.
+# @cli.command(context_settings=dict(help_option_names=["-h", "--help"]))
+# @click.argument("config-file", type=click.Path(exists=True))
+# @click.option("--results", "-r", type=click.Path(), help="Override the results filename.")
+# def run(config_file, results):
+#     """
+#     Run a COM calculation without opening the GUI.
 
-    Will load the CONFIG_FILE from the given filepath, run the
-    COM calculation and then save the results into a file with the same name
-    but a different extension as the configuration file.
-    """
-    theCOM = COM()
-    theCOM.load_configuration(config_file)
-    theCOM.simulate(initial_run=True, update_plots=True)
-    if not results:
-        results = Path(config_file).with_suffix(".pychopmarg_results")
-    theCOM.save_results(results)
+#     Will load the CONFIG_FILE from the given filepath, run the
+#     COM calculation and then save the results into a file with the same name
+#     but a different extension as the configuration file.
+#     """
+#     theCOM = COM()
+#     theCOM.load_configuration(config_file)
+#     theCOM.simulate(initial_run=True, update_plots=True)
+#     if not results:
+#         results = Path(config_file).with_suffix(".pychopmarg_results")
+#     theCOM.save_results(results)

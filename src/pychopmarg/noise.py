@@ -10,10 +10,11 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 
 from numpy                  import argmax, argmin, array, concatenate, diff, mean, roll, sinc, sum, where
 from numpy.fft              import irfft, rfft, fftshift
+from numpy.typing           import NDArray
 from scipy.interpolate      import interp1d
 from scipy.linalg           import toeplitz
 
-from pychopmarg.common      import Rvec, Cvec, Rmat
+from pychopmarg.common      import Rvec, Cvec, Rmat, Real
 
 
 class NoiseCalc():
@@ -25,7 +26,7 @@ class NoiseCalc():
     ts_ix           = int(0)                     # Main pulse sampling index
     t               = array([0], dtype=float)    # System time vector (s)
     vic_pulse_resp  = array([0], dtype=float)    # Victim pulse response (V)
-    agg_pulse_resps = list()                     # Aggressor pulse responses (V)
+    agg_pulse_resps: list[Rvec] = list()         # Aggressor pulse responses (V)
     f               = array([0], dtype=float)    # System frequency vector (Hz)
     Ht              = array([0], dtype=complex)  # Transfer function of Tx output driver risetime
     H21             = array([0], dtype=complex)  # Transfer function of terminated interconnect

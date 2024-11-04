@@ -76,10 +76,10 @@ class COM():
     tx_taps      = array([0] * nTxTaps, dtype=float)  # Tx FFE tap weights.
     c0_min = float(0)  # minimum allowed Tx FFE main tap value.
     fr = float(0.75)  # AFE corner frequency (fb)
-    gDC_vals = list([-x for x in range(13)])  # D.C. gain of Rx CTLE first stage (dB).
-    gDC = int(0)
+    gDC_vals = list([float(-x) for x in range(13)])  # D.C. gain of Rx CTLE first stage (dB).
+    gDC = float(0)
     gDC2_vals = list([0.,])  # D.C. gain of Rx CTLE second stage (dB).
-    gDC2 = int(0)
+    gDC2 = float(0)
     fz = float(FB / 4.)  # CTLE zero frequency.
     fp1 = float(FB / 4.)  # CTLE first pole frequency.
     fp2 = float(FB)  # CTLE second pole frequency.
@@ -90,8 +90,8 @@ class COM():
     # - FFE/DFE
     N_DFE = 1  # DO NOT REMOVE! Initializing other Ints using `nDFE` doesn't work!
     nDFE = int(N_DFE)  # number of DFE taps.
-    bmax = list([1.0] * N_DFE)  # DFE maximum tap values.
-    bmin = list([-1.0] * N_DFE)  # DFE minimum tap values.
+    bmax = array([1.0] * N_DFE)  # DFE maximum tap values.
+    bmin = array([-1.0] * N_DFE)  # DFE minimum tap values.
     dfe_taps = array([0] * N_DFE, dtype=float)  # Rx FFE tap weights.
     nRxTaps      = 16
     nRxPreTaps   = 5
@@ -108,8 +108,8 @@ class COM():
     Cp = float(0.18e-12)  # parasitic ball capacitance.
     Ls = list([0.13e-9, 0.15e-9, 0.14e-9])  # parasitic die inductances.
     # -- ns & mm
-    zp_vals = list([12, 33])
-    zp = int(12)
+    zp_vals = list([12., 33.])
+    zp = float(12.)
     zp_B = float(1.8)
     zc = list([87.5, 92.5])  # package transmission line characteristic impedances (Ohms).
     gamma0 = float(5.0e-4)   # propagation loss constant (1/mm)
@@ -326,7 +326,7 @@ class COM():
         else:
             zps = [zp, self.zp_B]
 
-        return sPkgTline(self.freqs, self.R0, self.a1, self.a2, self.tau, self.gamma0, zip(zc, zps))
+        return sPkgTline(self.freqs, self.R0, self.a1, self.a2, self.tau, self.gamma0, list(zip(zc, zps)))
 
     # - Channels
     def get_chnls(self) -> list[tuple[rf.Network, str]]:
@@ -423,12 +423,12 @@ class COM():
 
         self.debug = debug
 
-        self.com_rslts = {}
-        self.fom_rslts = {}
-        self.dbg = {}
+        self.com_rslts: dict[str, Any] = {}
+        self.fom_rslts: dict[str, Any] = {}
+        self.dbg: dict[str, Any] = {}
 
         self.c0_min = 0.62
-        self.tx_taps_min = [0., 0., -0.18, -0.38, 0., 0.]
+        self.tx_taps_min = array([0., 0., -0.18, -0.38, 0., 0.])
 
         self.set_status("Ready")
 
@@ -459,17 +459,17 @@ class COM():
                 obj.chnl_s4p_next3 = Path(chnl_fnames[5])
         obj.vic_chnl_ix = vic_id
         obj.zp = obj.zp_vals[zp_sel - 1]
-        obj.num_ui = num_ui
-        obj.gui = gui
+        # obj.num_ui = num_ui
+        # obj.gui = gui
         return obj
 
     def __call__(self,
         do_opt_eq: bool = True,
-        tx_taps:   Rvec = None,
+        tx_taps:   Optional[Rvec]     = None,
         opt_mode:  Optional[OptMode]  = None,
         norm_mode: Optional[NormMode] = None,
         unit_amp:  Optional[bool]     = None,
-        dbg_dict: Dict[str, Any] = None
+        dbg_dict:  Optional[Dict[str, Any]] = None
     ) -> float:
         """
         Calculate the COM value.
@@ -561,13 +561,13 @@ class COM():
             f"The lengths of keys: tx_taps_min, tx_taps_max, and tx_taps_step, must match!")
         self.c0_min = params['c0_min']
         # Rx EQ
-        self.bmin = params['dfe_min']
-        self.bmax = params['dfe_max']
+        self.bmin = array(params['dfe_min'])
+        self.bmax = array(params['dfe_max'])
         assert len(self.bmin) == len(self.bmax), ValueError(
             f"The lengths of keys: dfe_min, and dfe_max, must match!")
         self.Nb = len(self.bmin)
-        self.rx_taps_min = params['rx_taps_min'] if 'rx_taps_min' in params else []
-        self.rx_taps_max = params['rx_taps_max'] if 'rx_taps_max' in params else []
+        self.rx_taps_min = array(params['rx_taps_min']) if 'rx_taps_min' in params else array([])
+        self.rx_taps_max = array(params['rx_taps_max']) if 'rx_taps_max' in params else array([])
         assert len(self.rx_taps_min) == len(self.rx_taps_max), ValueError(
             f"The lengths of keys: `rx_taps_min` and `rx_taps_max` must match!")
         self.nRxTaps = len(self.rx_taps_min)
@@ -993,12 +993,12 @@ class COM():
         nRxPreTaps = self.nRxPreTaps
         rx_taps_min = self.rx_taps_min
         rx_taps_max = self.rx_taps_max
-        bmin = self.bmin
+        bmin = array(self.bmin)
         bmax = self.bmax
         tb = 1 / self.fb
 
         pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
-            tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=[1.0], dfe_taps=[])
+            tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array([1.0]), dfe_taps=array([]))
         match opt_mode:
             case OptMode.PRZF:
                 # Step a - Pulse response construction.
@@ -1009,7 +1009,7 @@ class COM():
                             rx_taps_min, rx_taps_max, bmin, bmax,
                             norm_mode=norm_mode, unit_amp=unit_amp)
                     pulse_resps = self.gen_pulse_resps(
-                        tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps), dfe_taps=[])
+                        tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps), dfe_taps=array([]))
 
                 # Step b - Cursor identification.
                 vic_pulse_resp = array(pulse_resps[0])  # Note: Includes any Rx FFE, but not DFE.
@@ -1048,7 +1048,7 @@ class COM():
                 varJ = (self.Add**2 + self.sigma_Rj**2) * varX * sum(hJ**2)  # (93A-32)
 
                 # Step g - Crosstalk.
-                varXT = 0
+                varXT = 0.
                 for pulse_resp in pulse_resps[1:]:  # (93A-34)
                     varXT += max([sum(array(self.filt_pr_samps(pulse_resp[m::M], As))**2) for m in range(M)])  # (93A-33)
                 varXT *= varX
@@ -1147,18 +1147,18 @@ class COM():
 
             fom_max = -1000.0
             fom_max_changed = False
-            for gDC2 in self.gDC2_vals:
-                for gDC in self.gDC_vals:
-                    for tx_taps in self.tx_combs:
-                        if not check_taps(array(tx_taps)):
+            for _gDC2 in self.gDC2_vals:
+                for _gDC in self.gDC_vals:
+                    for _tx_taps in self.tx_combs:
+                        if not check_taps(array(_tx_taps)):
                             continue
-                        fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2, opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
+                        fom = self.calc_fom(array(_tx_taps), gDC=_gDC, gDC2=_gDC2, opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
                         if fom > fom_max:
                             fom_max_changed = True
                             fom_max = fom
-                            gDC2_best = gDC2
-                            gDC_best = gDC
-                            tx_taps_best = tx_taps
+                            gDC2_best = _gDC2
+                            gDC_best = _gDC
+                            tx_taps_best = array(_tx_taps)
                             rx_taps_best = self.fom_rslts['rx_taps']
                             pr_samps_best = self.fom_rslts['pr_samps']
                             dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
@@ -1217,7 +1217,7 @@ class COM():
         opt_mode: Optional[OptMode] = None,
         norm_mode: Optional[NormMode] = None,
         unit_amp: Optional[bool] = None,
-        dbg_dict: Dict[str, Any] = None
+        dbg_dict: Optional[Dict[str, Any]] = None
     ) -> tuple[float, float, int]:
         """
         Calculate the interference and noise for COM.
@@ -1267,7 +1267,7 @@ class COM():
         nDFE = len(self.bmin)
 
         self.set_status("Calculating COM...")
-        pulse_resps = self.gen_pulse_resps(dfe_taps=[])  # DFE taps are included explicitly, below.
+        pulse_resps = self.gen_pulse_resps(dfe_taps=array([]))  # DFE taps are included explicitly, below.
         vic_pulse_resp = pulse_resps[0]
         if cursor_ix is None:
             cursor_ix = self.loc_curs(vic_pulse_resp)
@@ -1354,7 +1354,7 @@ class COM():
         return (As, Ani, cursor_ix)
 
 if __name__ == "__main__":
-    from pychopmarg.cli import cli
+    # from pychopmarg.cli import cli
     # cli()
     print("Sorry, the PyChOpMarg package is currently only usable as a library.")
     print("It's GUI is currently broken.")

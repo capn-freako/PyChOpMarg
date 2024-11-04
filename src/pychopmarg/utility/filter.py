@@ -18,8 +18,6 @@ from scipy.interpolate import interp1d
 
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
 
-T = TypeVar('T', Any, Any)
-
 
 def from_dB(x: float) -> float:
     """Convert from (dB) to real, assuming square law applies."""
@@ -124,7 +122,7 @@ def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
     assert nPreTaps < nTaps, ValueError(
         f"`nPreTaps` ({nPreTaps}) must be less than `nTaps` ({nTaps})!")
 
-    taps = zeros(nTaps)
+    taps = np.zeros(nTaps)
     taps[nPreTaps] = 1.0
 
     return taps

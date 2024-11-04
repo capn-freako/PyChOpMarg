@@ -9,16 +9,15 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 import numpy as np  # type: ignore
-import skrf as rf
+import skrf  as rf
 
-from typing import Any, Dict, Optional, TypeVar
+from pathlib    import Path
+from typing     import Any, Dict, Optional, TypeVar
 
-from numpy import array
-from scipy.interpolate import interp1d
+from numpy              import array
+from scipy.interpolate  import interp1d
 
 from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
-
-T = TypeVar('T', Any, Any)
 
 
 def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Network:
@@ -109,7 +108,7 @@ def se2mm(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Net
     return rf.Network(frequency=f, s=s, z0=z)
 
 
-def import_s32p(filename: str, vic_chnl: int = 1) -> list[tuple[rf.Network, str]]:
+def import_s32p(filename: Path, vic_chnl: int = 1) -> list[tuple[rf.Network, str]]:
     """Read in a 32-port Touchstone file, and return an equivalent list
     of 8 2-port differential networks: a single victim through channel and
     7 crosstalk aggressors, according to the VITA 68.2 convention.
@@ -186,7 +185,7 @@ def import_s32p(filename: str, vic_chnl: int = 1) -> list[tuple[rf.Network, str]
     return [vic] + aggs
 
 
-def sCshunt(freqs: list[float], c: float, r0: float = 50.0) -> rf.Network:
+def sCshunt(freqs: Rvec, c: float, r0: float = 50.0) -> rf.Network:
     """
     Calculate the 2-port network for a shunt capacitance.
 
@@ -210,7 +209,7 @@ def sCshunt(freqs: list[float], c: float, r0: float = 50.0) -> rf.Network:
     return rf.Network(s=np.array(list(zip(zip(s11, s21), zip(s21, s11)))), f=freqs, z0=r0)
 
 
-def sLseries(freqs: list[float], l: float, r0: float = 50.0) -> rf.Network:
+def sLseries(freqs: Rvec, l: float, r0: float = 50.0) -> rf.Network:
     """
     Calculate the 2-port network for a series inductance.
 
@@ -237,7 +236,7 @@ def sLseries(freqs: list[float], l: float, r0: float = 50.0) -> rf.Network:
     return rf.Network(s=np.array(list(zip(zip(s11, s21), zip(s21, s11)))), f=freqs, z0=r0)
 
 
-def sDieLadderSegment(freqs: list[float], trip: tuple[float, float, float]) -> rf.Network:
+def sDieLadderSegment(freqs: Rvec, trip: tuple[float, float, float]) -> rf.Network:
     """
     Calculate one segment of the on-die parasitic ladder network.
 
