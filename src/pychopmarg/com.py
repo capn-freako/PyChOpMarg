@@ -1160,22 +1160,20 @@ class COM():
 
             fom_max = -1000.0
             fom_max_changed = False
-            foms = []
             for gDC2 in self.gDC2_vals:
                 for gDC in self.gDC_vals:
                     for tx_taps in self.tx_combs:
                         if not check_taps(array(tx_taps)):
                             continue
                         fom = self.calc_fom(tx_taps, gDC=gDC, gDC2=gDC2, opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
-                        foms.append(fom)
                         if fom > fom_max:
                             fom_max_changed = True
                             fom_max = fom
                             gDC2_best = gDC2
                             gDC_best = gDC
                             tx_taps_best = tx_taps
-                            rx_taps_best = rx_taps
-                            pr_samps_best = pr_samps
+                            rx_taps_best = self.fom_rslts['rx_taps']
+                            pr_samps_best = self.fom_rslts['pr_samps']
                             dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
                             cursor_ix_best = self.fom_rslts['cursor_ix']
                             As_best = self.fom_rslts['As']
@@ -1186,14 +1184,9 @@ class COM():
                             varN_best = self.fom_rslts['varN']
                             vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
                             mse_best = self.fom_rslts['mse'] if 'mse' in self.fom_rslts else 0
-                            # TEMPORARY DEBUGGING ONLY!:
-                            if opt_mode == OptMode.MMSE:
-                                self.mmse_rslt = rslt
-                                self.theNoiseCalc = theNoiseCalc
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
             fom = self.calc_fom(tx_taps)
-            foms = [fom]
             fom_max = fom
             fom_max_changed = True
             gDC2_best = self.gDC2
@@ -1230,7 +1223,6 @@ class COM():
         # These two are also calculated by `calc_noise()`, but are not overwritten.
         self.sigma_Tx = np.sqrt(varTx_best)
         self.sigma_N = np.sqrt(varN_best)
-        self.foms = foms
         self.vic_pulse_resp = vic_pulse_resp
         self.rslts['fom'] = fom_max
         self.rslts['gDC'] = gDC_best
