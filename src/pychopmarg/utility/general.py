@@ -21,11 +21,6 @@ from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
 T = TypeVar('T', Any, Any)
 
 
-def from_dB(x: float) -> float:
-    """Convert from (dB) to real, assuming square law applies."""
-    return pow(10, x / 20)
-
-
 def all_combs(xss: list[list[T]]) -> list[list[T]]:
     """
     Generate all combinations of input.
