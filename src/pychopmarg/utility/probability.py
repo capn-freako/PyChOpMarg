@@ -8,17 +8,11 @@ Original date:   March 3, 2024 (Copied from `pybert.utility`.)
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
+from typing import Any, Dict, Optional
+
 import numpy as np  # type: ignore
-import skrf as rf
 
-from typing import Any, Dict, Optional, TypeVar
-
-from numpy import array
-from scipy.interpolate import interp1d
-
-from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
-
-T = TypeVar('T', Any, Any)
+from pychopmarg.common import Rvec
 
 
 def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
@@ -40,11 +34,11 @@ def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
     return np.array(list(filter(lambda x: abs(x) >= thresh, pr_samps)))
 
 
-def delta_pmf(
-    h_samps: Rvec, L: int = 4, RLM: float = 1.0,
+def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    h_samps: Rvec, L: int = 4,
     curs_ix: Optional[int] = None, y: Optional[Rvec] = None,
-    dbg_dict: Dict[str, Any] = None
-) -> Rvec:
+    dbg_dict: Optional[Dict[str, Any]] = None
+) -> tuple[Rvec, Rvec]:
     """
     Calculate the "delta-pmf" for a set of pulse response samples,
     as per (93A-40).
@@ -55,8 +49,6 @@ def delta_pmf(
     Keyword Args:
         L: Number of modulation levels.
             Default: 4
-        RLM: Relative level mismatch.
-            Default: 1.0
         curs_ix: Cursor index override.
             Default: None (Means use `argmax()` to find cursor.)
         y: y-values override vector.
@@ -83,9 +75,10 @@ def delta_pmf(
 
     assert not any(np.isnan(h_samps)), ValueError(
         f"Input contains NaNs at: {np.where(np.isnan(h_samps))[0]}")
-    
+
     if y is None:
-        curs_ix = curs_ix or np.argmax(h_samps)
+        if curs_ix is None:
+            curs_ix = int(np.argmax(h_samps))
         curs_val = h_samps[curs_ix]
         max_y = 1.1 * curs_val
         npts = 2 * min(int(max_y / 0.00001), 10_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!

@@ -1,4 +1,6 @@
-from .general import *
-from .filter import *
-from .probability import *
-from .sparams import *
+"Various utilities used by PyChOpMarg."
+
+from .general import *      # noqa=F401,F403
+from .filter import *       # noqa=F401,F403
+from .probability import *  # noqa=F401,F403
+from .sparams import *      # noqa=F401,F403

@@ -9,16 +9,8 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 import numpy as np  # type: ignore
-import skrf as rf
 
-from typing import Any, Dict, Optional, TypeVar
-
-from numpy import array
-from scipy.interpolate import interp1d
-
-from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
-
-T = TypeVar('T', Any, Any)
+from pychopmarg.common import Rvec, Cvec, TWOPI
 
 
 def from_dB(x: float) -> float:
@@ -26,7 +18,9 @@ def from_dB(x: float) -> float:
     return pow(10, x / 20)
 
 
-def calc_Hctle(f: Rvec, fz: float, fp1: float, fp2: float, fLF: float, gDC: float, gDC2: float) -> Cvec:
+def calc_Hctle(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    f: Rvec, fz: float, fp1: float, fp2: float, fLF: float, gDC: float, gDC2: float
+) -> Cvec:
     """
     Return the voltage transfer function, H(f), of the Rx CTLE,
     according to (93A-22).
@@ -124,9 +118,7 @@ def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
     assert nPreTaps < nTaps, ValueError(
         f"`nPreTaps` ({nPreTaps}) must be less than `nTaps` ({nTaps})!")
 
-    taps = zeros(nTaps)
+    taps = np.zeros(nTaps)
     taps[nPreTaps] = 1.0
 
     return taps
-
-

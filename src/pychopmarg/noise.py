@@ -8,15 +8,15 @@ Original date:   September 2, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from numpy                  import argmax, argmin, array, concatenate, diff, mean, roll, sinc, sum, where
-from numpy.fft              import irfft, rfft, fftshift
+# pylint: disable=redefined-builtin
+from numpy                  import argmax, array, concatenate, diff, mean, roll, sinc, sum, where
+from numpy.fft              import irfft, rfft
 from scipy.interpolate      import interp1d
-from scipy.linalg           import toeplitz
 
-from pychopmarg.common      import Rvec, Cvec, Rmat
+from pychopmarg.common      import Rvec, Cvec
 
 
-class NoiseCalc():
+class NoiseCalc():  # pylint: disable=too-many-instance-attributes
     "Noise calculator for COM"
 
     # Independent variables, set during instance initialization.
@@ -25,7 +25,7 @@ class NoiseCalc():
     ts_ix           = int(0)                     # Main pulse sampling index
     t               = array([0], dtype=float)    # System time vector (s)
     vic_pulse_resp  = array([0], dtype=float)    # Victim pulse response (V)
-    agg_pulse_resps = list()                     # Aggressor pulse responses (V)
+    agg_pulse_resps: list[Rvec] = []             # Aggressor pulse responses (V)
     f               = array([0], dtype=float)    # System frequency vector (Hz)
     Ht              = array([0], dtype=complex)  # Transfer function of Tx output driver risetime
     H21             = array([0], dtype=complex)  # Transfer function of terminated interconnect
@@ -43,11 +43,13 @@ class NoiseCalc():
     varX     = float(0)                   # Signal power (V^2)
     t_irfft  = array([0], dtype=float)    # Time vector for indexing `irfft()` result.
 
-    def __init__(self, L: int, Tb: float, ts_ix: int, t: Rvec,
-                 vic_pulse_resp: Rvec, agg_pulse_resps: list[Rvec],
-                 f: Rvec, Ht: Cvec, H21: Cvec, Hr: Cvec, Hctf: Cvec,
-                 eta0: float, Av: float, snr_tx: float, Add: float, sigma_Rj: float,
-                 eps: float = 0.001) -> None:
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+        self, L: int, Tb: float, ts_ix: int, t: Rvec,
+        vic_pulse_resp: Rvec, agg_pulse_resps: list[Rvec],
+        f: Rvec, Ht: Cvec, H21: Cvec, Hr: Cvec, Hctf: Cvec,
+        eta0: float, Av: float, snr_tx: float, Add: float, sigma_Rj: float,
+        eps: float = 0.001
+    ) -> None:
         """
         ``NoiseCalc`` class initializer.
 
@@ -86,18 +88,27 @@ class NoiseCalc():
             1. No assumption is made, re: any linkage between `t` and `f`.
             2. The transfer functions are assumed to contain only positive frequency values.
             3. `f` may begin at zero, but is not required to.
+
+        ToDo:
+            1. Consider defining a data class to hold the initialization data.
         """
 
         assert len(t) == len(vic_pulse_resp), IndexError(
             f"Lengths of `t` ({len(t)}) and `vic_pulse_resp` ({len(vic_pulse_resp)}) must be the same!")
         assert len(f) == len(Ht) == len(H21) == len(Hr) == len(Hctf), IndexError(
-            f"Lengths of: `f` ({len(f)}), `Ht` ({len(Ht)}), `H21` ({len(H21)}), `Hr` ({len(Hr)}), and `Hctf` ({len(Hctf)}), must all be the same!")
+            "\n\t".join(
+                ["The lengths of the following input vectors must be equal:",
+                 f"`f`    ({len(f):7d})",
+                 f"`Ht`   ({len(Ht):7d})",
+                 f"`H21`  ({len(H21):7d})",
+                 f"`Hr`   ({len(Hr):7d})",
+                 f"`Hctf` ({len(Hctf):7d})"]))
         assert t[0] == 0, ValueError(
             f"The first element of `t` ({t[0]}) must be zero!")
         assert abs(Tb / t[1] - Tb // t[1]) < eps, ValueError(
             f"`Tb` ({Tb}) must be an integral multiple of `t[1]` ({t[1]})!")
 
-        super(NoiseCalc, self).__init__()
+        super().__init__()
 
         # Initialize independent variable values.
         self.L               = L
@@ -172,7 +183,7 @@ class NoiseCalc():
 
         krnl = interp1d(t_irfft, _x, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
         y = krnl(t)
-        curs_uis, curs_ofst = divmod(argmax(y), nspui)  # Ensure that we capture the peak in the next step.
+        _, curs_ofst = divmod(argmax(y), nspui)  # Ensure that we capture the peak in the next step.
         return y[curs_ofst::nspui]                      # Sampled at fBaud, w/ peak captured.
 
     @property
@@ -185,8 +196,8 @@ class NoiseCalc():
             1. Re: the scaling term: `2 * self.f[-1]`, when combined w/
                 the implicit `1/N` of the `irfft()` function, this gives `df`.
         """
-        nspui = self.nspui
-        rslt  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2  # "/ 2" in [1] omitted, since we're only considering: m >= 0.
+        # "/ 2" in [1] omitted, since we're only considering: m >= 0.
+        rslt  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
         _rslt = abs(rfft(self.from_irfft(irfft(rslt)))) * 2 * self.f[-1] * self.Tb
         return _rslt
 
@@ -217,10 +228,10 @@ class NoiseCalc():
 
         Tb    = self.Tb
         f     = self.f
-        nspui = self.nspui
 
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf
-        _htn = irfft(sinc(f * Tb) * Htn) * 2  # * f[-1]  # See `_get_Srn()`. But, note that `* df` is not appropriate here.
+        # * f[-1]  # See `_get_Srn()`. But, note that `* df` is not appropriate here.
+        _htn = irfft(sinc(f * Tb) * Htn) * 2
         htn  = self.from_irfft(_htn)  # ToDo: Do I need to honor `ts_ix`?
 
         return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * Tb  # i.e. - / fB
@@ -241,18 +252,15 @@ class NoiseCalc():
 
         dV = diff(vic_pulse_resp)
         if int(ts_ix % nspui) != 0:
-            hJ = mean(concatenate((dV[ts_ix % nspui - 1: -1: nspui], dV[ts_ix % nspui::nspui])).reshape((2, -1)), axis=0) / t[1]
+            hJ = mean(concatenate((dV[ts_ix % nspui - 1: -1: nspui],
+                                   dV[ts_ix % nspui::nspui])).reshape((2, -1)), axis=0) / t[1]
         else:
             hJ = mean(array([dV[nspui - 1::nspui], dV[nspui::nspui]]), axis=0) / t[1]
 
-        # FOR DEBUGGING ONLY!
-        self.hJ = hJ
-        self.dV = dV
-
         return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
-
 
     def Rn(self) -> Rvec:
         """Noise autocorrelation vector at Rx FFE input."""
         Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0) + self.Stn + self.Sjn
-        return irfft(Sn) / self.Tb  # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
+        # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
+        return irfft(Sn) / self.Tb
