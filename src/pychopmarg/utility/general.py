@@ -8,15 +8,12 @@ Original date:   March 3, 2024 (Copied from `pybert.utility`.)
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
+from typing import Any, TypeVar
+
 import numpy as np  # type: ignore
-import skrf as rf
-
-from typing import Any, Dict, Optional, TypeVar
-
-from numpy import array
 from scipy.interpolate import interp1d
 
-from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
+from pychopmarg.common import Rvec
 
 T = TypeVar('T', Any, Any)
 
@@ -87,15 +84,15 @@ def from_irfft(x: Rvec, t_irfft: Rvec, t: Rvec, nspui: int) -> Rvec:
     assert len(x) == len(t_irfft), IndexError(
         f"Length of input ({len(x)}) must match length of `t_irfft` vector ({len(t_irfft)})!")
 
-    t_pk = 0.1 * t[-1]                      # target peak location time
+    t_pk = 0.1 * t[-1]                         # target peak location time
     targ_ix = np.where(t_irfft >= t_pk)[0][0]  # target peak vector index, in `x`
     curr_ix = np.argmax(x)                     # current peak vector index, in `x`
     _x = np.roll(x, targ_ix - curr_ix)         # `x` with peak repositioned
 
     krnl = interp1d(t_irfft, _x, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
     y = krnl(t)
-    curs_uis, curs_ofst = divmod(np.argmax(y), nspui)  # Ensure that we capture the peak in the next step.
-    return y[curs_ofst::nspui]                         # Sampled at fBaud, w/ peak captured.
+    _, curs_ofst = divmod(np.argmax(y), nspui)  # Ensure that we capture the peak in the next step.
+    return y[curs_ofst::nspui]                  # Sampled at fBaud, w/ peak captured.
 
 
 def print_taps(ws: list[float]) -> str:

@@ -8,16 +8,13 @@ Original date:   March 3, 2024 (Copied from `pybert.utility`.)
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
+from pathlib import Path
+
 import numpy as np  # type: ignore
 import skrf  as rf
+from numpy import array
 
-from pathlib    import Path
-from typing     import Any, Dict, Optional, TypeVar
-
-from numpy              import array
-from scipy.interpolate  import interp1d
-
-from pychopmarg.common import Rvec, Cvec, COMParams, PI, TWOPI
+from pychopmarg.common import Rvec, PI, TWOPI
 
 
 def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Network:
@@ -68,7 +65,7 @@ def se2mm(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Net
         2. Automatic renumbering should not be used unless a solid d.c. thru path exists.
     """
     # Confirm correct network dimmensions.
-    (fs, rs, cs) = ntwk.s.shape
+    (_, rs, cs) = ntwk.s.shape
     assert rs == cs, "Non-square Touchstone file S-matrix!"
     assert rs == 4, "Touchstone file must have 4 ports!"
 
@@ -108,7 +105,9 @@ def se2mm(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Net
     return rf.Network(frequency=f, s=s, z0=z)
 
 
-def import_s32p(filename: Path, vic_chnl: int = 1) -> list[tuple[rf.Network, str]]:
+def import_s32p(  # pylint: disable=too-many-locals
+    filename: Path, vic_chnl: int = 1
+) -> list[tuple[rf.Network, str]]:
     """Read in a 32-port Touchstone file, and return an equivalent list
     of 8 2-port differential networks: a single victim through channel and
     7 crosstalk aggressors, according to the VITA 68.2 convention.
@@ -138,7 +137,7 @@ def import_s32p(filename: Path, vic_chnl: int = 1) -> list[tuple[rf.Network, str
 
     # Import and sanity check the Touchstone file.
     ntwk = rf.Network(filename)
-    (fs, rs, cs) = ntwk.s.shape
+    (_, rs, cs) = ntwk.s.shape
     assert rs == cs, "Non-square Touchstone file S-matrix!"
     assert rs == 32, f"Touchstone file must have 32 ports!\n\t{ntwk}"
 
@@ -209,26 +208,26 @@ def sCshunt(freqs: Rvec, c: float, r0: float = 50.0) -> rf.Network:
     return rf.Network(s=np.array(list(zip(zip(s11, s21), zip(s21, s11)))), f=freqs, z0=r0)
 
 
-def sLseries(freqs: Rvec, l: float, r0: float = 50.0) -> rf.Network:
+def sLseries(freqs: Rvec, inductance: float, r0: float = 50.0) -> rf.Network:
     """
     Calculate the 2-port network for a series inductance.
 
     Args:
         freqs: The frequencies at which to calculate network data (Hz).
-        l: The inductance (H).
+        inductance: The inductance (H).
 
     Keyword Args:
         r0: The reference impedance for the network (Ohms).
             Default: 50 Ohms.
 
     Returns:
-        s2p: The network corresponding to a series inductance, `l`,
+        s2p: The network corresponding to a series inductance, `inductance`,
             calculated at the given frequencies, `freqs`.
     """
     w = TWOPI * np.array(freqs)
     s = 1j * w
-    w2L2 = w**2 * l**2
-    jwRL = s * r0 * l
+    w2L2 = w**2 * inductance**2
+    jwRL = s * r0 * inductance
     R2x2 = 2 * r0**2
     den = 2 * R2x2 + w2L2
     s11 = (w2L2 + 2 * jwRL) / den
@@ -254,7 +253,7 @@ def sDieLadderSegment(freqs: Rvec, trip: tuple[float, float, float]) -> rf.Netwo
     return sCshunt(freqs, Cd, r0=R0) ** sLseries(freqs, Ls, r0=R0)
 
 
-def sPkgTline(
+def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     f: Rvec, r0: float, a1: float, a2: float, tau: float,
     gamma0: float, z_pairs: list[tuple[float, float]]
 ) -> rf.Network:
@@ -288,8 +287,7 @@ def sPkgTline(
         "Return complex propagation coefficient at frequency f (GHz)."
         if f == 0:
             return gamma0
-        else:
-            return gamma0 + gamma1 * np.sqrt(f) + gamma2(f) * f
+        return gamma0 + gamma1 * np.sqrt(f) + gamma2(f) * f
 
     g = array(list(map(gamma, f_GHz)))
 
@@ -307,10 +305,8 @@ def sPkgTline(
         """
         zc, zp = z_pair
         rho = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
-        s11 = s22 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
-        s21 = s12 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
+        s11 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
+        s21 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
         return rf.Network(s=array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)
 
     return rf.network.cascade_list(list(map(mk_s2p, z_pairs)))
-
-

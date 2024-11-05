@@ -8,9 +8,10 @@ Original date:   March 3, 2024 (Copied from `pybert.utility`.)
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
+from typing import TypeVar, TypeAlias, Any
+
 import numpy as np  # type: ignore
 import numpy.typing as npt  # type: ignore
-from typing import TypeVar, TypeAlias, Any
 
 Real = TypeVar('Real', float, float)
 Comp = TypeVar('Comp', complex, complex)

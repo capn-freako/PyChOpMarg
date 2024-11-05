@@ -8,20 +8,20 @@ Original date:   August 30, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-import warnings
-
 from enum       import Enum
 from typing     import Any, Optional
 
 import numpy as np
-from numpy        import(
-    argmax, array, array_equal, concatenate, dot, identity, insert,
+# pylint: disable=redefined-builtin
+from numpy import (
+    argmax, array, array_equal, concatenate, dot,
     log10, maximum, minimum, ones, pad, sqrt, sum, vectorize, where, zeros)
-from numpy.linalg import matrix_rank, lstsq
-from scipy.linalg import LinAlgWarning, convolution_matrix, solve, solve_toeplitz, toeplitz
+from numpy.linalg import lstsq
+from scipy.linalg import convolution_matrix, solve, toeplitz
 
 from pychopmarg.common  import Rvec
 from pychopmarg.noise   import NoiseCalc
+
 
 class NormMode(Enum):
     "Tap weight normalization mode."
@@ -66,7 +66,7 @@ def scale_taps(w: Rvec, w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = No
     w_scalars = minimum(
         where(vfilt_scalars(w_scalars_min), w_scalars_min, 1),
         where(vfilt_scalars(w_scalars_max), w_scalars_max, 1),
-        )
+    )
     w_scale = np.min(w_scalars)
 
     return w_scale * w
@@ -127,11 +127,10 @@ def clip_taps(
         w_lim = minimum(w_max * w_lim_curs_val, maximum(w_min * w_lim_curs_val, w))
         w_lim[curs_ix] = w_lim_curs_val
 
-
     return w_lim
 
 
-def przf(
+def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     pulse_resp: Rvec, nspui: int, nTaps: int, nPreTaps: int, nDFETaps: int,
     tap_mins: Rvec, tap_maxs: Rvec, b_min: Rvec, b_max: Rvec,
     norm_mode: NormMode = NormMode.P8023dj, unit_amp: bool = False
@@ -165,14 +164,17 @@ def przf(
 
     Notes:
         1. The algorithm implemented below is a slightly modified version of:
-            Mellitz, R., Lusted, K., "RX FFE Implementation Algorithm for COM 4.1", IEEE P802.3dj Task Force, August 31, 2023.
+            Mellitz, R., Lusted, K., "RX FFE Implementation Algorithm for COM 4.1",
+            IEEE P802.3dj Task Force, August 31, 2023.
 
     ToDo:
         1. Add sampling time as an input parameter?
     """
 
     assert len(pulse_resp) >= nTaps * nspui, ValueError(
-        f"The pulse response length ({len(pulse_resp)}) must be at least: `nspui` ({nspui}) * `nTaps` ({nTaps}) = {nspui * nTaps}!")
+        "\n\t".join(
+            [f"The pulse response length ({len(pulse_resp)}) must be at least:",
+             f"`nspui` ({nspui}) * `nTaps` ({nTaps}) = {nspui * nTaps}!"]))
     assert nTaps == 0 and nPreTaps == 0 or nTaps > nPreTaps, ValueError(
         f"`nTaps` ({nTaps}) must be greater than `nPreTaps` ({nPreTaps})!")
     assert nTaps == 0 and nPreTaps == 0 or (nPreTaps + nDFETaps) < (nTaps - 1), ValueError(
@@ -197,12 +199,13 @@ def przf(
         if unit_amp:
             h_norm /= max(h_norm)
         fv = zeros(len_h)
-        fv[dh] = h_norm[dh]                                 # Don't force the cursor to zero.
-        dfe_ixs = slice(dh + 1, dh + nDFETaps + 1)          # indices of DFE taps
-        fv[dfe_ixs] = minimum(np.array(b_max) * h_norm[dh], # Bound first `nDFETaps` post-cursor taps to DFE's correction limits.
+        fv[dh] = h_norm[dh]                         # Don't force the cursor to zero.
+        dfe_ixs = slice(dh + 1, dh + nDFETaps + 1)  # indices of DFE taps
+        # Bound first `nDFETaps` post-cursor taps to DFE's correction limits.
+        fv[dfe_ixs] = minimum(np.array(b_max) * h_norm[dh],
                               maximum(np.array(b_min) * h_norm[dh],
                                       np.array(h_norm[dfe_ixs])))
-        fv = pad(fv, (nPreTaps, 0))[:len_h]                 # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
+        fv = pad(fv, (nPreTaps, 0))[:len_h]  # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
 
         # Find the optimum FFE tap weights.
         H = convolution_matrix(h, nTaps, mode='full')[:len_h]
@@ -232,13 +235,13 @@ def przf(
     return wn, bn, h[dh - nPreTaps: dh - nPreTaps + nTaps]
 
 
-def mmse(
+def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
     theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
     ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj
 ) -> dict[str, Any]:
     """
-    Optimize Rx FFE tap weights, via _Minimum Mean Squared Error_ (MMSE).
+    Optimize Rx FFE tap weights, via **Minimum Mean Squared Error** (MMSE).
 
     Args:
         theNoiseCalc: Initialized instance of ``NoiseCalc`` class.
@@ -271,7 +274,8 @@ def mmse(
 
     Notes:
         1. The optimization technique encoded here is taken from the following references:
-            [1] Healey, A., Hegde, R., _Reference receiver framework for 200G/lane electrical interfaces and PHYs_, IEEE P802.3dj Task Force, Jan. 2024
+            [1] Healey, A., Hegde, R., **Reference receiver framework for 200G/lane electrical interfaces and PHYs**,
+                IEEE P802.3dj Task Force, Jan. 2024
             [2] D1.2 of P802.3dj, IEEE P802.3dj Task Force, Aug. 2024
     """
 
@@ -292,7 +296,6 @@ def mmse(
 
     # Initialize and run the search for optimum `ts` and Rx FFE tap weights.
     max_fom = -1000
-    ts_ix_best = 0
     rslt = {}
     for ts_ix in range(curs_ix - ts_sweep_ix, curs_ix + ts_sweep_ix):
         theNoiseCalc.ts_ix = ts_ix
@@ -306,11 +309,9 @@ def mmse(
         varX = theNoiseCalc.varX
         Rn = theNoiseCalc.Rn()[:Nw]
         R = H.T @ H + toeplitz(Rn) / varX
-        Ib = identity(Nb)
-        zb = zeros(Nb)
-        A = concatenate((concatenate(( R, -Hb.T,         -h0.reshape((Nw, 1))), axis=1),
+        A = concatenate((concatenate(( R, -Hb.T,         -h0.reshape((Nw, 1))), axis=1),  # noqa=E201
                          concatenate((-Hb, ones((Nb, 1)), zeros((Nb, 1))),      axis=1),
-                         concatenate(( h0, zeros(2))).reshape((1, Nw + 2))))
+                         concatenate(( h0, zeros(2))).reshape((1, Nw + 2))))              # noqa=E201
         y = concatenate((h0, zeros(Nb), ones(1)))
         x = solve(A, y)
         w = x[:Nw]

@@ -8,12 +8,12 @@ Original date:   March 25, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from pathlib import Path
+# from pathlib import Path
 
-import click  # type: ignore
+# import click  # type: ignore
 
-from pychopmarg import __version__
-from pychopmarg.com import COM
+# from pychopmarg import __version__
+# from pychopmarg.com import COM
 
 
 # ToDo: Activate when new `PyChOpMargUI` package is ready.

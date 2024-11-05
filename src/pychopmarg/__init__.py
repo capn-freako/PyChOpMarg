@@ -15,7 +15,7 @@ from importlib.metadata import version as _get_version
 # Set PEP396 version attribute
 try:
     __version__ = _get_version("PyChOpMarg")
-except Exception:
+except Exception:  # pylint: disable=broad-exception-caught
     __version__ = "(dev)"
 
 __date__ = "October 21, 2024"
