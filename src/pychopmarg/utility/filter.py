@@ -3,7 +3,7 @@ Filtering utilities for PyChOpMarg.
 
 Original author: David Banas <capn.freako@gmail.com>
 
-Original date:   March 3, 2024 (Copied from `pybert.utility`.)
+Original date:   March 3, 2024
 
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
@@ -26,19 +26,16 @@ def calc_Hctle(  # pylint: disable=too-many-arguments,too-many-positional-argume
     according to (93A-22).
 
     Args:
-        f: Frequencies at which to calculate `Hctle(f)` (Hz).
+        f: Frequencies at which to calculate ``Hctle`` (Hz).
         fz: First stage zero frequency (Hz).
         fp1: First stage lower pole frequency (Hz).
         fp2: First stage upper pole frequency (Hz).
         fLF: Second stage pole/zero frequency (Hz).
-        gDC: CTLE first stage d.c. gain (dB).
-        gDC2: CTLE second stage d.c. gain (dB).
+        gDC: First stage d.c. gain (dB).
+        gDC2: Second stage d.c. gain (dB).
 
     Returns:
         The complex voltage transfer function, H(f), for the CTLE.
-
-    Raises:
-        None
     """
     g1 = from_dB(gDC)
     g2 = from_dB(gDC2)
@@ -56,20 +53,17 @@ def calc_Hffe(
     Calculate the voltage transfer function, H(f), for a digital FFE, according to (93A-21).
 
     Args:
-        freqs: Frequencies at which to calculate `Hffe` (Hz).
+        freqs: Frequencies at which to calculate ``Hffe`` (Hz).
         td: Tap delay time (s).
         tap_weights: The filter tap weights.
         n_post: The number of post-cursor taps.
 
     Keyword Args:
-        hasCurs: `tap_weights` includes the cursor tap weight when True.
+        hasCurs: ``tap_weights`` includes the cursor tap weight when True.
             Default: False (Cursor tap weight will be calculated.)
 
     Returns:
         The complex voltage transfer function, H(f), for the FFE.
-
-    Raises:
-        None
     """
 
     bs = list(np.array(tap_weights).flatten())
@@ -82,10 +76,10 @@ def calc_Hffe(
 
 def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
     """
-    Calculate the voltage transfer function, H(f), for a _Decision Feedback Equalizer_ (DFE).
+    Calculate the voltage transfer function, H(f), for a *Decision Feedback Equalizer* (DFE).
 
     Args:
-        freqs: Frequencies at which to calculate `Hdfe` (Hz).
+        freqs: Frequencies at which to calculate ``Hdfe`` (Hz).
         td: Tap delay time (s).
         tap_weights: The vector of filter tap weights.
 
@@ -100,7 +94,7 @@ def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
 
 def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
     """
-    Construct a null filter w/ `nTaps` taps and (optionally) `nPreTaps` pre-cursor taps.
+    Construct a null filter w/ ``nTaps`` taps and (optionally) ``nPreTaps`` pre-cursor taps.
 
     Args:
         nTaps: Total number of taps, including the cursor tap.
@@ -110,7 +104,7 @@ def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
             Default: 0
 
     Returns:
-        taps: The filter tap weight vector, including the cursor tap weight.
+        The filter tap weight vector, including the cursor tap weight.
     """
 
     assert nTaps > 0, ValueError(

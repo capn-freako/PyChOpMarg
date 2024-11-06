@@ -25,10 +25,18 @@ from pychopmarg.noise   import NoiseCalc
 
 class NormMode(Enum):
     "Tap weight normalization mode."
-    P8023dj   = 1  # As per standard (i.e. - clip then renormalize for unit amplitude pulse response.)
-    Scaled    = 2  # Uniformly and minimally scaled to bring tap weights just within their limits.
-    Unaltered = 3  # Use constrained optimization solution, unchanged.
-    UnitDcGain = 4  # Tap weights are uniformly scaled, to yield unity gain at d.c.
+
+    P8023dj   = 1
+    "As per standard (i.e. - clip then renormalize for unit amplitude pulse response.)"
+
+    Scaled    = 2
+    "Uniformly and minimally scaled to bring tap weights just within their limits."
+
+    Unaltered = 3
+    "Use constrained optimization solution, unchanged."
+
+    UnitDcGain = 4
+    "Tap weights are uniformly scaled, to yield unity gain at d.c."
 
 
 def scale_taps(w: Rvec, w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = None) -> Rvec:
@@ -40,12 +48,12 @@ def scale_taps(w: Rvec, w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = No
 
     Keyword Args:
         w_min: Minimum tap weights.
-            Default: None (Use `-ones(len(w))`.)
+            Default: None (Use ``-ones(len(w))``.)
         w_max: Maximum tap weights.
-            Default: None (Use `ones(len(w))`.)
+            Default: None (Use ``ones(len(w))``.)
 
     Returns:
-        w_lim: Tap weights, scaled proportionally, to just fit inside min/max limits.
+        Tap weights, scaled proportionally to just fit inside min/max limits.
     """
 
     if w_min is None:
@@ -82,18 +90,18 @@ def clip_taps(
 
     Args:
         w: The tap weights to clip.
-        curs_ix: The index, in `w`, of the cursor tap.
+        curs_ix: The index, in ``w``, of the cursor tap.
 
     Keyword Args:
         w_min: Minimum tap weights.
-            Default: None (Use `-ones(len(w))`.)
+            Default: None (Use ``-ones(len(w))``.)
         w_max: Maximum tap weights.
-            Default: None (Use `ones(len(w))`.)
+            Default: None (Use ``ones(len(w))``.)
         obey_spec: Allow cursor tap weight to grow w/o bound, as per D1.2, when True.
             Default: True
 
     Returns:
-        w_lim: Tap weights, clipped accordingly.
+        Tap weights, clipped accordingly.
     """
 
     if w_min is None:
@@ -136,7 +144,7 @@ def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     norm_mode: NormMode = NormMode.P8023dj, unit_amp: bool = False
 ) -> tuple[Rvec, Rvec, Rvec]:
     """
-    Optimize FFE tap weights, via _Pulse Response Zero Forcing_ (PRZF).
+    Optimize FFE tap weights, via *Pulse Response Zero Forcing* (PRZF).
 
     Args:
         pulse_resp: The pulse response to be filtered.
@@ -151,20 +159,22 @@ def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 
     Keyword Args:
         norm_mode: The tap weight normalization mode to use.
-            Default: Unaltered
+            Default: ``P8023dj``
         unit_amp: Enforce unit pulse response amplitude when True.
-            (For comparing results to `mmse()`.)
+            (For comparing results to ``mmse()``.)
             Default: False
 
     Returns:
-        A triple consisting of:
-            - FFE tap weights: The optimum FFE tap weights.
-            - DFE tap weights: The optimum DFE tap weights.
-            - pr_samps: The pulse response samples used in optimization.
+        A triple consisting of
+
+            - The optimum FFE tap weights.
+            - The optimum DFE tap weights.
+            - The pulse response samples used in optimization.
 
     Notes:
         1. The algorithm implemented below is a slightly modified version of:
-            Mellitz, R., Lusted, K., "RX FFE Implementation Algorithm for COM 4.1",
+
+            Mellitz, R., Lusted, K., *RX FFE Implementation Algorithm for COM 4.1*,
             IEEE P802.3dj Task Force, August 31, 2023.
 
     ToDo:
@@ -241,7 +251,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj
 ) -> dict[str, Any]:
     """
-    Optimize Rx FFE tap weights, via **Minimum Mean Squared Error** (MMSE).
+    Optimize Rx FFE tap weights, via *Minimum Mean Squared Error* (MMSE).
 
     Args:
         theNoiseCalc: Initialized instance of ``NoiseCalc`` class.
@@ -257,25 +267,27 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 
     Keyword Args:
         ts_sweep: The cursor sampling time "search radius" around the peak pulse response amplitude (UI).
-            Default: 0.5 (i.e. - `ts` within [-UI/2, +UI/2] of peak location)
+            Default: 0.5 (i.e. - ``ts`` within [-UI/2, +UI/2] of peak location)
         norm_mode: The tap weight normalization mode to use.
-            Default: Unaltered
+            Default: ``P8023dj``
 
     Returns:
-        A dictionary containing:
-            - the optimized FFE tap weights, in the "rx_taps" key,
-            - the optimized DFE tap weights, in the "dfe_tap_weights" key, and
-            - several other values of general utility for plotting/analysis/debugging.
+        A dictionary containing
+
+            * the optimized FFE tap weights, in the "rx_taps" key,
+            * the optimized DFE tap weights, in the "dfe_tap_weights" key, and
+            * several other values of general utility for plotting/analysis/debugging.
 
     Raises:
-        ValueError if:
-            - `dw` > `Nw`, or
-            - there is insufficient room at the beginning/end of the pulse response vector, for `ts` sweeping.
+        ValueError: If ``dw`` > ``Nw``, or there is insufficient room at the beginning/end \
+        of the pulse response vector for ``ts`` sweeping.
 
     Notes:
-        1. The optimization technique encoded here is taken from the following references:
-            [1] Healey, A., Hegde, R., **Reference receiver framework for 200G/lane electrical interfaces and PHYs**,
-                IEEE P802.3dj Task Force, Jan. 2024
+        1. The optimization technique encoded here is taken from the following references
+
+            [1] Healey, A., Hegde, R., *Reference receiver framework for 200G/lane electrical interfaces and PHYs*,
+            IEEE P802.3dj Task Force, Jan. 2024
+
             [2] D1.2 of P802.3dj, IEEE P802.3dj Task Force, Aug. 2024
     """
 

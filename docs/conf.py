@@ -9,7 +9,7 @@
 project = 'PyChOpMarg'
 copyright = '2024, David Banas'
 author = 'David Banas'
-release = 'v1.1.1'
+release = 'v2.1.2'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -35,11 +35,9 @@ templates_path = ['_templates']
 exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 autodoc_mock_imports = [
    "matplotlib",
-   "enable",
-   "chaco",
-   "traitsui"
 ]
 autodata_content = 'both'
+autodoc_member_order = 'bysource'
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output

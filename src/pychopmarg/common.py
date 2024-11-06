@@ -6,6 +6,9 @@ Original author: David Banas <capn.freako@gmail.com>
 Original date:   March 3, 2024 (Copied from `pybert.utility`.)
 
 Copyright (c) 2024 David Banas; all rights reserved World wide.
+
+ToDo:
+    1. Specify ``COMParams`` concretely.
 """
 
 from typing import TypeVar, TypeAlias, Any

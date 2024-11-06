@@ -147,25 +147,28 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
     def from_irfft(self, x: Rvec) -> Rvec:
         """
-        Interpolate `irfft()` output to `t` and subsample at fBaud.
+        Interpolate ``irfft()`` output to ``t`` and subsample at fBaud.
 
         Args:
-            x: `irfft()` results to be interpolated and subsampled.
+            x: ``irfft()`` results to be interpolated and subsampled.
 
         Returns:
-            y: interpolated and subsampled vector.
+            Interpolated and subsampled vector.
 
         Raises:
-            IndexError: If length of input doesn't match length of `t_irfft` vector.
+            IndexError: If length of input doesn't match length of ``t_irfft`` vector.
 
         Notes:
-            1. Input vector is shifted, such that its peak occurs at `0.1 * max(t)`, before interpolating.
-                This is done to:
-                    - ensure that we don't omit any non-causal behavior,
-                    which ends up at the end of an IFFT output vector
-                    when the peak is very near the beginning, and
-                    - to ensure that the majority of our available time span
-                    is available for capturing reflections.
+            1. Input vector is shifted, such that its peak occurs at ``0.1 * max(t)``, before interpolating.
+               This is done to:
+
+                * ensure that we don't omit any non-causal behavior,
+                  which ends up at the end of an IFFT output vector
+                  when the peak is very near the beginning, and
+
+                * to ensure that the majority of our available time span
+                  is available for capturing reflections.
+
             2. The sub-sampling phase is adjusted, so as to ensure that we catch the peak.
         """
 
@@ -193,8 +196,8 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         uniformly sampled over [0, PI] (rads./s norm.).
 
         Notes:
-            1. Re: the scaling term: `2 * self.f[-1]`, when combined w/
-                the implicit `1/N` of the `irfft()` function, this gives `df`.
+            1. Re: the scaling term: ``2 * self.f[-1]``, when combined w/
+            the implicit ``1/N`` of the ``irfft()`` function, this gives ``df``.
         """
         # "/ 2" in [1] omitted, since we're only considering: m >= 0.
         rslt  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
@@ -209,8 +212,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             agg_pulse_resp: Aggressor pulse response (V).
 
         Returns:
-            Sxn: One-sided crosstalk PSD at Rx FFE input,
-                uniformly sampled over [0, PI] (rads./s norm.).
+            One-sided crosstalk PSD at Rx FFE input, uniformly sampled over [0, PI] (rads./s norm.).
         """
 
         nspui = self.nspui
@@ -224,6 +226,9 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         """
         One-sided Tx noise PSD at Rx FFE input,
         uniformly sampled over [0, PI] (rads./s norm.).
+
+        ToDo:
+            1. Do I need to honor ``ts_ix``?
         """
 
         Tb    = self.Tb

@@ -3,7 +3,7 @@ General purpose utilities for PyChOpMarg.
 
 Original author: David Banas <capn.freako@gmail.com>
 
-Original date:   March 3, 2024 (Copied from `pybert.utility`.)
+Original date:   March 3, 2024
 
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
@@ -43,7 +43,7 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[list[float]]:
         trips: A list of "(min, max, step)" triples, one per weight.
 
     Returns:
-        combs: A list of lists of tap weights, including all possible combinations.
+        A list of lists of tap weights, including all possible combinations.
     """
     ranges = []
     for trip in trips:
@@ -56,28 +56,30 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[list[float]]:
 
 def from_irfft(x: Rvec, t_irfft: Rvec, t: Rvec, nspui: int) -> Rvec:
     """
-    Interpolate `irfft()` output to `t` and subsample at fBaud.
+    Interpolate ``irfft()`` output to ``t`` and subsample at fBaud.
 
     Args:
-        x: `irfft()` results to be interpolated and subsampled.
-        t_irfft: Time index vector for `x`.
-        t: Desired new time index vector (same units as `t_irfft`).
-        nspui: Number of samples per unit interval.
+        x: ``irfft()`` results to be interpolated and subsampled.
+        t_irfft: Time index vector for ``x``.
+        t: Desired new time index vector (same units as ``t_irfft``).
+        nspui: Number of samples per unit interval in ``t``.
 
     Returns:
-        y: interpolated and subsampled vector.
+        Interpolated and subsampled vector.
 
     Raises:
-        IndexError: If length of input doesn't match length of `t_irfft` vector.
+        IndexError: If length of input doesn't match length of ``t_irfft`` vector.
 
     Notes:
-        1. Input vector is shifted, such that its peak occurs at `0.1 * max(t)`, before interpolating.
-            This is done to:
-                - ensure that we don't omit any non-causal behavior,
-                which ends up at the end of an IFFT output vector
-                when the peak is very near the beginning, and
-                - to ensure that the majority of our available time span
-                is available for capturing reflections.
+        1. Input vector is shifted, such that its peak occurs at ``0.1 * max(t)``, before interpolating.
+        This is done to:
+
+            - ensure that we don't omit any non-causal behavior,
+              which ends up at the end of an IFFT output vector
+              when the peak is very near the beginning, and
+            - to ensure that the majority of our available time span
+              is available for capturing reflections.
+
         2. The sub-sampling phase is adjusted, so as to ensure that we catch the peak.
     """
 

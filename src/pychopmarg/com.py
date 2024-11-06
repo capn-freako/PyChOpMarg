@@ -48,7 +48,12 @@ class OptMode(Enum):
 
 
 class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-methods
-    "Encoding of the IEEE 802.3-22 Annex 93A/178A 'Channel Operating Margin' (COM) specification."
+    """
+    Encoding of the IEEE 802.3-22 Annex 93A/178A 'Channel Operating Margin' (COM) specification.
+
+    ToDo:
+        1. Clean up unused attributes.
+    """
 
     status_str = str("Ready")
     debug = bool(False)
@@ -149,7 +154,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
     # - Results
     # -- COM
-    # ToDo: Clean up unused attributes.
     com = float(0.0)
     com_As = float(0.0)
     com_cursor_ix = int(0)
@@ -250,8 +254,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 Default: None
 
         Notes:
-            1. The instance's current value(s) for `gDC` and `gDC2` are used if not provided.
-                (Necessary, to accommodate sweeping when optimizing EQ.)
+            1. The instance's current value(s) for ``gDC`` and ``gDC2`` are used if not provided.
+            (Necessary, to accommodate sweeping when optimizing EQ.)
         """
         gDC = gDC or self.gDC
         gDC2 = gDC2 or self.gDC2
@@ -672,9 +676,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Notes:
             1. It is at this point in the analysis that the "raw" Touchstone data
-                gets interpolated to our system frequency vector.
-            2. After this step, the package and R0/Rd mismatch have been accounted for,
-                but not the EQ.
+            gets interpolated to our system frequency vector.
+
+            2. After this step, the package and R0/Rd mismatch have been accounted for, but not the EQ.
         """
 
         assert s2p.s[0].shape == (2, 2), ValueError("I can only convert 2-port networks.")
@@ -704,15 +708,15 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Keyword Args:
             tx_taps: Tx FFE tap weights.
-                Default: None (i.e. - Use `self.tx_taps`.)
+                Default: None (i.e. - Use ``self.tx_taps``.)
             gDC: CTLE first stage d.c. gain (dB).
-                Default: None (i.e. - Use `self.gDC`.)
+                Default: None (i.e. - Use ``self.gDC``.)
             gDC2: CTLE second stage d.c. gain (dB).
-                Default: None (i.e. - Use `self.gDC2`.)
+                Default: None (i.e. - Use ``self.gDC2``.)
             rx_taps: Rx FFE tap weights.
-                Default: None (i.e. - Use `self.rx_taps`.)
+                Default: None (i.e. - Use ``self.rx_taps``.)
             dfe_taps: Rx DFE tap weights.
-                Default: None (i.e. - Use `self.dfe_taps`.)
+                Default: None (i.e. - Use ``self.dfe_taps``.)
             passive_RxFFE: Enforce passivity of Rx FFE when True.
                 Default: True
 
@@ -724,11 +728,13 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Notes:
             1. It is in this processing step that linear EQ is first applied.
-            2. Any unprovided EQ values are taken from the `COM` instance.
-                If you really want to omit a particular EQ component then call with:
 
-                - `tx_taps`/`rx_taps`: []
-                - `gDC`/`gDC2`: 0
+            2. Any unprovided EQ values are taken from the ``COM`` instance.
+            If you really want to omit a particular EQ component then call with:
+
+                - ``tx_taps``: []
+                - ``rx_taps``: [1.0]
+                - ``gDC``/``gDC2``: 0
         """
 
         assert s2p.s[0, :, :].shape == (2, 2), ValueError(
@@ -777,7 +783,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Notes:
             1. It is at this point in the signal processing chain that we change
-                time domains.
+            time domains.
         """
 
         assert len(H) == len(self.freqs), ValueError(
@@ -799,17 +805,17 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Keyword Args:
             ntwks: The list of networks to generate pulse responses for.
-                Default: None (i.e. - Use `self.chnls`.)
+                Default: None (i.e. - Use ``self.chnls``.)
             gDC: Rx CTLE first stage d.c. gain.
-                Default: None (i.e. - Use `self.gDC`.)
+                Default: None (i.e. - Use ``self.gDC``.)
             gDC2: Rx CTLE second stage d.c. gain.
-                Default: None (i.e. - Use `self.gDC2`.)
+                Default: None (i.e. - Use ``self.gDC2``.)
             tx_taps: Desired Tx tap weights.
-                Default: None (i.e. - Use `self.tx_taps`.)
+                Default: None (i.e. - Use ``self.tx_taps``.)
             rx_taps: Desired Rx FFE tap weights.
-                Default: None (i.e. - Use `self.rx_taps`.)
+                Default: None (i.e. - Use ``self.rx_taps``.)
             dfe_taps: Desired Rx DFE tap weights.
-                Default: None (i.e. - Use `self.dfe_taps`.)
+                Default: None (i.e. - Use ``self.dfe_taps``.)
             apply_eq: Include linear EQ when True; otherwise, exclude it.
                 (Allows for pulse response generation of terminated, but unequalized, channel.)
                 Default: True
@@ -817,16 +823,14 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         Returns:
             list of pulse responses.
 
-        Raises:
-            None
-
         Notes:
-            1. Assumes `self.gDC`, `self.gDC2`, `self.tx_taps`, `self.rx_taps`, and `self.dfe_taps`
-                have been set correctly, if the equivalent function parameters have not been provided.
+            1. Assumes ``self.gDC``, ``self.gDC2``, ``self.tx_taps``, ``self.rx_taps``, and ``self.dfe_taps``
+            have been set correctly, if the equivalent function parameters have not been provided.
+
             2. To generate pulse responses that include all linear EQ except the Rx FFE/DFE
-                (i.e. - pulse responses suitable for Rx FFE/DFE tap weight optimization,
-                via either `optimize.przf()` or `optimize.mmse()`),
-                set `rx_taps` equal to: [1.0] and `dfe_taps` equal to: [].
+            (i.e. - pulse responses suitable for Rx FFE/DFE tap weight optimization,
+            via either ``optimize.przf()`` or ``optimize.mmse()``),
+            set ``rx_taps`` equal to: ``[1.0]`` and ``dfe_taps`` equal to: ``[]``.
         """
 
         gDC  = gDC  or self.gDC  # The more Pythonic way, but doesn't work for lists in newer versions of Python.
@@ -880,7 +884,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 Default: 0.001 (i.e. - 0.1%, as per Note 2 of 93A.1.7.1)
 
         Returns:
-            The subset of `pr_samps` passing filtration.
+            The subset of ``pr_samps`` passing filtration.
         """
 
         thresh = As * rel_thresh
@@ -930,8 +934,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Notes:
             1. As per v3.70 of the COM MATLAB code, we only minimize the
-                residual of (93A-25); we don't require solving it exactly.
-                (We do, however, give priority to exact solutions.)
+            residual of (93A-25); we don't require solving it exactly.
+            (We do, however, give priority to exact solutions.)
         """
 
         M = self.nspui
@@ -993,20 +997,19 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             norm_mode: The tap weight normalization mode to use.
                 Default: None (i.e. - Use ``self.norm_mode``.)
             unit_amp: Enforce unit pulse response amplitude when True.
-                (For comparing `optimize.przf()` results to `optimize.mmse()` results.)
+                (For comparing ``optimize.przf()`` results to ``optimize.mmse()`` results.)
                 Default: None (i.e. - Use ``self.unit_amp``.)
 
         Returns:
             The resultant figure of merit.
 
-        Raises:
-            None
-
         Notes:
             1. See: IEEE 802.3-2022 93A.1.6.
-            2. When not provided, the values for ``gDC`` and ``gDC2`` are taken from the `COM` instance.
-            3. Unlike other member functions of the `COM` class,
-                this function **optimizes** the Rx FFE tap weights when they are not provided.
+
+            2. When not provided, the values for ``gDC`` and ``gDC2`` are taken from the ``COM`` instance.
+
+            3. Unlike other member functions of the ``COM`` class,
+               this function *optimizes* the Rx FFE tap weights when they are not provided.
         """
 
         # Honor any mode overrides.
@@ -1146,25 +1149,28 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         unit_amp: Optional[bool] = None
     ) -> bool:
         """
-        Find the optimum values for the linear equalization parameters:
-        c[n], gDC, gDC2, and w[n] as per IEEE 802.3-22 93A.1.6
+        Find and set the optimum values for the linear equalization parameters:
+        ``c[n]``, ``gDC``, ``gDC2``, and ``w[n]`` as per IEEE 802.3-22 93A.1.6
         (or, [1] slide 11 if MMSE has been chosen).
 
         Keyword Args:
             do_opt_eq: Perform optimization of linear EQ when True.
                 Default: True
-            tx_taps: Used when `do_opt_eq` = False.
+            tx_taps: Used when ``do_opt_eq`` = False.
                 Default: None
             opt_mode: Optimization mode.
-                Default: None (i.e. - Use `self.opt_mode`.)
+                Default: None (i.e. - Use ``self.opt_mode``.)
             norm_mode: The tap weight normalization mode to use.
-                Default: None (i.e. - Use `self.norm_mode`.)
+                Default: None (i.e. - Use ``self.norm_mode``.)
             unit_amp: Enforce unit pulse response amplitude when True.
-                (For comparing `przf()` results to `mmse()` results.)
-                Default: None (i.e. - Use `self.unit_amp`.)
+                (For comparing ``przf()`` results to ``mmse()`` results.)
+                Default: None (i.e. - Use ``self.unit_amp``.)
 
         Returns:
             True if no errors encountered; False otherwise.
+
+        Notes:
+            1. The found optimum equalization values are set for the instance.
         """
 
         if do_opt_eq:
@@ -1267,29 +1273,37 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 (In support of MMSE.)
                 Default: None
             opt_mode: Optimization mode.
-                Default: None (i.e. - Use `self.opt_mode`.)
+                Default: None (i.e. - Use ``self.opt_mode``.)
             norm_mode: The tap weight normalization mode to use.
-                Default: None (i.e. - Use `self.norm_mode`.)
+                Default: None (i.e. - Use ``self.norm_mode``.)
             unit_amp: Enforce unit pulse response amplitude when True.
-                (For comparing `przf()` results to `mmse()` results.)
-                Default: None (i.e. - Use `self.unit_amp`.)
+                (For comparing ``przf()`` results to ``mmse()`` results.)
+                Default: None (i.e. - Use ``self.unit_amp``.)
             dbg_dict: Optional dictionary into which debugging values may be stashed,
                 for later analysis.
                 Default: None
 
         Returns:
-            - signal amplitude
-            - noise + interference amplitude (V)
-            - cursor location within victim pulse response vector
+            A triplet containing
+
+                - signal amplitude (V)
+                - noise + interference amplitude (V)
+                - cursor location within victim pulse response vector
 
         Notes:
             1. Assumes the following instance variables have been set optimally:
-                - gDC
-                - gDC2
-                - tx_taps
-                - rx_taps
-                (This assumption is embedded into the `gen_pulse_resps()` function.)
-            2. Fills in the `com_results` dictionary w/ various useful values for debugging.
+
+                - ``gDC``
+                - ``gDC2``
+                - ``tx_taps``
+                - ``rx_taps``
+
+                (This assumption is embedded into the ``gen_pulse_resps()`` function.)
+
+            2. Fills in the ``com_results`` dictionary w/ various useful values for debugging.
+
+        ToDo:
+            1. ``DER0 / 2`` in ``Ani`` calculation?
         """
 
         # Honor any mode overrides.

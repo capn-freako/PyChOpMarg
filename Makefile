@@ -12,6 +12,7 @@ PROJ_FILE := pyproject.toml
 PROJ_INFO := src/PyChOpMarg.egg-info/PKG-INFO
 VER_FILE := .proj_ver
 VER_GETTER := ./get_proj_ver.py
+SHELL_EXEC := bash
 PYTHON_EXEC := python -I
 TOX_EXEC := tox
 TOX_SKIP_ENV := format
@@ -47,13 +48,13 @@ type-check:
 	${TOX_EXEC} run -e type-check
 
 docs: ${VER_FILE}
-	source $< && ${TOX_EXEC} run -e docs
+	${SHELL_EXEC} -c "source $<" && ${TOX_EXEC} run -e docs
 
 build: ${VER_FILE}
 	${TOX_EXEC} run -e build
 
 upload: ${VER_FILE}
-	source $< && ${TOX_EXEC} run -e upload
+	${SHELL_EXEC} -c "source $<" && ${TOX_EXEC} run -e upload
 
 test:
 	@for V in ${PYVERS}; do \
@@ -63,7 +64,7 @@ test:
 	done
 
 clean:
-	rm -rf .tox docs/build/ .mypy_cache .pytest_cache .venv
+	rm -rf .tox build/ dist/ docs/_build/ .mypy_cache .pytest_cache .venv
 
 help:
 	@echo "Available targets:"
