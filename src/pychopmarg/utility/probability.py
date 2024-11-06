@@ -3,7 +3,7 @@ Statistical utilities for PyChOpMarg.
 
 Original author: David Banas <capn.freako@gmail.com>
 
-Original date:   March 3, 2024 (Copied from `pybert.utility`.)
+Original date:   March 3, 2024
 
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
@@ -28,7 +28,7 @@ def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
             Default: 0.001 (i.e. - 0.1%, as per Note 2 of 93A.1.7.1)
 
     Returns:
-        The subset of `pr_samps` passing filtration.
+        The subset of ``pr_samps`` passing filtration.
     """
     thresh = As * rel_thresh
     return np.array(list(filter(lambda x: abs(x) >= thresh, pr_samps)))
@@ -58,19 +58,20 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             Default: None
 
     Returns:
-        A pair consisting of:
-        - the voltages corresponding to the bins, and
-        - their probabilities.
+        A pair consisting of
+
+            - the voltages corresponding to the bins, and
+            - their probabilities.
 
     Raises:
-        `ValueError` if the given pulse response contains any NaNs.
-        `ValueError` if a needed shift exceeds half the result vector length.
+        ValueError: If the given pulse response contains any NaNs.
+        ValueError: If a needed shift exceeds half the result vector length.
 
     Notes:
         1. The input set of pulse response samples is filtered,
-            as per Note 2 of 93A.1.7.1, unless a y-values override
-            vector is provided, in which case it is assumed that
-            the caller has already done the filtering.
+        as per Note 2 of 93A.1.7.1, unless a y-values override
+        vector is provided, in which case it is assumed that
+        the caller has already done the filtering.
     """
 
     assert not any(np.isnan(h_samps)), ValueError(

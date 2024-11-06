@@ -1,10 +1,10 @@
-pychopmarg.com
-==============
+pychopmarg.noise
+================
 
 Classes
 ---------
 
-.. autoclass:: pychopmarg.com.COM
+.. autoclass:: pychopmarg.noise.NoiseCalc
    :members:
    :undoc-members:
    :no-inherited-members:

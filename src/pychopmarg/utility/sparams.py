@@ -3,7 +3,7 @@ S-parameter utilities for PyChOpMarg.
 
 Original author: David Banas <capn.freako@gmail.com>
 
-Original date:   March 3, 2024 (Copied from `pybert.utility`.)
+Original date:   March 3, 2024
 
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
@@ -27,7 +27,7 @@ def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Ne
 
     Keyword Args:
         norm: Normalization factor. (Default = 0.5)
-        renumber: Automatically detect correct through path when True.
+        renumber: Automatically detect and correct through path when True.
                   Default: False
 
     Returns:
@@ -43,22 +43,27 @@ def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Ne
 
 def se2mm(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Network:
     """
-    Given a 4-port single-ended network, return its mixed mode equivalent.
+    Given a 4-port single-ended network,
+    return its mixed mode equivalent in the following format:
+
+    .. math::
+        \\begin{bmatrix}
+            Sdd11 & Sdd12 & Sdc11 & Sdc12 \\\\
+            Sdd21 & Sdd22 & Sdc21 & Sdc22 \\\\
+            Scd11 & Scd12 & Scc11 & Scc12 \\\\
+            Scd21 & Scd22 & Scc21 & Scc22
+        \\end{bmatrix}
 
     Args:
         ntwk: 4-port single ended network.
 
     Keyword Args:
         norm: Normalization factor. (Default = 0.5)
-        renumber: Automatically detect correct through path when True.
+        renumber: Automatically detect and correct through path when True.
                   Default: False
 
     Returns:
-        Mixed mode equivalent network, in the following format:
-            Sdd11  Sdd12  Sdc11  Sdc12
-            Sdd21  Sdd22  Sdc21  Sdc22
-            Scd11  Scd12  Scc11  Scc12
-            Scd21  Scd22  Scc21  Scc22
+        Mixed mode equivalent network.
 
     Notes:
         1. A "1->2/3->4" port ordering convention is assumed when `renumber` is False.
@@ -121,9 +126,10 @@ def import_s32p(  # pylint: disable=too-many-locals
 
     Returns:
         List of 8 pairs, each consisting of:
+
             - a 2-port network representing a *differential* channel, and
             - the type of that channel, one of: 'THRU', 'NEXT', or 'FEXT.
-                (First element is the victim and the only one of type 'THRU'.)
+              (First element is the victim and the only one of type 'THRU'.)
 
     Raises:
         ValueError: If Touchstone file is not 32-port.
@@ -132,7 +138,7 @@ def import_s32p(  # pylint: disable=too-many-locals
         1. Input Touchstone file is assumed single-ended.
         2. The differential through and xtalk channels are returned.
         3. Port 2 of all returned channels correspond to the same physical circuit node,
-            typically, the Rx input node.
+           typically, the Rx input node.
     """
 
     # Import and sanity check the Touchstone file.
@@ -197,8 +203,8 @@ def sCshunt(freqs: Rvec, c: float, r0: float = 50.0) -> rf.Network:
             Default: 50 Ohms.
 
     Returns:
-        s2p: The network corresponding to a shunt capacitance, `c`,
-            calculated at the given frequencies, `freqs`.
+        The network corresponding to a shunt capacitance, ``c``,
+        calculated at the given frequencies, ``freqs``.
     """
     w = TWOPI * np.array(freqs)
     s = 1j * w
@@ -221,8 +227,8 @@ def sLseries(freqs: Rvec, inductance: float, r0: float = 50.0) -> rf.Network:
             Default: 50 Ohms.
 
     Returns:
-        s2p: The network corresponding to a series inductance, `inductance`,
-            calculated at the given frequencies, `freqs`.
+        The network corresponding to a series inductance, ``inductance``,
+        calculated at the given frequencies, ``freqs``.
     """
     w = TWOPI * np.array(freqs)
     s = 1j * w
@@ -242,12 +248,13 @@ def sDieLadderSegment(freqs: Rvec, trip: tuple[float, float, float]) -> rf.Netwo
     Args:
         f: List of frequencies to use for network creation (Hz).
         trip: Triple containing:
+
             - R0: Reference impedance for network (Ohms).
             - Cd: Shunt capacitance (F).
             - Ls: Series inductance (H).
 
     Returns:
-        s2p: Two port network for segment.
+        Two port network for segment.
     """
     R0, Cd, Ls = trip
     return sCshunt(freqs, Cd, r0=R0) ** sLseries(freqs, Ls, r0=R0)
@@ -269,6 +276,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         tau: Propagation delay (ns/mm).
         gamma0: Propagation loss constant (1/mm).
         z_pairs: List of pairs defining the T-line segments, each containing:
+
             - zc: Characteristic impedance of segment (Ohms).
             - zp: Length of segment (mm).
 
@@ -297,6 +305,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
 
         Args:
             z_pair: Pair consisting of:
+
                 - zc: Characteristic impedance of leg (Ohms).
                 - zp: Length of leg (mm).
 

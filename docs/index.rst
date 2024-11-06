@@ -6,13 +6,14 @@
 Welcome to PyChOpMarg's documentation!
 ======================================
 
-The *PyChOpMarg* package provides a Python implementation of COM, as per IEEE 802.3-22 Annex 93A.
+The *PyChOpMarg* package provides a Python implementation of COM, as per IEEE 802.3-22 Annex 93A/178A.
 
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
 
    quickstart
+   develop
    pychopmarg
    todo
 

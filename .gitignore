@@ -27,6 +27,7 @@ share/python-wheels/
 MANIFEST
 *.whl
 *.gz
+.proj_ver
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
