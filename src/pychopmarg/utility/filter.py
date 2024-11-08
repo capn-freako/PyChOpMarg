@@ -9,6 +9,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 import numpy as np  # type: ignore
+import skrf  as rf  # type: ignore
 
 from pychopmarg.common import Rvec, Cvec, TWOPI
 
@@ -116,3 +117,32 @@ def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
     taps[nPreTaps] = 1.0
 
     return taps
+
+
+def calc_H21(freqs: Rvec, s2p: rf.Network, g1: float, g2: float) -> Cvec:
+    """
+    Return the voltage transfer function, H21(f), of a terminated two
+    port network, according to (93A-18).
+
+    Args:
+        freqs: Frequencies at which to calculate the response (Hz).
+        s2p: Two port network of interest.
+        g1: Reflection coefficient looking out of the left end of the channel.
+        g2: Reflection coefficient looking out of the right end of the channel.
+
+    Returns:
+        Complex voltage transfer function at given frequencies.
+
+    Raises:
+        ValueError: If given network is not two port.
+    """
+
+    assert s2p.s[0].shape == (2, 2), ValueError("Network must be 2-port!")
+    s2p = s2p.extrapolate_to_dc()
+    s2p.interpolate_self(freqs)
+    s11 = s2p.s11.s.flatten()
+    s12 = s2p.s12.s.flatten()
+    s21 = s2p.s21.s.flatten()
+    s22 = s2p.s22.s.flatten()
+    dS = s11 * s22 - s12 * s21
+    return (s21 * (1 - g1) * (1 + g2)) / (1 - s11 * g1 - s22 * g2 + g1 * g2 * dS)
