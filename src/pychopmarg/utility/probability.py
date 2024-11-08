@@ -123,3 +123,84 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     rslt /= sum(rslt)  # Enforce a PMF.
 
     return y, rslt
+
+
+def calc_hJ(pulse_resp: Rvec, As: float, cursor_ix: int, nspui: int, rel_thresh: float = 0.001) -> Rvec:
+    """
+    Calculate the set of slopes for valid pulse response samples.
+
+    Args:
+        pulse_resp: The pulse response of interest.
+        As: Signal amplitude, as per 93A.1.6.c.
+        cursor_ix: Cursor index.
+        nspui: Number of samples per UI.
+
+    Keyword Args:
+        rel_thresh: Filtration threshold (As).
+            Default: 0.001 (i.e. - 0.1%, as per Note 2 of 93A.1.7.1)
+
+    Returns:
+        The calculated slopes around the valid samples.
+    """
+
+    thresh = As * rel_thresh
+    valid_pr_samp_ixs = np.array(list(filter(lambda ix: abs(pulse_resp[ix]) >= thresh,
+                                             range(cursor_ix, len(pulse_resp) - 1, nspui))))
+    m1s = pulse_resp[valid_pr_samp_ixs - 1]
+    p1s = pulse_resp[valid_pr_samp_ixs + 1]
+    return (p1s - m1s) / (2 / nspui)  # (93A-28)
+
+
+def loc_curs(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    pulse_resp: Rvec, nspui: int, dfe_max: Rvec, dfe_min: Rvec,
+    max_range: int = 1, eps: float = 0.001
+) -> int:
+    """
+    Locate the cursor position for the given pulse response,
+    according to (93A-25) and (93A-26) (i.e. - Muller-Mueller criterion).
+
+    Args:
+        pulse_resp: The pulse response of interest.
+        nspui: Number of samples per UI.
+        dfe_max: Vector of maximum DFE tap weight values.
+        dfe_min: Vector of minimum DFE tap weight values.
+
+    Keyword Args:
+        max_range: The search radius, from the peak (UI).
+            Default: 1
+        eps: Threshold for declaring floating point value to be zero.
+            Default: 0.001
+
+    Returns:
+        The index in the given pulse response vector of the cursor.
+
+    Notes:
+        1. As per v3.70 of the COM MATLAB code, we only minimize the
+        residual of (93A-25); we don't require solving it exactly.
+        (We do, however, give priority to exact solutions.)
+    """
+
+    # Minimize Muller-Mueller criterion, within `max_range` of peak,
+    # giving priority to exact solutions, as per the spec.
+    peak_loc = int(np.argmax(pulse_resp))
+    ix_best = peak_loc  # To assuage `pylint` only; does not affect code logic.
+    res_min = 1e6
+    zero_res_ixs = []
+    for ix in range(peak_loc - nspui * max_range, peak_loc + nspui * max_range):
+        # Anticipate the DFE first tap value, observing its limits:
+        b_1 = min(dfe_max[0],
+                  max(dfe_min[0],
+                      pulse_resp[ix + nspui] / pulse_resp[ix]))                          # (93A-26)
+        # And include the effect of that tap when checking the Muller-Mueller condition:
+        res = abs(pulse_resp[ix - nspui] - (pulse_resp[ix + nspui] - b_1 * pulse_resp[ix]))  # (93A-25)
+        if res < eps:        # "Exact" match?
+            zero_res_ixs.append(ix)
+        elif res < res_min:  # Keep track of best solution, in case no exact matches.
+            ix_best = ix
+            res_min = res
+    if zero_res_ixs:  # Give priority to "exact" matches if there were any.
+        pre_peak_ixs = list(filter(lambda x: x <= peak_loc, zero_res_ixs))
+        if pre_peak_ixs:
+            return pre_peak_ixs[-1]  # Standard says to use first one prior to peak in event of multiple solutions.
+        return zero_res_ixs[0]       # They're all post-peak; so, return first (i.e. - closest to peak).
+    return ix_best                   # No exact solutions; so, return that which yields minimum error.
