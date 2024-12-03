@@ -291,7 +291,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             [2] D1.2 of P802.3dj, IEEE P802.3dj Task Force, Aug. 2024
     """
 
-    assert Nw > dw, ValueError(
+    assert Nw == 0 or Nw > dw, ValueError(
         f"`Nw` ({Nw}) must be greater than `dw` ({dw})!")
 
     # Initialize certain things, from the given `NoiseCalc` instance.
@@ -311,14 +311,19 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     rslt = {}
     for ts_ix in range(curs_ix - ts_sweep_ix, curs_ix + ts_sweep_ix):
         theNoiseCalc.ts_ix = ts_ix
+        varX = theNoiseCalc.varX
         dh, first_samp = divmod(ts_ix, nspui)
         h = vic_pr[first_samp::nspui]
         d = dw + dh
-        first_col = concatenate((h, zeros(Nw - 1)))
+        if Nw:
+            first_col = concatenate((h, zeros(Nw - 1)))
+        else:
+            first_col = h
+            Nw = 1
+            w_min = w_max = array([1.0])
         H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
         h0 = H[d]
         Hb = H[d + 1: d + 1 + Nb]
-        varX = theNoiseCalc.varX
         Rn = theNoiseCalc.Rn()[:Nw]
         R = H.T @ H + toeplitz(Rn) / varX
         A = concatenate((concatenate(( R, -Hb.T,         -h0.reshape((Nw, 1))), axis=1),  # noqa=E201
@@ -360,6 +365,11 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             b_lim = maximum(b_min, minimum(b_max, b))
 
         mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
+        # else:
+        #     w = array([1.0])
+        #     w_lim = array([1.0 / h[dh]])
+        #     mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
+
         fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
         if fom > max_fom:
             max_fom = fom

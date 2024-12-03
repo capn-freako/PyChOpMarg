@@ -31,7 +31,7 @@ def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
         The subset of ``pr_samps`` passing filtration.
     """
     thresh = As * rel_thresh
-    return np.array(list(filter(lambda x: abs(x) >= thresh, pr_samps)))
+    return pr_samps[abs(pr_samps) > thresh]
 
 
 def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals

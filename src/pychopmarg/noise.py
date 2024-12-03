@@ -215,11 +215,16 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             One-sided crosstalk PSD at Rx FFE input, uniformly sampled over [0, PI] (rads./s norm.).
         """
 
+        t     = self.t
         nspui = self.nspui
+
+        # Truncate at # of whole UIs in `t`, to avoid +/-1 length variation, due to sampling phase.
+        nUI = int(len(t) / nspui)
+
         sampled_agg_prs = [agg_pulse_resp[m::nspui] for m in range(nspui)]
         best_m = argmax(list(map(lambda pr_samps: sum(array(pr_samps)**2), sampled_agg_prs)))
 
-        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
+        return self.varX * abs(rfft(sampled_agg_prs[best_m][:nUI]))**2 * self.Tb  # i.e. - / fB
 
     @property
     def Stn(self) -> Rvec:
@@ -237,7 +242,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf
         # * f[-1]  # See `_get_Srn()`. But, note that `* df` is not appropriate here.
         _htn = irfft(sinc(f * Tb) * Htn) * 2
-        htn  = self.from_irfft(_htn)  # ToDo: Do I need to honor `ts_ix`?
+        htn  = self.from_irfft(_htn)
 
         return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * Tb  # i.e. - / fB
 
@@ -255,17 +260,26 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         varX           = self.varX
         vic_pulse_resp = self.vic_pulse_resp
 
+        # Truncate at # of whole UIs in `t`, to avoid +/-1 length variation, due to sampling phase.
+        nUI = int(len(t) / nspui)
+
         dV = diff(vic_pulse_resp)
-        if int(ts_ix % nspui) != 0:
-            hJ = mean(concatenate((dV[ts_ix % nspui - 1: -1: nspui],
-                                   dV[ts_ix % nspui::nspui])).reshape((2, -1)), axis=0) / t[1]
-        else:
-            hJ = mean(array([dV[nspui - 1::nspui], dV[nspui::nspui]]), axis=0) / t[1]
+        hJ = mean(array([dV[(ts_ix - 1) % nspui::nspui][:nUI],
+                         dV[(ts_ix    ) % nspui::nspui][:nUI]]),
+                  axis=0) / t[1]
+        # hJ = hJ[:int(len(t) / nspui)]
 
         return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
 
     def Rn(self) -> Rvec:
         """Noise autocorrelation vector at Rx FFE input."""
-        Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0) + self.Stn + self.Sjn
+        try:
+            Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)[:len(self.Srn)] + self.Stn + self.Sjn
+        except:
+            print(f"len(self.Srn): {len(self.Srn)}")
+            print(f"len(self.Sxn(self.agg_pulse_resps[0])): {len(self.Sxn(self.agg_pulse_resps[0]))}")
+            print(f"len(self.Stn): {len(self.Stn)}")
+            print(f"len(self.Sjn): {len(self.Sjn)}")
+            raise
         # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
         return irfft(Sn) / self.Tb

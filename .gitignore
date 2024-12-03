@@ -172,3 +172,8 @@ enable-6.0.0/
 *.pdf
 COM_MATLAB/
 *.pickle
+*.xls
+*.xlsx
+test_results_*/
+*.m
+*results.csv

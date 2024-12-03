@@ -11,6 +11,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 from typing import Any, TypeVar
 
 import numpy as np  # type: ignore
+from numpy.typing import NDArray
 from scipy.interpolate import interp1d
 
 from pychopmarg.common import Rvec
@@ -18,7 +19,7 @@ from pychopmarg.common import Rvec
 T = TypeVar('T', Any, Any)
 
 
-def all_combs(xss: list[list[T]]) -> list[list[T]]:
+def all_combs(xss: list[NDArray[T]]) -> list[NDArray[T]]:
     """
     Generate all combinations of input.
 
@@ -26,16 +27,16 @@ def all_combs(xss: list[list[T]]) -> list[list[T]]:
         xss: The lists of candidates for each position in the final output.
 
     Returns:
-        All possible combinations of input lists.
+        All possible combinations of inputs.
     """
     if not xss:
-        return [[]]
+        return [np.array([])]
     head, *tail = xss
     yss = all_combs(tail)
-    return [[x] + ys for x in head for ys in yss]
+    return [np.insert(ys, 0, x) for x in head for ys in yss]
 
 
-def mk_combs(trips: list[tuple[float, float, float]]) -> list[list[float]]:
+def mk_combs(trips: list[tuple[float, float, float]]) -> list[Rvec]:
     """
     Make all possible combinations of tap weights, given a list of "(min, max, step)" triples.
 
@@ -43,14 +44,14 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[list[float]]:
         trips: A list of "(min, max, step)" triples, one per weight.
 
     Returns:
-        A list of lists of tap weights, including all possible combinations.
+        A list of NDArrays of tap weights, including all possible combinations.
     """
     ranges = []
     for trip in trips:
         if trip[2]:  # non-zero step?
-            ranges.append(list(np.arange(trip[0], trip[1] + trip[2], trip[2])))
+            ranges.append(np.arange(trip[0], trip[1] + trip[2], trip[2]))
         else:
-            ranges.append([0.0])
+            ranges.append(np.array([0.0]))
     return all_combs(ranges)
 
 

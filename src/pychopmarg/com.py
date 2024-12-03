@@ -23,6 +23,7 @@ ToDo:
 """
 
 from enum    import Enum
+from functools import cache
 from pathlib import Path
 from typing  import Any, Dict, Optional, TypeVar
 
@@ -63,8 +64,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     opt_mode = OptMode(OptMode.MMSE)
     norm_mode = NormMode(NormMode.P8023dj)
     unit_amp = bool(True)
-    tmax = float(10e-9)  # system time vector maximum (s).
-    fmax = float(40e9)   # system frequency vector maximum (Hz).
+    tmax = float(10e-9)             # system time vector maximum (s).
+    _fmax = float(40e9)             # system frequency vector maximum (Hz).
+    _t_irfft_dirty = bool(True)     # Flags a change to `fmax`.
     com_params = IEEE_8023by
 
     # Linear EQ
@@ -112,6 +114,20 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         self.com_params = com_params
         self.debug = debug
+
+        c0_min = com_params.c0_min
+        trips = list(zip(com_params.tx_taps_min,
+                         com_params.tx_taps_max,
+                         com_params.tx_taps_step))
+        self._tx_combs: list[Rvec] = list(filter(
+            lambda v: (1 - abs(v).sum()) >= c0_min,
+            mk_combs(trips)))
+        self._num_tx_combs = len(self._tx_combs)
+
+        @cache
+        def _Htx(tx_combs_ix: int) -> Cvec:
+            return calc_Hffe(self.freqs, 1 / self.fb, array(self._tx_combs[tx_combs_ix]), 3)
+        self._Htx = _Htx
 
         self.nRxTaps = len(com_params.rx_taps_max)
         self.nRxPreTaps = com_params.dw
@@ -210,6 +226,16 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         return self.com_params.fstep
 
     @property
+    def fmax(self) -> float:
+        "Maximum frequency (Hz)"
+        return self._fmax
+
+    @fmax.setter
+    def fmax(self, value):
+        self._fmax = value
+        self._t_irfft_dirty = True
+
+    @property
     def freqs(self) -> Rvec:
         "System frequency vector (Hz); decoupled from system time vector!"
         return np.arange(0, self.fmax + self.fstep, self.fstep)
@@ -217,8 +243,11 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     @property
     def t_irfft(self) -> Rvec:
         "`irfft()` result time index (s) (i.e. - time vector coupled to frequency vector)."
-        Ts = 0.5 / self.fmax  # Sample period satisfying Nyquist criteria.
-        return array([n * Ts for n in range(2 * (len(self.freqs) - 1))])
+        if self._t_irfft_dirty:
+            Ts = 0.5 / self.fmax  # Sample period satisfying Nyquist criteria.
+            self._t_irfft = array([n * Ts for n in range(2 * (len(self.freqs) - 1))])
+            self._t_irfft_dirty = False
+        return self._t_irfft
 
     @property
     def Xsinc(self) -> Rvec:
@@ -236,6 +265,11 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
         f = self.freqs / 1e9  # 93A-46 calls for f in GHz.
         return np.exp(-2 * (PI * f * self.com_params.T_r / 1.6832)**2)
+
+    @property
+    def num_tx_combs(self) -> int:
+        "Return the number of available Tx FFE tap weight combinations."
+        return self._num_tx_combs
 
     @property
     def Hr(self) -> Cvec:
@@ -275,14 +309,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                           self.com_params.f_p2, self.com_params.f_LF, gDC, gDC2)
 
     @property
-    def tx_combs(self) -> list[list[float]]:
-        "All possible Tx tap weight combinations."
-        trips = list(zip(self.com_params.tx_taps_min,
-                         self.com_params.tx_taps_max,
-                         self.com_params.tx_taps_step))
-        return mk_combs(trips)
-
-    @property
     def gamma1(self) -> float:
         "Reflection coefficient looking out of the left end of the channel."
         Rd = self.com_params.R_d
@@ -297,8 +323,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     @property
     def sDieLadder(self) -> rf.Network:
         "On-die parasitic capacitance/inductance ladder network."
-        Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))
-        Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))
+        # Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))
+        # Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))
+        Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))[0]
+        Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))[0]
         R0 = [self.com_params.R_0] * len(Cd)
         rslt = rf.network.cascade_list(list(map(lambda trip: sDieLadderSegment(self.freqs, trip), zip(R0, Cd, Ls))))
         return rslt
@@ -306,17 +334,20 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     @property
     def sPkgRx(self) -> rf.Network:
         "Rx package response."
-        return self.sC(self.com_params.C_p / 1e12) ** self.sZp ** self.sDieLadder
+        # return self.sC(self.com_params.C_p / 1e12) ** self.sZp ** self.sDieLadder
+        return self.sC(self.com_params.C_p[0][0] / 1e12) ** self.sZp ** self.sDieLadder
 
     @property
     def sPkgTx(self) -> rf.Network:
         "Tx package response."
-        return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p / 1e12)
+        # return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p / 1e12)
+        return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p[0][0] / 1e12)
 
     @property
     def sPkgNEXT(self) -> rf.Network:
         "NEXT package response."
-        return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p / 1e12)
+        # return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p / 1e12)
+        return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p[0][0] / 1e12)
 
     @property
     def sZp(self) -> rf.Network:
@@ -448,6 +479,20 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
         return sCshunt(self.freqs, c, self.com_params.R_0)
 
+    def Htx(self, tx_taps_ix: int) -> Cvec:
+        """
+        Return the complex frequency response of the Tx deemphasis filter.
+
+        Args:
+            tx_taps_ix: Index into the Tx tap weight combinations list.
+
+        Returns:
+            Complex frequency response of Tx deemphasis filter.
+        """
+        assert 0 <= tx_taps_ix < self.num_tx_combs, ValueError(
+            f"tx_taps_ix ({tx_taps_ix}) must be an integer in: [0, {self.num_tx_taps_combs})!")
+        return self._Htx(tx_taps_ix)
+
     def H21(self, s2p: rf.Network) -> Cvec:
         """
         Return the voltage transfer function, H21(f), of a terminated two
@@ -468,10 +513,11 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
             2. After this step, the package and R0/Rd mismatch have been accounted for, but not the EQ.
         """
-        return calc_H21(self.freqs, s2p, self.gamma1, self.gamma2)
+        # return calc_H21(self.freqs, s2p, self.gamma1, self.gamma2)
+        return calc_H21(self.freqs, s2p, self.gamma1[0][0], self.gamma2[0][0])
 
     def H(  # pylint: disable=too-many-arguments,too-many-locals,too-many-positional-arguments
-        self, s2p: rf.Network, tx_taps: Optional[Rvec] = None,
+        self, s2p: rf.Network, tx_ix: int,
         gDC: Optional[float] = None, gDC2: Optional[float] = None,
         rx_taps: Optional[Rvec] = None, dfe_taps: Optional[Rvec] = None,
         passive_RxFFE: bool = False
@@ -484,7 +530,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             s2p: Two port network of interest.
 
         Keyword Args:
-            tx_taps: Tx FFE tap weights.
+            tx_ix: Tx FFE tap weights index.
                 Default: None (i.e. - Use ``self.tx_taps``.)
             gDC: CTLE first stage d.c. gain (dB).
                 Default: None (i.e. - Use ``self.gDC``.)
@@ -521,14 +567,12 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         tb = 1 / self.fb
         gDC     = gDC     or self.gDC
         gDC2    = gDC2    or self.gDC2
-        if tx_taps is None:
-            tx_taps = self.tx_taps
         if rx_taps is None:
             rx_taps = self.rx_taps
         if dfe_taps is None:
             dfe_taps = self.dfe_taps
 
-        Htx  = calc_Hffe(freqs, tb, array(tx_taps).flatten(), 3)
+        Htx  = self.Htx(tx_ix)
         H21  = self.H21(s2p)
         Hr   = self.Hr
         Hctf = self.calc_Hctf(gDC=gDC, gDC2=gDC2)
@@ -574,7 +618,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     def gen_pulse_resps(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self, ntwks: Optional[list[tuple[rf.Network, str]]] = None,
         gDC: Optional[float] = None, gDC2: Optional[float] = None,
-        tx_taps: Optional[Rvec] = None, rx_taps: Optional[Rvec] = None,
+        tx_ix: Optional[int] = None, rx_taps: Optional[Rvec] = None,
         dfe_taps: Optional[Rvec] = None, apply_eq: bool = True
     ) -> list[Rvec]:
         """
@@ -587,7 +631,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 Default: None (i.e. - Use ``self.gDC``.)
             gDC2: Rx CTLE second stage d.c. gain.
                 Default: None (i.e. - Use ``self.gDC2``.)
-            tx_taps: Desired Tx tap weights.
+            tx_ix: Desired Tx tap weights index.
                 Default: None (i.e. - Use ``self.tx_taps``.)
             rx_taps: Desired Rx FFE tap weights.
                 Default: None (i.e. - Use ``self.rx_taps``.)
@@ -614,14 +658,14 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         gDC2 = gDC2 or self.gDC2
         if ntwks is None:
             ntwks = self.chnls
-        if tx_taps is None:
-            tx_taps = self.tx_taps
+        if tx_ix is None:
+            tx_ix = 0
         if rx_taps is None:
             rx_taps = self.rx_taps
         if dfe_taps is None:
             dfe_taps = self.dfe_taps
 
-        tx_taps = array(tx_taps)
+        # tx_taps = array(tx_taps)
         rx_taps = array(rx_taps)
         dfe_taps = array(dfe_taps)
 
@@ -630,10 +674,11 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             if apply_eq:
                 if ntype == 'NEXT':
                     pr = self.pulse_resp(self.H(
-                        ntwk, np.zeros(tx_taps.shape), gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
+                        # ntwk, np.zeros(tx_taps.shape), gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
+                        ntwk, 0, gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
                 else:
                     pr = self.pulse_resp(self.H(
-                        ntwk, tx_taps,                 gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
+                        ntwk, tx_ix, gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
             else:
                 pr = self.pulse_resp(self.H21(ntwk))
 
@@ -651,7 +696,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
     def calc_fom(
         self,
-        tx_taps: Rvec,
+        tx_ix: int,
         gDC: Optional[float] = None, gDC2: Optional[float] = None,
         rx_taps: Optional[Rvec] = None,
         opt_mode: Optional[OptMode] = None,
@@ -663,8 +708,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         Optimize Rx FFE taps if they aren't specified by caller.
 
         Args:
-            tx_taps: The Tx FFE tap weights, excepting the cursor.
-                (The cursor takes whatever is left.)
+            tx_ix: Index into the list of Tx tap weight combinations.
 
         Keyword Args:
             gDC: CTLE first stage d.c. gain.
@@ -712,13 +756,15 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         bmin = self.com_params.dfe_min
         bmax = self.com_params.dfe_max
         tb = 1 / self.fb
+        nspui = self.nspui
 
         pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
-            tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array([1.0]), dfe_taps=array([]))
+            tx_ix=tx_ix, gDC=gDC, gDC2=gDC2, rx_taps=array([1.0]), dfe_taps=array([]))
         match opt_mode:
             case OptMode.PRZF:
                 # Step a - Pulse response construction.
                 pulse_resps = pulse_resps_preFFE
+                pr_samps = None
                 if nRxTaps:              # If we have an Rx FFE...
                     if rx_taps is None:  # If we received no explicit override of the Rx FFE tap weight values,
                         rx_taps, _, pr_samps = przf(  # then optimize them.
@@ -726,13 +772,15 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                             array(rx_taps_min), array(rx_taps_max), array(bmin), array(bmax),
                             norm_mode=norm_mode, unit_amp=unit_amp)
                     pulse_resps = self.gen_pulse_resps(
-                        tx_taps=array(tx_taps), gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps), dfe_taps=array([]))
+                        tx_ix=tx_ix, gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps), dfe_taps=array([]))
 
                 # Step b - Cursor identification.
                 vic_pulse_resp = array(pulse_resps[0])  # Note: Includes any Rx FFE, but not DFE.
                 vic_peak_loc = np.argmax(vic_pulse_resp)
                 cursor_ix = loc_curs(vic_pulse_resp, self.nspui,
                                      array(self.com_params.dfe_max), array(self.com_params.dfe_min))
+                if pr_samps is None:
+                    pr_samps = vic_pulse_resp[cursor_ix % nspui::nspui]
 
                 # Step c - As.
                 vic_curs_val = vic_pulse_resp[cursor_ix]
@@ -865,27 +913,21 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 unit_amp = self.unit_amp
 
             # Run the nested optimization loops.
-            def check_taps(tx_taps: Rvec, t0_min: float = self.com_params.c0_min) -> bool:
-                if (1 - sum(abs(array(tx_taps)))) < t0_min:
-                    return False
-                return True
-
             fom_max = -1000.0
             fom_max_changed = False
             for _gDC2 in self.com_params.g_DC2:
-                for _gDC in self.com_params.g_DC:
-                    for _tx_taps in self.tx_combs:
-                        if not check_taps(array(_tx_taps)):
-                            continue
+                # for _gDC in self.com_params.g_DC:
+                for _gDC in self.com_params.g_DC[0]:
+                    for _tx_ix in range(self.num_tx_combs):
                         fom = self.calc_fom(
-                            array(_tx_taps), gDC=_gDC, gDC2=_gDC2,
+                            _tx_ix, gDC=_gDC, gDC2=_gDC2,
                             opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
                         if fom > fom_max:
                             fom_max_changed = True
                             fom_max = fom
                             gDC2_best = _gDC2
                             gDC_best = _gDC
-                            tx_taps_best = array(_tx_taps)
+                            tx_taps_best = self._tx_combs[_tx_ix]
                             rx_taps_best = self.fom_rslts['rx_taps']
                             pr_samps_best = self.fom_rslts['pr_samps']
                             dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
@@ -1021,9 +1063,12 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         # Sec. 93A.1.7.2
         varX = (L**2 - 1) / (3 * (L - 1)**2)                                    # (93A-29)
         df = freqs[1] - freqs[0]
-        Hrx = calc_Hffe(
-            self.freqs, 1 / self.fb, array(self.rx_taps).flatten(),
-            self.nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
+        if self.nRxTaps:
+            Hrx = calc_Hffe(
+                freqs, 1 / self.fb, array(self.rx_taps).flatten(),
+                self.nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
+        else:
+            Hrx = np.ones(len(freqs))
         varN = self.com_params.eta_0 * sum(abs(self.Hr * self.Hctf * Hrx)**2) * (df / 1e9)  # (93A-35) + Hffe
         varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                     # (93A-30)
         hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)

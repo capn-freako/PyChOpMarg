@@ -3,7 +3,7 @@ Definitions common to all PyChOpMarg modules.
 
 Original author: David Banas <capn.freako@gmail.com>
 
-Original date:   March 3, 2024 (Copied from `pybert.utility`.)
+Original date:   March 3, 2024
 
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """

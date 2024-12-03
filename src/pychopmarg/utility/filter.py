@@ -67,13 +67,43 @@ def calc_Hffe(
         The complex voltage transfer function, H(f), for the FFE.
     """
 
-    bs = list(np.array(tap_weights).flatten())
+    # bs = list(np.array(tap_weights).flatten())
+    # if not hasCurs:
+    #     b0 = 1 - sum(list(map(abs, tap_weights)))
+    #     bs.insert(-n_post, b0)
+    bs = tap_weights.flatten()
     if not hasCurs:
-        b0 = 1 - sum(list(map(abs, tap_weights)))
-        bs.insert(-n_post, b0)
-    return sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * n_b[0] * td * freqs),
-                        enumerate(bs))))
+        b0 = 1 - abs(tap_weights).sum()
+        bs = np.insert(bs, -n_post, b0)
+    if False:
+        return sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * n_b[0] * td * freqs),
+                            enumerate(bs))))
+    else:
+        return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * np.array(freqs)))  # 50% perf. improvement
 
+    # Row sum:
+    # (b0 * e(-j 2pi T 0*f0)) (b0 * e(-j 2pi T 0*f1)) (b0 * e(-j 2pi T 0*f2))
+    # (b1 * e(-j 2pi T 1*f0)) (b1 * e(-j 2pi T 1*f1)) (b1 * e(-j 2pi T 1*f2))
+    # (b2 * e(-j 2pi T 2*f0)) (b2 * e(-j 2pi T 2*f1)) (b2 * e(-j 2pi T 2*f2))
+
+    # Transposing the above:
+
+    # (b0 * e(-j 2pi T 0*f0)) + (b1 * e(-j 2pi T 1*f0)) + (b2 * e(-j 2pi T 2*f0))
+    # (b0 * e(-j 2pi T 0*f1)) + (b1 * e(-j 2pi T 1*f1)) + (b2 * e(-j 2pi T 2*f1))
+    # (b0 * e(-j 2pi T 0*f2)) + (b1 * e(-j 2pi T 1*f2)) + (b2 * e(-j 2pi T 2*f2))
+    # =
+    # b `dot` e(-j 2pi T f0 * n), n = [0,1,2]
+    # b `dot` e(-j 2pi T f1 * n)
+    # b `dot` e(-j 2pi T f2 * n)
+    # Transposing:
+    # b `dot` e(-j 2pi T f0 * n)   b `dot` e(-j 2pi T f1 * n)   b `dot` e(-j 2pi T f2 * n)
+    # =
+    # b @ e(-j 2pi T f0 * 0)   e(-j 2pi T f1 * 0)   e(-j 2pi T f2 * 0)
+    #     e(-j 2pi T f0 * 1)   e(-j 2pi T f1 * 1)   e(-j 2pi T f2 * 1)
+    #     e(-j 2pi T f0 * 2)   e(-j 2pi T f1 * 2)   e(-j 2pi T f2 * 2)
+    # =
+    # b @ e(n.T @ -j*2pi*T*f)
+    # n = np.array([list(range(len(bs))),])
 
 def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
     """
