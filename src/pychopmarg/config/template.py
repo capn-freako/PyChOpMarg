@@ -10,6 +10,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 
 from dataclasses import dataclass
 import numpy as np
+from numpy.typing import NDArray
 
 
 @dataclass
@@ -18,7 +19,8 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
 
     # General
     fb: float                   # (GBaud)
-    fstep: float                # (Hz)
+    fstep: float                # (GHz)
+    fmax: float                 # (Hz)
     L: int                      # modulation levels
     M: int                      # samples per UI
     DER_0: float                # detector error ratio
@@ -53,7 +55,8 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
     rx_taps_max: list[float]
     dw: int
     # Die & Package (Class A Test 1) Sec. 178.10.1
-    R_d: list[float]            # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
+    # R_d: list[float]            # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
+    R_d: NDArray                # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
     C_d: list[float]            # (pF)
     C_b: list[float]            # (pF)
     C_p: list[float]            # (pF); as per config_com_ieee8023_93a=100GBASE-KR4.xls
@@ -98,7 +101,7 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
                 chk_rng(x_name, x_val)
 
         check_range("fb", self.fb, 10, 300)
-        check_range("fstep", self.fstep, 1e6, 1000e6)
+        check_range("fstep", self.fstep, 0.001, 1)
         check_range("L", self.L, 2, 16)
         check_range("M", self.M, 32, 256)
         check_range("DER_0", self.DER_0, 1e-12, 1e-2)

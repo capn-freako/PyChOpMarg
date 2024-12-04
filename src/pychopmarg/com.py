@@ -29,10 +29,11 @@ from typing  import Any, Dict, Optional, TypeVar
 
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
-from numpy             import array
+from numpy             import array, arange
+from numpy.typing      import NDArray
 from scipy.interpolate import interp1d
 
-from pychopmarg.common   import Rvec, Cvec, PI, TWOPI
+from pychopmarg.common   import Rvec, Cvec, PI, TWOPI, COMChnls
 from pychopmarg.config.ieee_8023by import IEEE_8023by
 from pychopmarg.config.template import COMParams
 from pychopmarg.noise    import NoiseCalc
@@ -40,8 +41,6 @@ from pychopmarg.optimize import NormMode, mmse, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
     delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs)
-
-T = TypeVar('T', Any, Any)
 
 
 class OptMode(Enum):
@@ -64,9 +63,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     opt_mode = OptMode(OptMode.MMSE)
     norm_mode = NormMode(NormMode.P8023dj)
     unit_amp = bool(True)
-    tmax = float(10e-9)             # system time vector maximum (s).
-    _fmax = float(40e9)             # system frequency vector maximum (Hz).
-    _t_irfft_dirty = bool(True)     # Flags a change to `fmax`.
     com_params = IEEE_8023by
 
     # Linear EQ
@@ -78,23 +74,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     gDC = 0.0               # Choices are in `com_params.g_DC`.
     gDC2 = 0.0              # Choices are in `com_params.g_DC2`.
 
-    # Channel file(s)
-    chnl_s32p = Path("")
-    chnl_s4p_thru = Path("")
-    chnl_s4p_fext1 = Path("")
-    chnl_s4p_fext2 = Path("")
-    chnl_s4p_fext3 = Path("")
-    chnl_s4p_fext4 = Path("")
-    chnl_s4p_fext5 = Path("")
-    chnl_s4p_fext6 = Path("")
-    chnl_s4p_next1 = Path("")
-    chnl_s4p_next2 = Path("")
-    chnl_s4p_next3 = Path("")
-    chnl_s4p_next4 = Path("")
-    chnl_s4p_next5 = Path("")
-    chnl_s4p_next6 = Path("")
-    vic_chnl_ix = int(1)
-    chnls: list[tuple[rf.Network, str]] = []
+    # Channel data
+    vic_chnl_ix = int(1)  # Used with s32p file.
+    chnls: COMChnls = []
+    chnls_noPkg: COMChnls = []
     pulse_resps_nopkg: list[Rvec] = []
     pulse_resps_noeq:  list[Rvec] = []
     cursor_ix: int = 0
@@ -102,19 +85,83 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     # Package
     zp_sel = 0  # package length selector
 
-    def __init__(self, com_params: COMParams, debug: bool = False):
+    def __init__(
+        self,
+        com_params: COMParams,
+        channels: Path | dict[str, list[Path]],
+        vic_chnl_ix: int = 1,
+        debug: bool = False
+    ) -> None:
         """
         Args:
             com_params: The COM parameters for this instance.
+            channels: Channel file path(s), either:
+
+                - A single "*.s32p" containing a 32-port Touchstone model, or
+
+                - A dictionary containing the following key/value pairs:
+
+                    - "THRU": A singleton list containing the path to the "*.s4p" of the thru-channel.
+                    - "FEXT": A list of "*.s4p"s containing the Touchstone models for all far-end aggressors.
+                    - "NEXT": A list of "*.s4p"s containing the Touchstone models for all near-end aggressors.
 
         Keyword Args:
+            vic_chnl_ix: Index (1-based) of victim path in s32p.
+                Default: 1
             debug: Gather/report certain debugging information when ``True``.
                 Default: ``False``
         """
 
-        self.com_params = com_params
-        self.debug = debug
+        # Process the given channel file names.
+        if isinstance(channels, str):  # Should be a "*.s32p".
+            assert channels.endswith(".s32p"), ValueError(
+                f"When `channels` is a string it must contain a '*.s32p' value!")
+            if channels.exists() and channels.is_file():
+                self.chnls_noPkg = import_s32p(channels, vic_chnl_ix)
+            else:
+                raise RuntimeError(
+                    f"Unable to import '{channels}'!")
+        elif isinstance(channels, dict):  # Using s4p files.
+            chnl_types = ["THRU", "FEXT", "NEXT"]
+            assert all(k in channels and isinstance(channels[k], list)
+                       for k in chnl_types), ValueError(
+                f"When `channels` is a dictionary it must contain: {chnl_types} keys, which must all refer to lists!")
+            assert len(channels["THRU"]) == 1, ValueError(
+                f"Length of `channels['THRU']` must be 1, not {len(channels['THRU'])}!")
+            ntwks: COMChnls = []
+            for fname, chtype in [(chnl_name, chnl_type) for chnl_type in chnl_types
+                                                         for chnl_name in channels[chnl_type]]:
+                ntwks.append((sdd_21(rf.Network(fname)), chtype))
+            self.chnls_noPkg = ntwks
+        else:
+            raise ValueError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
 
+        # Create the system time & frequency vectors.
+        fb = com_params.fb * 1e9
+        ui = 1 / fb
+        fmax = min(map(lambda ch: ch[0].f[-1], self.chnls_noPkg))
+        fstep = com_params.fstep * 1e9
+        tmax = 1 / fstep           # Just enough to cover one full cycle of the fundamental.
+        tstep = ui / com_params.M  # Obeying requested samps. per UI.
+        f = arange(0, fmax + fstep, fstep)  # "+ fstep", to include `fmax`.
+        t_irfft = array([n * 0.5 / fmax for n in range(2 * (len(f) - 1))])
+        _t = arange(0, tmax, tstep)
+        t = _t[_t < t_irfft[-1]]  # to avoid interpolation bounds errors
+        self.t: Rvec = t
+        self.f: Rvec = f
+        self._t_irfft: Rvec = t_irfft
+
+        # Pre-calculate constant responses.
+        self._Xsinc = int(ui / t_irfft[1]) * np.sinc(ui * f)
+        self._Ht = np.exp(-2 * (PI * (f / 1e9) * com_params.T_r / 1.6832)**2)  # 93A-46 calls for f in GHz.
+        _f = f / (com_params.f_r * fb)
+        self._Hr = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
+
+        self.chnls = list(map(self.add_pkg, self.chnls_noPkg))
+        self.pulse_resps_nopkg = self.gen_pulse_resps(ntwks=self.chnls_noPkg, apply_eq=False)
+        self.pulse_resps_noeq = self.gen_pulse_resps(ntwks=self.chnls, apply_eq=False)
+
+        # Generate all possible combinations of Tx FFE tap weights.
         c0_min = com_params.c0_min
         trips = list(zip(com_params.tx_taps_min,
                          com_params.tx_taps_max,
@@ -129,12 +176,21 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             return calc_Hffe(self.freqs, 1 / self.fb, array(self._tx_combs[tx_combs_ix]), 3)
         self._Htx = _Htx
 
+        # Rx linear EQ
+        _f = f / (com_params.f_r * fb)
+        self._Hr = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
+
+        # Set Rx FFE quantities.
         self.nRxTaps = len(com_params.rx_taps_max)
         self.nRxPreTaps = com_params.dw
 
+        # Misc.
         self.com_rslts: dict[str, Any] = {}
         self.fom_rslts: dict[str, Any] = {}
         self.dbg_dict: Optional[dict[str, Any]] = None
+
+        self.com_params = com_params
+        self.debug = debug
 
         self.set_status("Ready")
 
@@ -174,9 +230,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             RuntimeError if EQ optimization fails.
         """
 
-        assert self.chnl_s32p or self.chnl_s4p_thru, RuntimeError(
-            "You must, at least, select a thru path channel file, either 32 or 4 port.")
-
         # Honor any mode overrides.
         opt_mode  = opt_mode  or self.opt_mode
         norm_mode = norm_mode or self.norm_mode
@@ -188,9 +241,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         if dbg_dict is not None:
             self.dbg_dict = dbg_dict
 
-        self.chnls = self.get_chnls()
         self.set_status("Optimizing EQ...")
-        assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError("EQ optimization failed!")
+        assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
+            "EQ optimization failed!")
         self.set_status("Calculating noise...")
         As, Ani, self.cursor_ix = self.calc_noise(dbg_dict=dbg_dict)
         com = 20 * np.log10(As / Ani)
@@ -217,45 +270,32 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     @property
     def times(self) -> Rvec:
         "System time vector (s); decoupled from system frequency vector!"
-        tstep = self.ui / self.nspui
-        return np.arange(0, self.tmax + tstep, tstep)
+        return self.t
 
     @property
     def fstep(self) -> float:
         "Frequency step (Hz)"
-        return self.com_params.fstep
+        return self.f[1]
 
     @property
     def fmax(self) -> float:
         "Maximum frequency (Hz)"
-        return self._fmax
-
-    @fmax.setter
-    def fmax(self, value):
-        self._fmax = value
-        self._t_irfft_dirty = True
+        return self.f[-1]
 
     @property
     def freqs(self) -> Rvec:
         "System frequency vector (Hz); decoupled from system time vector!"
-        return np.arange(0, self.fmax + self.fstep, self.fstep)
+        return self.f
 
     @property
     def t_irfft(self) -> Rvec:
         "`irfft()` result time index (s) (i.e. - time vector coupled to frequency vector)."
-        if self._t_irfft_dirty:
-            Ts = 0.5 / self.fmax  # Sample period satisfying Nyquist criteria.
-            self._t_irfft = array([n * Ts for n in range(2 * (len(self.freqs) - 1))])
-            self._t_irfft_dirty = False
         return self._t_irfft
 
     @property
     def Xsinc(self) -> Rvec:
         """Frequency domain sinc(f) corresponding to Rect(ui) in time domain."""
-        ui = self.ui
-        Ts = self.t_irfft[1]
-        w = int(ui / Ts)
-        return w * np.sinc(ui * self.freqs)
+        return self._Xsinc
 
     @property
     def Ht(self) -> Cvec:
@@ -263,8 +303,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         Return the voltage transfer function, H(f), associated w/ the Tx risetime,
         according to (93A-46).
         """
-        f = self.freqs / 1e9  # 93A-46 calls for f in GHz.
-        return np.exp(-2 * (PI * f * self.com_params.T_r / 1.6832)**2)
+        return self._Ht
 
     @property
     def num_tx_combs(self) -> int:
@@ -277,8 +316,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         Return the voltage transfer function, H(f), of the Rx AFE,
         according to (93A-20).
         """
-        f = self.freqs / (self.com_params.f_r * self.fb)
-        return 1 / (1 - 3.414214 * f**2 + f**4 + 2.613126j * (f - f**3))
+        return self._Hr
 
     @property
     def Hctf(self) -> Cvec:
@@ -309,14 +347,14 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                           self.com_params.f_p2, self.com_params.f_LF, gDC, gDC2)
 
     @property
-    def gamma1(self) -> float:
+    def gamma1(self) -> NDArray:
         "Reflection coefficient looking out of the left end of the channel."
         Rd = self.com_params.R_d
         R0 = self.com_params.R_0
         return (Rd - R0) / (Rd + R0)
 
     @property
-    def gamma2(self) -> float:
+    def gamma2(self) -> NDArray:
         "Reflection coefficient looking out of the right end of the channel."
         return self.gamma1
 
@@ -388,69 +426,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         return sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
                          self.com_params.tau, self.com_params.gamma0, list(zip(zc, zps)))
 
-    # - Channels
-    def get_chnls(self) -> list[tuple[rf.Network, str]]:
-        """Import all channels from Touchstone file(s)."""
-        chnl_s32p = self.chnl_s32p
-        if chnl_s32p.exists() and chnl_s32p.is_file():
-            return self.get_chnls_s32p_wPkg()
-        return self.get_chnls_s4p_wPkg()
-
-    def get_chnls_s32p_wPkg(self) -> list[tuple[rf.Network, str]]:
-        """Augment imported s32p channels, w/ package response."""
-        return self.add_pkgs(self.get_chnls_s32p_noPkg())
-
-    def get_chnls_s4p_wPkg(self) -> list[tuple[rf.Network, str]]:
-        """Augment imported s4p channels, w/ package response."""
-        return self.add_pkgs(self.get_chnls_s4p_noPkg())
-
-    def get_chnls_s32p_noPkg(self) -> list[tuple[rf.Network, str]]:
-        """Import s32p file, w/o package."""
-        if not self.chnl_s32p:
-            return []
-        ntwks = import_s32p(self.chnl_s32p, self.vic_chnl_ix)
-        self.fmax = ntwks[0][0].f[-1]
-
-        # Generate the pulse responses before adding the packages, for reference.
-        self.pulse_resps_nopkg = self.gen_pulse_resps(ntwks, apply_eq=False)
-
-        return ntwks
-
-    def get_chnls_s4p_noPkg(self) -> list[tuple[rf.Network, str]]:
-        """Import s4p files, w/o package."""
-        if not self.chnl_s4p_thru:
-            return []
-        ntwks = [(sdd_21(rf.Network(self.chnl_s4p_thru)), 'THRU')]
-        fmax = ntwks[0][0].f[-1]
-        for fname in [self.chnl_s4p_fext1, self.chnl_s4p_fext2, self.chnl_s4p_fext3,
-                      self.chnl_s4p_fext4, self.chnl_s4p_fext5, self.chnl_s4p_fext6]:
-            if fname.exists() and fname.is_file():
-                ntwk = sdd_21(rf.Network(fname))
-                ntwks.append((ntwk, 'FEXT'))
-                if ntwk.f[-1] < fmax:
-                    fmax = ntwk.f[-1]
-        for fname in [self.chnl_s4p_next1, self.chnl_s4p_next2, self.chnl_s4p_next3,
-                      self.chnl_s4p_next4, self.chnl_s4p_next5, self.chnl_s4p_next6]:
-            if fname.exists() and fname.is_file():
-                ntwk = sdd_21(rf.Network(fname))
-                ntwks.append((sdd_21(rf.Network(fname)), 'NEXT'))
-                if ntwk.f[-1] < fmax:
-                    fmax = ntwk.f[-1]
-        self.fmax = fmax
-
-        # Generate the pulse responses before adding the packages, for reference.
-        self.pulse_resps_nopkg = self.gen_pulse_resps(ntwks, apply_eq=False)
-
-        return ntwks
-
-    def add_pkgs(self, ntwks: list[tuple[rf.Network, str]]) -> list[tuple[rf.Network, str]]:
-        """Add package response to raw channels and generate pulse responses."""
-        if not ntwks:
-            return []
-        _ntwks = list(map(self.add_pkg, ntwks))
-        self.pulse_resps_noeq = self.gen_pulse_resps(_ntwks, apply_eq=False)
-        return _ntwks
-
+    # Package modeling
     def add_pkg(self, ntwk: tuple[rf.Network, str]) -> tuple[rf.Network, str]:
         """Add package response to raw channel."""
         ntype = ntwk[1]
@@ -490,7 +466,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             Complex frequency response of Tx deemphasis filter.
         """
         assert 0 <= tx_taps_ix < self.num_tx_combs, ValueError(
-            f"tx_taps_ix ({tx_taps_ix}) must be an integer in: [0, {self.num_tx_taps_combs})!")
+            f"tx_taps_ix ({tx_taps_ix}) must be an integer in: [0, {self.num_tx_combs})!")
         return self._Htx(tx_taps_ix)
 
     def H21(self, s2p: rf.Network) -> Cvec:
@@ -610,13 +586,19 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         assert len(H) == len(self.freqs), ValueError(
             f"Length of given H(f) {len(H)} does not match length of f {len(self.freqs)}!")
 
-        Xsinc = self.Xsinc
-        p = np.fft.irfft(Xsinc * H)
+        p = np.fft.irfft(self.Xsinc * H)
         spln = interp1d(self.t_irfft, p)  # `p` is not yet in our system time domain!
-        return spln(self.times)           # Now, it is.
+        try:
+            rslt = spln(self.times)       # Now, it is.
+        except:
+            print(f"max(self.times): {max(self.times)}")
+            print(f"max(self.t_irfft): {max(self.t_irfft)}")
+            raise
+
+        return rslt
 
     def gen_pulse_resps(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        self, ntwks: Optional[list[tuple[rf.Network, str]]] = None,
+        self, ntwks: Optional[COMChnls] = None,
         gDC: Optional[float] = None, gDC2: Optional[float] = None,
         tx_ix: Optional[int] = None, rx_taps: Optional[Rvec] = None,
         dfe_taps: Optional[Rvec] = None, apply_eq: bool = True
@@ -807,24 +789,27 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                                              (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
                                              mode='constant',
                                              constant_values=0)  # (93A-27)
-                varISI = varX * sum(hISI**2)  # (93A-31)
+                # varISI = varX * sum(hISI**2)  # (93A-31)
+                varISI = varX * (hISI**2).sum()  # (93A-31)
 
                 # Step f - Jitter noise.
                 hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
-                varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * sum(hJ**2)  # (93A-32)
+                # varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * sum(hJ**2)  # (93A-32)
+                varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * (hJ**2).sum()  # (93A-32)
 
                 # Step g - Crosstalk.
                 varXT = 0.
                 for pulse_resp in pulse_resps[1:]:  # (93A-34)
                     # pylint: disable=consider-using-generator
-                    varXT += max([sum(array(filt_pr_samps(pulse_resp[m::M], As))**2)
+                    # varXT += max([sum(array(filt_pr_samps(pulse_resp[m::M], As))**2)
+                    varXT += max([(filt_pr_samps(pulse_resp[m::M], As)**2).sum()
                                   for m in range(M)])  # (93A-33)
                 varXT *= varX
 
                 # Step h - Spectral noise.
                 df = freqs[1]
                 Hctle = self.calc_Hctf(gDC=gDC, gDC2=gDC2)
-                varN = (self.com_params.eta_0 / 1e9) * sum(abs(self.Hr * Hctle)**2) * df  # (93A-35)
+                varN = (self.com_params.eta_0 / 1e9) * (abs(self.Hr * Hctle)**2).sum() * df  # (93A-35)
 
                 # Step i - FOM calculation.
                 fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
@@ -942,7 +927,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                             mse_best = self.fom_rslts['mse'] if 'mse' in self.fom_rslts else 0
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
-            fom = self.calc_fom(tx_taps)
+            fom = self.calc_fom(0)
             fom_max = fom
             fom_max_changed = True
             gDC2_best = self.gDC2
@@ -1069,11 +1054,11 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 self.nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
         else:
             Hrx = np.ones(len(freqs))
-        varN = self.com_params.eta_0 * sum(abs(self.Hr * self.Hctf * Hrx)**2) * (df / 1e9)  # (93A-35) + Hffe
+        varN = self.com_params.eta_0 * (abs(self.Hr * self.Hctf * Hrx)**2).sum() * (df / 1e9)  # (93A-35) + Hffe
         varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                     # (93A-30)
         hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
         _, pJ = delta_pmf(self.com_params.A_DD * hJ, L=L, y=y)
-        varG = varTx + self.com_params.sigma_Rj**2 * varX * sum(hJ**2) + varN              # (93A-41)
+        varG = varTx + self.com_params.sigma_Rj**2 * varX * (hJ**2).sum() + varN              # (93A-41)
         pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep         # (93A-42), but converted to PMF.
         pN = np.convolve(pG, pJ, mode='same')                                   # (93A-43)
 
@@ -1096,14 +1081,14 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val
         hISI *= As
         _, pISI = delta_pmf(hISI, L=L, y=y, dbg_dict=dbg_dict)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
-        varISI = varX * sum(hISI**2)  # (93A-31)
+        varISI = varX * (hISI**2).sum()  # (93A-31)
 
         # - Crosstalk
         xt_samps = []
         pks = []  # For debugging.
         py = pISI.copy()
         for pulse_resp in pulse_resps[1:]:  # (93A-44)
-            i = np.argmax([sum(array(pulse_resp[m::M])**2) for m in range(M)])  # (93A-33)
+            i = np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)])  # (93A-33)
             samps = pulse_resp[i::M]
             xt_samps.append(samps)
             _, pk = delta_pmf(samps, L=L, y=y)  # For debugging.

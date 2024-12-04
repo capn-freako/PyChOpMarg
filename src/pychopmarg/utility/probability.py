@@ -186,7 +186,8 @@ def loc_curs(  # pylint: disable=too-many-arguments,too-many-positional-argument
     ix_best = peak_loc  # To assuage `pylint` only; does not affect code logic.
     res_min = 1e6
     zero_res_ixs = []
-    for ix in range(peak_loc - nspui * max_range, peak_loc + nspui * max_range):
+    for ix in range(max(0, peak_loc - nspui * max_range),
+                    min(len(pulse_resp), peak_loc + nspui * max_range)):
         # Anticipate the DFE first tap value, observing its limits:
         b_1 = min(dfe_max[0],
                   max(dfe_min[0],
