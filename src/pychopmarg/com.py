@@ -33,7 +33,7 @@ from numpy             import array, arange
 from numpy.typing      import NDArray
 from scipy.interpolate import interp1d
 
-from pychopmarg.common   import Rvec, Cvec, PI, TWOPI, COMChnls
+from pychopmarg.common   import Rvec, Cvec, PI, TWOPI, COMChnl, COMNtwk
 from pychopmarg.config.ieee_8023by import IEEE_8023by
 from pychopmarg.config.template import COMParams
 from pychopmarg.noise    import NoiseCalc
@@ -76,8 +76,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
     # Channel data
     vic_chnl_ix = int(1)  # Used with s32p file.
-    chnls: COMChnls = []
-    chnls_noPkg: COMChnls = []
+    chnls: list[COMChnl] = []
+    chnls_noPkg: list[COMChnl] = []
     pulse_resps_nopkg: list[Rvec] = []
     pulse_resps_noeq:  list[Rvec] = []
     cursor_ix: int = 0
@@ -113,11 +113,12 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
 
         # Process the given channel file names.
+        ntwks: list[COMNtwk] = []
         if isinstance(channels, str):  # Should be a "*.s32p".
             assert channels.endswith(".s32p"), ValueError(
                 f"When `channels` is a string it must contain a '*.s32p' value!")
             if channels.exists() and channels.is_file():
-                self.chnls_noPkg = import_s32p(channels, vic_chnl_ix)
+                ntwks = import_s32p(channels, vic_chnl_ix)
             else:
                 raise RuntimeError(
                     f"Unable to import '{channels}'!")
@@ -128,18 +129,16 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 f"When `channels` is a dictionary it must contain: {chnl_types} keys, which must all refer to lists!")
             assert len(channels["THRU"]) == 1, ValueError(
                 f"Length of `channels['THRU']` must be 1, not {len(channels['THRU'])}!")
-            ntwks: COMChnls = []
             for fname, chtype in [(chnl_name, chnl_type) for chnl_type in chnl_types
                                                          for chnl_name in channels[chnl_type]]:
                 ntwks.append((sdd_21(rf.Network(fname)), chtype))
-            self.chnls_noPkg = ntwks
         else:
             raise ValueError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
 
         # Create the system time & frequency vectors.
         fb = com_params.fb * 1e9
         ui = 1 / fb
-        fmax = min(map(lambda ch: ch[0].f[-1], self.chnls_noPkg))
+        fmax = min(map(lambda ch: ch[0].f[-1], ntwks))
         fstep = com_params.fstep * 1e9
         tmax = 1 / fstep           # Just enough to cover one full cycle of the fundamental.
         tstep = ui / com_params.M  # Obeying requested samps. per UI.
@@ -157,9 +156,12 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         _f = f / (com_params.f_r * fb)
         self._Hr = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
 
-        self.chnls = list(map(self.add_pkg, self.chnls_noPkg))
-        self.pulse_resps_nopkg = self.gen_pulse_resps(ntwks=self.chnls_noPkg, apply_eq=False)
-        self.pulse_resps_noeq = self.gen_pulse_resps(ntwks=self.chnls, apply_eq=False)
+        self.chnls_noPkg = list(
+            map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1[0][0], self.gamma2[0][0])),
+                ntwks))
+        self.chnls = list(map(self.add_pkg, ntwks))
+        self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=self.chnls_noPkg, apply_eq=False)
+        self.pulse_resps_noeq = self.gen_pulse_resps(chnls=self.chnls, apply_eq=False)
 
         # Generate all possible combinations of Tx FFE tap weights.
         c0_min = com_params.c0_min
@@ -365,27 +367,29 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         # Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))
         Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))[0]
         Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))[0]
-        R0 = [self.com_params.R_0] * len(Cd)
-        rslt = rf.network.cascade_list(list(map(lambda trip: sDieLadderSegment(self.freqs, trip), zip(R0, Cd, Ls))))
+        R0 = [self.com_params.R_0] * len(Cd)  # type: ignore
+        rslt = rf.network.cascade_list(
+            list(map(lambda trip: sDieLadderSegment(self.freqs, trip),
+                     zip(R0, Cd, Ls))))  # type: ignore
         return rslt
 
     @property
     def sPkgRx(self) -> rf.Network:
         "Rx package response."
         # return self.sC(self.com_params.C_p / 1e12) ** self.sZp ** self.sDieLadder
-        return self.sC(self.com_params.C_p[0][0] / 1e12) ** self.sZp ** self.sDieLadder
+        return self.sC(self.com_params.C_p[0][0] / 1e12) ** self.sZp ** self.sDieLadder  # type: ignore
 
     @property
     def sPkgTx(self) -> rf.Network:
         "Tx package response."
         # return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p / 1e12)
-        return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p[0][0] / 1e12)
+        return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p[0][0] / 1e12)  # type: ignore
 
     @property
     def sPkgNEXT(self) -> rf.Network:
         "NEXT package response."
         # return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p / 1e12)
-        return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p[0][0] / 1e12)
+        return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p[0][0] / 1e12)  # type: ignore
 
     @property
     def sZp(self) -> rf.Network:
@@ -427,12 +431,13 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                          self.com_params.tau, self.com_params.gamma0, list(zip(zc, zps)))
 
     # Package modeling
-    def add_pkg(self, ntwk: tuple[rf.Network, str]) -> tuple[rf.Network, str]:
+    def add_pkg(self, ntwk: tuple[rf.Network, str]) -> COMChnl:
         """Add package response to raw channel."""
         ntype = ntwk[1]
         if ntype == 'NEXT':
-            return (self.sPkgNEXT ** ntwk[0] ** self.sPkgRx, ntype)
-        return (self.sPkgTx ** ntwk[0] ** self.sPkgRx, ntype)
+            _ntwk = self.sPkgNEXT ** ntwk[0] ** self.sPkgRx
+        _ntwk = self.sPkgTx ** ntwk[0] ** self.sPkgRx
+        return ((_ntwk, ntype), calc_H21(self.freqs, _ntwk, self.gamma1[0][0], self.gamma2[0][0]))
 
     # Logging / Debugging
     def set_status(self, status: str) -> None:
@@ -493,8 +498,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         return calc_H21(self.freqs, s2p, self.gamma1[0][0], self.gamma2[0][0])
 
     def H(  # pylint: disable=too-many-arguments,too-many-locals,too-many-positional-arguments
-        self, s2p: rf.Network, tx_ix: int,
-        gDC: Optional[float] = None, gDC2: Optional[float] = None,
+        self, H21: Cvec, tx_ix: int,
+        Hctf: Optional[Cvec] = None,
         rx_taps: Optional[Rvec] = None, dfe_taps: Optional[Rvec] = None,
         passive_RxFFE: bool = False
     ) -> Cvec:
@@ -503,15 +508,13 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         according to (93A-19).
 
         Args:
-            s2p: Two port network of interest.
+            H21: Voltage transfer function of channel + package.
 
         Keyword Args:
             tx_ix: Tx FFE tap weights index.
                 Default: None (i.e. - Use ``self.tx_taps``.)
-            gDC: CTLE first stage d.c. gain (dB).
-                Default: None (i.e. - Use ``self.gDC``.)
-            gDC2: CTLE second stage d.c. gain (dB).
-                Default: None (i.e. - Use ``self.gDC2``.)
+            Hctf: Complex voltage transfer function of CTLE.
+                Default: None (i.e. - Calculate, using ``self.gDC`` & ``self.gDC2``.)
             rx_taps: Rx FFE tap weights.
                 Default: None (i.e. - Use ``self.rx_taps``.)
             dfe_taps: Rx DFE tap weights.
@@ -523,7 +526,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             Complex voltage transfer function of complete path.
 
         Raises:
-            ValueError: If given network is not two port.
+            ValueError: If the length of the given voltage transfer function
+            differs from the length of the system frequency vector.
 
         Notes:
             1. It is in this processing step that linear EQ is first applied.
@@ -533,25 +537,23 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
                 - ``tx_taps``: []
                 - ``rx_taps``: [1.0]
-                - ``gDC``/``gDC2``: 0
+                - ``Hctle``: ones(len(self.freqs))
         """
 
-        assert s2p.s[0, :, :].shape == (2, 2), ValueError(
-            f"I can only convert 2-port networks. {s2p}")
-
         freqs = self.freqs
-        tb = 1 / self.fb
-        gDC     = gDC     or self.gDC
-        gDC2    = gDC2    or self.gDC2
+        tb    = 1 / self.fb
         if rx_taps is None:
             rx_taps = self.rx_taps
         if dfe_taps is None:
             dfe_taps = self.dfe_taps
 
+        assert len(H21) == len(freqs), ValueError(
+            f"Length of `H21` ({len(H21)}) must match length of frequency vector ({len(freqs)})!")
+
         Htx  = self.Htx(tx_ix)
-        H21  = self.H21(s2p)
         Hr   = self.Hr
-        Hctf = self.calc_Hctf(gDC=gDC, gDC2=gDC2)
+        if Hctf is None:
+            Hctf = self.calc_Hctf(self.gDC, self.gDC2)
         rslt = Htx * H21 * Hr * Hctf
         nRxTaps = len(rx_taps)
         if nRxTaps:
@@ -598,8 +600,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         return rslt
 
     def gen_pulse_resps(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        self, ntwks: Optional[COMChnls] = None,
-        gDC: Optional[float] = None, gDC2: Optional[float] = None,
+        self, chnls: Optional[list[COMChnl]] = None,
+        Hctf: Optional[Cvec] = None,
         tx_ix: Optional[int] = None, rx_taps: Optional[Rvec] = None,
         dfe_taps: Optional[Rvec] = None, apply_eq: bool = True
     ) -> list[Rvec]:
@@ -607,12 +609,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         Generate pulse responses for all networks.
 
         Keyword Args:
-            ntwks: The list of networks to generate pulse responses for.
+            chnls: The list of networks to generate pulse responses for.
                 Default: None (i.e. - Use ``self.chnls``.)
-            gDC: Rx CTLE first stage d.c. gain.
-                Default: None (i.e. - Use ``self.gDC``.)
-            gDC2: Rx CTLE second stage d.c. gain.
-                Default: None (i.e. - Use ``self.gDC2``.)
+            Hctf: Complex voltage transfer function of CTLE.
+                Default: None (i.e. - Calculate, using ``self.gDC`` & ``self.gDC2``.)
             tx_ix: Desired Tx tap weights index.
                 Default: None (i.e. - Use ``self.tx_taps``.)
             rx_taps: Desired Rx FFE tap weights.
@@ -636,33 +636,33 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             set ``rx_taps`` equal to: ``[1.0]`` and ``dfe_taps`` equal to: ``[]``.
         """
 
-        gDC  = gDC  or self.gDC  # The more Pythonic way, but doesn't work for lists in newer versions of Python.
-        gDC2 = gDC2 or self.gDC2
-        if ntwks is None:
-            ntwks = self.chnls
+        if chnls is None:
+            chnls = self.chnls
         if tx_ix is None:
             tx_ix = 0
         if rx_taps is None:
             rx_taps = self.rx_taps
         if dfe_taps is None:
             dfe_taps = self.dfe_taps
+        if Hctf is None:
+            Hctf = self.calc_Hctf(self.gDC, self.gDC2)
 
         # tx_taps = array(tx_taps)
         rx_taps = array(rx_taps)
         dfe_taps = array(dfe_taps)
 
         pulse_resps = []
-        for ntwk, ntype in ntwks:
+        for (ntwk, ntype), H21 in chnls:
             if apply_eq:
                 if ntype == 'NEXT':
                     pr = self.pulse_resp(self.H(
                         # ntwk, np.zeros(tx_taps.shape), gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
-                        ntwk, 0, gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
+                        H21, 0, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
                 else:
                     pr = self.pulse_resp(self.H(
-                        ntwk, tx_ix, gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
+                        H21, tx_ix, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
             else:
-                pr = self.pulse_resp(self.H21(ntwk))
+                pr = self.pulse_resp(H21)
 
             if ntype == 'THRU':
                 pr *= self.com_params.A_v
@@ -679,7 +679,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     def calc_fom(
         self,
         tx_ix: int,
-        gDC: Optional[float] = None, gDC2: Optional[float] = None,
+        Hctf: Cvec,
         rx_taps: Optional[Rvec] = None,
         opt_mode: Optional[OptMode] = None,
         norm_mode: Optional[NormMode] = None,
@@ -691,12 +691,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Args:
             tx_ix: Index into the list of Tx tap weight combinations.
+            Hctf: Complex voltage transfer function of CTLE.
 
         Keyword Args:
-            gDC: CTLE first stage d.c. gain.
-                Default: None (i.e. - Use ``self.gDC``.)
-            gDC2: CTLE second stage d.c. gain.
-                Default: None (i.e. - Use ``self.gDC2``.)
             rx_taps: Rx FFE tap weight overrides.
                 Default: None (i.e. - Optimize Rx FFE tap weights.)
             opt_mode: Optimization mode.
@@ -713,9 +710,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         Notes:
             1. See: IEEE 802.3-2022 93A.1.6.
 
-            2. When not provided, the values for ``gDC`` and ``gDC2`` are taken from the ``COM`` instance.
-
-            3. Unlike other member functions of the ``COM`` class,
+            2. Unlike other member functions of the ``COM`` class,
                this function *optimizes* the Rx FFE tap weights when they are not provided.
         """
 
@@ -741,7 +736,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         nspui = self.nspui
 
         pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
-            tx_ix=tx_ix, gDC=gDC, gDC2=gDC2, rx_taps=array([1.0]), dfe_taps=array([]))
+            tx_ix=tx_ix, Hctf=Hctf, rx_taps=array([1.0]), dfe_taps=array([]))
         match opt_mode:
             case OptMode.PRZF:
                 # Step a - Pulse response construction.
@@ -754,7 +749,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                             array(rx_taps_min), array(rx_taps_max), array(bmin), array(bmax),
                             norm_mode=norm_mode, unit_amp=unit_amp)
                     pulse_resps = self.gen_pulse_resps(
-                        tx_ix=tx_ix, gDC=gDC, gDC2=gDC2, rx_taps=array(rx_taps), dfe_taps=array([]))
+                        tx_ix=tx_ix, Hctf=Hctf, rx_taps=array(rx_taps), dfe_taps=array([]))
 
                 # Step b - Cursor identification.
                 vic_pulse_resp = array(pulse_resps[0])  # Note: Includes any Rx FFE, but not DFE.
@@ -808,8 +803,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
                 # Step h - Spectral noise.
                 df = freqs[1]
-                Hctle = self.calc_Hctf(gDC=gDC, gDC2=gDC2)
-                varN = (self.com_params.eta_0 / 1e9) * (abs(self.Hr * Hctle)**2).sum() * df  # (93A-35)
+                varN = (self.com_params.eta_0 / 1e9) * (abs(self.Hr * Hctf)**2).sum() * df  # (93A-35)
 
                 # Step i - FOM calculation.
                 fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
@@ -817,7 +811,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             case OptMode.MMSE:
                 theNoiseCalc = NoiseCalc(
                     L, tb, 0, times, pulse_resps_preFFE[0], pulse_resps_preFFE[1:],
-                    freqs, self.Ht, self.H21(self.chnls[0][0]), self.Hr, self.calc_Hctf(gDC, gDC2),
+                    freqs, self.Ht, self.chnls[0][1], self.Hr, Hctf,
                     self.com_params.eta_0, self.com_params.A_v, self.com_params.SNR_TX,
                     self.com_params.A_DD, self.com_params.sigma_Rj)
                 rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, len(self.com_params.dfe_min), self.com_params.RLM,
@@ -902,10 +896,11 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             fom_max_changed = False
             for _gDC2 in self.com_params.g_DC2:
                 # for _gDC in self.com_params.g_DC:
-                for _gDC in self.com_params.g_DC[0]:
+                for _gDC in self.com_params.g_DC[0]:  # type: ignore
+                    _Hctle = self.calc_Hctf(_gDC, _gDC2)
                     for _tx_ix in range(self.num_tx_combs):
                         fom = self.calc_fom(
-                            _tx_ix, gDC=_gDC, gDC2=_gDC2,
+                            _tx_ix, _Hctle,
                             opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
                         if fom > fom_max:
                             fom_max_changed = True
@@ -927,7 +922,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                             mse_best = self.fom_rslts['mse'] if 'mse' in self.fom_rslts else 0
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
-            fom = self.calc_fom(0)
+            fom = self.calc_fom(0, self.calc_Hctf(self.gDC, self.gDC2))
             fom_max = fom
             fom_max_changed = True
             gDC2_best = self.gDC2

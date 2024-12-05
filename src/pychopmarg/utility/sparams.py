@@ -14,7 +14,7 @@ import numpy as np  # type: ignore
 import skrf  as rf
 from numpy import array
 
-from pychopmarg.common import Rvec, PI, TWOPI
+from pychopmarg.common import Rvec, PI, TWOPI, COMNtwk
 
 
 def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Network:
@@ -112,7 +112,7 @@ def se2mm(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Net
 
 def import_s32p(  # pylint: disable=too-many-locals
     filename: Path, vic_chnl: int = 1
-) -> list[tuple[rf.Network, str]]:
+) -> list[COMNtwk]:
     """Read in a 32-port Touchstone file, and return an equivalent list
     of 8 2-port differential networks: a single victim through channel and
     7 crosstalk aggressors, according to the VITA 68.2 convention.

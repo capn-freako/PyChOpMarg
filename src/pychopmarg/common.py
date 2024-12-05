@@ -21,7 +21,8 @@ Cvec: TypeAlias = npt.NDArray[Comp]
 Rmat: TypeAlias = npt.NDArray[Rvec]  # type: ignore
 Cmat: TypeAlias = npt.NDArray[Cvec]  # type: ignore
 COMFiles: TypeAlias = str | list[str]
-COMChnls: TypeAlias = list[tuple[rf.Network, str]]
+COMNtwk: TypeAlias = tuple[rf.Network, str]
+COMChnl: TypeAlias = tuple[COMNtwk, Cvec]
 
 PI: float = np.pi
 TWOPI: float = 2 * np.pi
