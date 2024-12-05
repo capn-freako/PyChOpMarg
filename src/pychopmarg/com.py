@@ -67,7 +67,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
     # Linear EQ
     tx_taps: Rvec = array([])
-    rx_taps: Rvec = array([])
+    rx_taps: Rvec = array([1.0])
     dfe_taps: Rvec = array([])
     nRxTaps: int = 0
     nRxPreTaps: int = 0     # `dw` from `com_params`
@@ -157,7 +157,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self._Hr = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
 
         self.chnls_noPkg = list(
-            map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1[0][0], self.gamma2[0][0])),
+            map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1[0], self.gamma2[0])),
                 ntwks))
         self.chnls = list(map(self.add_pkg, ntwks))
         self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=self.chnls_noPkg, apply_eq=False)
@@ -363,10 +363,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     @property
     def sDieLadder(self) -> rf.Network:
         "On-die parasitic capacitance/inductance ladder network."
-        # Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))
-        # Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))
-        Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))[0]
-        Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))[0]
+        Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))
+        Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))
+        # Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))[0]
+        # Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))[0]
         R0 = [self.com_params.R_0] * len(Cd)  # type: ignore
         rslt = rf.network.cascade_list(
             list(map(lambda trip: sDieLadderSegment(self.freqs, trip),
@@ -377,19 +377,19 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     def sPkgRx(self) -> rf.Network:
         "Rx package response."
         # return self.sC(self.com_params.C_p / 1e12) ** self.sZp ** self.sDieLadder
-        return self.sC(self.com_params.C_p[0][0] / 1e12) ** self.sZp ** self.sDieLadder  # type: ignore
+        return self.sC(self.com_params.C_p[0] / 1e12) ** self.sZp ** self.sDieLadder  # type: ignore
 
     @property
     def sPkgTx(self) -> rf.Network:
         "Tx package response."
         # return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p / 1e12)
-        return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p[0][0] / 1e12)  # type: ignore
+        return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p[0] / 1e12)  # type: ignore
 
     @property
     def sPkgNEXT(self) -> rf.Network:
         "NEXT package response."
         # return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p / 1e12)
-        return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p[0][0] / 1e12)  # type: ignore
+        return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p[0] / 1e12)  # type: ignore
 
     @property
     def sZp(self) -> rf.Network:
@@ -437,7 +437,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         if ntype == 'NEXT':
             _ntwk = self.sPkgNEXT ** ntwk[0] ** self.sPkgRx
         _ntwk = self.sPkgTx ** ntwk[0] ** self.sPkgRx
-        return ((_ntwk, ntype), calc_H21(self.freqs, _ntwk, self.gamma1[0][0], self.gamma2[0][0]))
+        return ((_ntwk, ntype), calc_H21(self.freqs, _ntwk, self.gamma1[0], self.gamma2[0]))
 
     # Logging / Debugging
     def set_status(self, status: str) -> None:
@@ -555,7 +555,11 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         if Hctf is None:
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
         rslt = Htx * H21 * Hr * Hctf
-        nRxTaps = len(rx_taps)
+        try:
+            nRxTaps = len(rx_taps)
+        except:
+            print(f"self.rx_taps: {self.rx_taps}")
+            raise
         if nRxTaps:
             Hrx  = calc_Hffe(freqs, tb, array(rx_taps).flatten(), nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
             if passive_RxFFE:
@@ -719,6 +723,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         norm_mode = norm_mode or self.norm_mode
         if unit_amp is None:
             unit_amp = self.unit_amp
+        if rx_taps is None:
+            rx_taps=array([1.0])  # Keeps `self.rx_taps` from getting set to None.
 
         # Copy instance variables.
         L = self.com_params.L
@@ -895,8 +901,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             fom_max = -1000.0
             fom_max_changed = False
             for _gDC2 in self.com_params.g_DC2:
-                # for _gDC in self.com_params.g_DC:
-                for _gDC in self.com_params.g_DC[0]:  # type: ignore
+                for _gDC in self.com_params.g_DC:
+                # for _gDC in self.com_params.g_DC[0]:  # type: ignore
                     _Hctle = self.calc_Hctf(_gDC, _gDC2)
                     for _tx_ix in range(self.num_tx_combs):
                         fom = self.calc_fom(

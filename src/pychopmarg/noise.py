@@ -264,22 +264,22 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         nUI = int(len(t) / nspui)
 
         dV = diff(vic_pulse_resp)
-        hJ = mean(array([dV[(ts_ix - 1) % nspui::nspui][:nUI],
-                         dV[(ts_ix    ) % nspui::nspui][:nUI]]),
-                  axis=0) / t[1]
+        try:
+            hJ = mean(array([dV[(ts_ix - 1) % nspui::nspui][:nUI],
+                             dV[(ts_ix    ) % nspui::nspui][:nUI]]),
+                      axis=0) / t[1]
+        except:
+            print(f"dV: {dV}")
+            print(f"ts_ix: {ts_ix}")
+            print(f"nspui: {nspui}")
+            print(f"nUI: {nUI}")
+            raise
         # hJ = hJ[:int(len(t) / nspui)]
 
         return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
 
     def Rn(self) -> Rvec:
         """Noise autocorrelation vector at Rx FFE input."""
-        try:
-            Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)[:len(self.Srn)] + self.Stn + self.Sjn
-        except:
-            print(f"len(self.Srn): {len(self.Srn)}")
-            print(f"len(self.Sxn(self.agg_pulse_resps[0])): {len(self.Sxn(self.agg_pulse_resps[0]))}")
-            print(f"len(self.Stn): {len(self.Stn)}")
-            print(f"len(self.Sjn): {len(self.Sjn)}")
-            raise
+        Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)[:len(self.Srn)] + self.Stn + self.Sjn
         # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
         return irfft(Sn) / self.Tb
