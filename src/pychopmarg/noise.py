@@ -273,6 +273,8 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             print(f"ts_ix: {ts_ix}")
             print(f"nspui: {nspui}")
             print(f"nUI: {nUI}")
+            print(f"len(dV[(ts_ix - 1) % nspui::nspui]): {len(dV[(ts_ix - 1) % nspui::nspui])}")
+            print(f"len(dV[(ts_ix    ) % nspui::nspui]): {len(dV[(ts_ix    ) % nspui::nspui])}")
             raise
         # hJ = hJ[:int(len(t) / nspui)]
 
@@ -280,6 +282,11 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
     def Rn(self) -> Rvec:
         """Noise autocorrelation vector at Rx FFE input."""
-        Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)[:len(self.Srn)] + self.Stn + self.Sjn
+        Srn = self.Srn
+        Sxn = sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)
+        Stn = self.Stn
+        Sjn = self.Sjn
+        min_len = min(len(Srn), len(Sxn), len(Stn), len(Sjn))
+        Sn = Srn[:min_len] + Sxn[:min_len] + Stn[:min_len] + Sjn[:min_len]
         # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
         return irfft(Sn) / self.Tb

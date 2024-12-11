@@ -168,9 +168,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         trips = list(zip(com_params.tx_taps_min,
                          com_params.tx_taps_max,
                          com_params.tx_taps_step))
-        self._tx_combs: list[Rvec] = list(filter(
+        _tx_combs: list[Rvec] = list(filter(
             lambda v: (1 - abs(v).sum()) >= c0_min,
             mk_combs(trips)))
+        self._tx_combs = [np.zeros(len(com_params.tx_taps_min)), *_tx_combs]
         self._num_tx_combs = len(self._tx_combs)
 
         @cache
@@ -345,8 +346,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
         gDC = gDC or self.gDC
         gDC2 = gDC2 or self.gDC2
-        return calc_Hctle(self.freqs, self.com_params.f_z, self.com_params.f_p1,
-                          self.com_params.f_p2, self.com_params.f_LF, gDC, gDC2)
+        return calc_Hctle(self.freqs, self.com_params.f_z * 1e9, self.com_params.f_p1 * 1e9,
+                          self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2)
 
     @property
     def gamma1(self) -> NDArray:
@@ -651,7 +652,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         if Hctf is None:
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
 
-        # tx_taps = array(tx_taps)
         rx_taps = array(rx_taps)
         dfe_taps = array(dfe_taps)
 
@@ -723,8 +723,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         norm_mode = norm_mode or self.norm_mode
         if unit_amp is None:
             unit_amp = self.unit_amp
-        if rx_taps is None:
-            rx_taps=array([1.0])  # Keeps `self.rx_taps` from getting set to None.
 
         # Copy instance variables.
         L = self.com_params.L
@@ -756,6 +754,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                             norm_mode=norm_mode, unit_amp=unit_amp)
                     pulse_resps = self.gen_pulse_resps(
                         tx_ix=tx_ix, Hctf=Hctf, rx_taps=array(rx_taps), dfe_taps=array([]))
+                else:
+                    rx_taps=array([1.0])  # Passes signal through unaltered.
 
                 # Step b - Cursor identification.
                 vic_pulse_resp = array(pulse_resps[0])  # Note: Includes any Rx FFE, but not DFE.
