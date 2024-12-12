@@ -344,10 +344,17 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             1. The instance's current value(s) for ``gDC`` and ``gDC2`` are used if not provided.
             (Necessary, to accommodate sweeping when optimizing EQ.)
         """
-        gDC = gDC or self.gDC
-        gDC2 = gDC2 or self.gDC2
-        return calc_Hctle(self.freqs, self.com_params.f_z * 1e9, self.com_params.f_p1 * 1e9,
-                          self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2)
+        if gDC is None:
+            gDC = self.gDC
+        if gDC2 is None:
+            gDC2 = self.gDC2
+        try:
+            rslt = calc_Hctle(self.freqs, self.com_params.f_z * 1e9, self.com_params.f_p1 * 1e9,
+                              self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2)
+        except:
+            print(f"self.com_params.g_DC2: {self.com_params.g_DC2}")
+            raise
+        return rslt
 
     @property
     def gamma1(self) -> NDArray:
