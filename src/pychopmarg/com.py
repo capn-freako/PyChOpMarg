@@ -66,7 +66,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     com_params = IEEE_8023by
 
     # Linear EQ
-    tx_taps: Rvec = array([])
+    tx_ix: int = 0             # Index into list of all possible combinations of Tx FFE tap weights.
     rx_taps: Rvec = array([1.0])
     dfe_taps: Rvec = array([])
     nRxTaps: int = 0
@@ -626,7 +626,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             Hctf: Complex voltage transfer function of CTLE.
                 Default: None (i.e. - Calculate, using ``self.gDC`` & ``self.gDC2``.)
             tx_ix: Desired Tx tap weights index.
-                Default: None (i.e. - Use ``self.tx_taps``.)
+                Default: None (i.e. - Use ``self.tx_ix``.)
             rx_taps: Desired Rx FFE tap weights.
                 Default: None (i.e. - Use ``self.rx_taps``.)
             dfe_taps: Desired Rx DFE tap weights.
@@ -651,7 +651,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         if chnls is None:
             chnls = self.chnls
         if tx_ix is None:
-            tx_ix = 0
+            tx_ix = self.tx_ix
         if rx_taps is None:
             rx_taps = self.rx_taps
         if dfe_taps is None:
@@ -909,7 +909,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             fom_max_changed = False
             for _gDC2 in self.com_params.g_DC2:
                 for _gDC in self.com_params.g_DC:
-                # for _gDC in self.com_params.g_DC[0]:  # type: ignore
                     _Hctle = self.calc_Hctf(_gDC, _gDC2)
                     for _tx_ix in range(self.num_tx_combs):
                         fom = self.calc_fom(
@@ -920,7 +919,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                             fom_max = fom
                             gDC2_best = _gDC2
                             gDC_best = _gDC
-                            tx_taps_best = self._tx_combs[_tx_ix]
+                            tx_ix_best = _tx_ix
                             rx_taps_best = self.fom_rslts['rx_taps']
                             pr_samps_best = self.fom_rslts['pr_samps']
                             dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
@@ -940,7 +939,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             fom_max_changed = True
             gDC2_best = self.gDC2
             gDC_best = self.gDC
-            tx_taps_best = tx_taps
+            tx_ix_best = 0
             rx_taps_best = self.rx_taps
             dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
             cursor_ix_best = self.fom_rslts['cursor_ix']
@@ -958,7 +957,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             return False  # Flags the caller that the next 5 settings have NOT been made.
         self.gDC2     = gDC2_best                                   # pylint: disable=possibly-used-before-assignment
         self.gDC      = gDC_best                                    # pylint: disable=possibly-used-before-assignment
-        self.tx_taps  = tx_taps_best                                # pylint: disable=possibly-used-before-assignment
+        self.tx_ix    = tx_ix_best                                  # pylint: disable=possibly-used-before-assignment
         self.rx_taps  = rx_taps_best                                # pylint: disable=possibly-used-before-assignment
         self.dfe_taps = dfe_tap_weights_best                        # pylint: disable=possibly-used-before-assignment
         self.fom_rslts['FOM']            = fom_max                  # pylint: disable=possibly-used-before-assignment
@@ -1014,15 +1013,12 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
                 - ``gDC``
                 - ``gDC2``
-                - ``tx_taps``
+                - ``tx_ix``
                 - ``rx_taps``
 
                 (This assumption is embedded into the ``gen_pulse_resps()`` function.)
 
             2. Fills in the ``com_results`` dictionary w/ various useful values for debugging.
-
-        ToDo:
-            1. ``DER0 / 2`` in ``Ani`` calculation?
         """
 
         # Honor any mode overrides.
@@ -1088,7 +1084,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 (hISI[dfe_slice] / vic_curs_val)))
         hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val
         hISI *= As
-        _, pISI = delta_pmf(hISI, L=L, y=y, dbg_dict=dbg_dict)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
+        _, pISI = delta_pmf(filt_pr_samps(hISI, ymax), L=L, y=y, dbg_dict=dbg_dict)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
         varISI = varX * (hISI**2).sum()  # (93A-31)
 
         # - Crosstalk
