@@ -57,9 +57,9 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
     # Die & Package (Class A Test 1) Sec. 178.10.1
     # R_d: list[float]            # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
     R_d: NDArray                # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
-    C_d: list[float]            # (pF)
-    C_b: list[float]            # (pF)
-    C_p: list[float]            # (pF); as per config_com_ieee8023_93a=100GBASE-KR4.xls
+    C_d: list[float]            # (nF)
+    C_b: list[float]            # (nF)
+    C_p: list[float]            # (nF)
     L_s: list[float]            # (nH)
     z_c: list[float]            # (Ohms)
     z_p: list[float]            # (mm)

@@ -112,6 +112,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 Default: ``False``
         """
 
+        self.com_params = com_params
+        self.debug = debug
+
         # Process the given channel file names.
         ntwks: list[COMNtwk] = []
         if isinstance(channels, str):  # Should be a "*.s32p".
@@ -191,9 +194,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self.com_rslts: dict[str, Any] = {}
         self.fom_rslts: dict[str, Any] = {}
         self.dbg_dict: Optional[dict[str, Any]] = None
-
-        self.com_params = com_params
-        self.debug = debug
 
         self.set_status("Ready")
 
@@ -368,36 +368,41 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         "Reflection coefficient looking out of the right end of the channel."
         return self.gamma1
 
-    @property
-    def sDieLadder(self) -> rf.Network:
-        "On-die parasitic capacitance/inductance ladder network."
-        Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))
-        Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))
-        # Cd = list(map(lambda x: x / 1e12, self.com_params.C_d))[0]
-        # Ls = list(map(lambda x: x / 1e9, self.com_params.L_s))[0]
+    def sDie(self, isRx: bool):
+        "On-die parasitic capacitance/inductance ladder network, including bump."
+        if isRx:
+            ix = 1
+        else:
+            ix = 0
+        try:
+            Cd = list(map(lambda x: x / 1e9, self.com_params.C_d[ix]))
+        except:
+            print(f"self.com_params.C_d: {self.com_params.C_d}")
+            raise
+        Ls = list(map(lambda x: x / 1e9, self.com_params.L_s[ix]))
         R0 = [self.com_params.R_0] * len(Cd)  # type: ignore
         rslt = rf.network.cascade_list(
             list(map(lambda trip: sDieLadderSegment(self.freqs, trip),
                      zip(R0, Cd, Ls))))  # type: ignore
+        rslt = rslt ** self.sC(self.com_params.C_b[ix] / 1e9)
+        if isRx:
+            rslt.flip()
         return rslt
 
     @property
     def sPkgRx(self) -> rf.Network:
         "Rx package response."
-        # return self.sC(self.com_params.C_p / 1e12) ** self.sZp ** self.sDieLadder
-        return self.sC(self.com_params.C_p[0] / 1e12) ** self.sZp ** self.sDieLadder  # type: ignore
+        return self.sC(self.com_params.C_p[1] / 1e9) ** self.sZp ** self.sDie(True)  # type: ignore
 
     @property
     def sPkgTx(self) -> rf.Network:
         "Tx package response."
-        # return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p / 1e12)
-        return self.sDieLadder ** self.sZp ** self.sC(self.com_params.C_p[0] / 1e12)  # type: ignore
+        return self.sDie(False) ** self.sZp ** self.sC(self.com_params.C_p[0] / 1e9)  # type: ignore
 
     @property
     def sPkgNEXT(self) -> rf.Network:
         "NEXT package response."
-        # return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p / 1e12)
-        return self.sDieLadder ** self.sZpNEXT ** self.sC(self.com_params.C_p[0] / 1e12)  # type: ignore
+        return self.sDie(False) ** self.sZpNEXT ** self.sC(self.com_params.C_p[0] / 1e9)  # type: ignore
 
     @property
     def sZp(self) -> rf.Network:
@@ -420,6 +425,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Returns:
             2-port network equivalent to package transmission line.
+
+        ToDo:
+            1. Where is the bump parasitic capacitance, ``C_b``? (``C_p`` is the ball.)
         """
 
         zc = self.com_params.z_c
@@ -958,7 +966,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self.gDC2     = gDC2_best                                   # pylint: disable=possibly-used-before-assignment
         self.gDC      = gDC_best                                    # pylint: disable=possibly-used-before-assignment
         self.tx_ix    = tx_ix_best                                  # pylint: disable=possibly-used-before-assignment
-        self.rx_taps  = rx_taps_best                                # pylint: disable=possibly-used-before-assignment
+        self.rx_taps  = rx_taps_best / rx_taps_best.sum()           # pylint: disable=possibly-used-before-assignment
         self.dfe_taps = dfe_tap_weights_best                        # pylint: disable=possibly-used-before-assignment
         self.fom_rslts['FOM']            = fom_max                  # pylint: disable=possibly-used-before-assignment
         self.fom_rslts['mse']            = mse_best                 # pylint: disable=possibly-used-before-assignment
