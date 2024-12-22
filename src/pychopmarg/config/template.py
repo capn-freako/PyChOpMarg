@@ -11,6 +11,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
+from pychopmarg.common import Rvec
 
 
 @dataclass
@@ -49,14 +50,18 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
     c0_min: float
     # Rx EQ
     f_r: float                  # (fb)
-    dfe_min: list[float]
-    dfe_max: list[float]
-    rx_taps_min: list[float]
-    rx_taps_max: list[float]
+    # dfe_min: list[float]
+    # dfe_max: list[float]
+    dfe_min: Rvec
+    dfe_max: Rvec
+    # rx_taps_min: list[float]
+    # rx_taps_max: list[float]
+    rx_taps_min: Rvec
+    rx_taps_max: Rvec
     dw: int
     # Die & Package (Class A Test 1) Sec. 178.10.1
     # R_d: list[float]            # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
-    R_d: NDArray                # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
+    R_d: Rvec                   # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
     C_d: list[float]            # (nF)
     C_b: list[float]            # (nF)
     C_p: list[float]            # (nF)

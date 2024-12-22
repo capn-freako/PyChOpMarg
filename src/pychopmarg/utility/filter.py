@@ -71,7 +71,7 @@ def calc_Hffe(
     # if not hasCurs:
     #     b0 = 1 - sum(list(map(abs, tap_weights)))
     #     bs.insert(-n_post, b0)
-    bs = tap_weights.flatten()
+    bs = tap_weights
     if not hasCurs:
         b0 = 1 - abs(tap_weights).sum()
         bs = np.insert(bs, -n_post, b0)
@@ -79,7 +79,7 @@ def calc_Hffe(
         return sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * n_b[0] * td * freqs),
                             enumerate(bs))))
     else:
-        return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * np.array(freqs)))  # 50% perf. improvement
+        return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * freqs))  # 50% perf. improvement
 
     # Row sum:
     # (b0 * e(-j 2pi T 0*f0)) (b0 * e(-j 2pi T 0*f1)) (b0 * e(-j 2pi T 0*f2))
@@ -118,7 +118,7 @@ def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
         The complex voltage transfer function, H(f), for the DFE.
     """
 
-    bs = list(np.array(tap_weights).flatten())
+    bs = tap_weights.flatten()
     return 1 / (1 - sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * (n_b[0] + 1) * td * freqs),
                                  enumerate(bs)))))
 
@@ -168,11 +168,10 @@ def calc_H21(freqs: Rvec, s2p: rf.Network, g1: float, g2: float) -> Cvec:
     """
 
     assert s2p.s[0].shape == (2, 2), ValueError("Network must be 2-port!")
-    s2p = s2p.extrapolate_to_dc()
-    s2p.interpolate_self(freqs)
-    s11 = s2p.s11.s.flatten()
-    s12 = s2p.s12.s.flatten()
-    s21 = s2p.s21.s.flatten()
-    s22 = s2p.s22.s.flatten()
+    _s2p = s2p.interpolate(freqs, kind='linear', coords='polar', basis='s', bounds_error=False, fill_value='extrapolate', assume_sorted=True)
+    s11 = _s2p.s11.s.flatten()
+    s12 = _s2p.s12.s.flatten()
+    s21 = _s2p.s21.s.flatten()
+    s22 = _s2p.s22.s.flatten()
     dS = s11 * s22 - s12 * s21
     return (s21 * (1 - g1) * (1 + g2)) / (1 - s11 * g1 - s22 * g2 + g1 * g2 * dS)

@@ -51,7 +51,7 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[Rvec]:
         if trip[2]:  # non-zero step?
             ranges.append(list(np.arange(trip[0], trip[1] + trip[2], trip[2])))
         else:
-            ranges.append([0.0])
+            ranges.append([0.0])  # type: ignore
     # return list(map(lambda xs: np.array(xs), all_combs(ranges)))
     return list(map(np.array, all_combs(ranges)))
     # rslt = []

@@ -33,8 +33,9 @@ from numpy             import array, arange
 from numpy.typing      import NDArray
 from scipy.interpolate import interp1d
 
-from pychopmarg.common   import Rvec, Cvec, PI, TWOPI, COMChnl, COMNtwk
+from pychopmarg.common   import Rvec, Cvec, Cmat, PI, TWOPI, COMChnl, COMNtwk
 from pychopmarg.config.ieee_8023by import IEEE_8023by
+from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.config.template import COMParams
 from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import NormMode, mmse, przf
@@ -63,34 +64,38 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     opt_mode = OptMode(OptMode.MMSE)
     norm_mode = NormMode(NormMode.P8023dj)
     unit_amp = bool(True)
-    com_params = IEEE_8023by
+    com_params = IEEE_8023dj
 
     # Linear EQ
-    tx_ix: int = 0             # Index into list of all possible combinations of Tx FFE tap weights.
+    tx_ix: int = 0          # Index into list of all possible combinations of Tx FFE tap weights.
     rx_taps: Rvec = array([1.0])
     dfe_taps: Rvec = array([])
     nRxTaps: int = 0
     nRxPreTaps: int = 0     # `dw` from `com_params`
     gDC = 0.0               # Choices are in `com_params.g_DC`.
     gDC2 = 0.0              # Choices are in `com_params.g_DC2`.
+    rx_ffe_phase_matrix: Cmat = array([])
 
     # Channel data
     vic_chnl_ix = int(1)  # Used with s32p file.
     chnls: list[COMChnl] = []
-    chnls_noPkg: list[COMChnl] = []
-    pulse_resps_nopkg: list[Rvec] = []
+    # chnls_noPkg: list[COMChnl] = []
+    # pulse_resps_nopkg: list[Rvec] = []
     pulse_resps_noeq:  list[Rvec] = []
     cursor_ix: int = 0
 
     # Package
     zp_sel = 0  # package length selector
+    _sPkgTx: list[rf.Network] = []
+    _sPkgRx: list[rf.Network] = []
 
     def __init__(
         self,
         com_params: COMParams,
         channels: Path | dict[str, list[Path]],
         vic_chnl_ix: int = 1,
-        debug: bool = False
+        debug: bool = False,
+        do_init: bool = True
     ) -> None:
         """
         Args:
@@ -110,10 +115,16 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 Default: 1
             debug: Gather/report certain debugging information when ``True``.
                 Default: ``False``
+            do_init: Skip normal initialization behavior when ``False``.
+                Default: ``True``
         """
 
         self.com_params = com_params
         self.debug = debug
+        self.do_init = do_init
+
+        if not do_init:
+            return
 
         # Process the given channel file names.
         ntwks: list[COMNtwk] = []
@@ -140,31 +151,57 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         # Create the system time & frequency vectors.
         fb = com_params.fb * 1e9
-        ui = 1 / fb
-        fmax = min(map(lambda ch: ch[0].f[-1], ntwks))
         fstep = com_params.fstep * 1e9
+        # - time
         tmax = 1 / fstep           # Just enough to cover one full cycle of the fundamental.
+        ui = 1 / fb
         tstep = ui / com_params.M  # Obeying requested samps. per UI.
-        f = arange(0, fmax + fstep, fstep)  # "+ fstep", to include `fmax`.
-        t_irfft = array([n * 0.5 / fmax for n in range(2 * (len(f) - 1))])
         _t = arange(0, tmax, tstep)
-        t = _t[_t < t_irfft[-1]]  # to avoid interpolation bounds errors
+        # t = _t[_t < t_irfft[-1]]  # to avoid interpolation bounds errors
+        # t_irfft = array([n * 0.5 / fmax for n in range(2 * (len(f) - 1))])  # independent of `t`
+        t = _t
+        t_irfft = t
+        # - freq.
+        # fmax = min(map(lambda ch: ch[0].f[-1], ntwks))
+        fmax = 0.5 / t[1]  # Nyquist freq.
+        f = arange(0, fmax + fstep, fstep)  # "+ fstep", to include `fmax`.
+        # self.fSparam = arange(0, 67e9 + 10e6, 10e6)  # 67 GHz from D1.3 Annex 178A.
         self.t: Rvec = t
         self.f: Rvec = f
         self._t_irfft: Rvec = t_irfft
+
+        # Extrapolate channel networks, both to D.C. and to `fmax`.
+        # for ntwk in ntwks:
+        #     ntwk[0].resample(f, kind='linear', coords='polar', basis='t', bounds_error=False, fill_value='extrapolate', assume_sorted=True)
 
         # Pre-calculate constant responses.
         self._Xsinc = int(ui / t_irfft[1]) * np.sinc(ui * f)
         self._Ht = np.exp(-2 * (PI * (f / 1e9) * com_params.T_r / 1.6832)**2)  # 93A-46 calls for f in GHz.
         _f = f / (com_params.f_r * fb)
         self._Hr = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
+        Rd = com_params.R_d
+        R0 = com_params.R_0
+        self._gamma1: Rvec = (Rd - R0) / (Rd + R0)
+        z_pairs = list(zip(com_params.z_c, [com_params.z_p[self.zp_sel], com_params.z_pB]))
+        self._sPkgTx = [
+            rf.network.cascade_list([
+                self.sDie(False),
+                sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
+                          self.com_params.tau, self.com_params.gamma0, z_pairs),
+                self.sC(self.com_params.C_p[0] / 1e9)])]
+        self._sPkgRx = [
+            rf.network.cascade_list([
+            self.sC(self.com_params.C_p[1] / 1e9),
+            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
+                      self.com_params.tau, self.com_params.gamma0, z_pairs),
+            self.sDie(True)])]
 
-        self.chnls_noPkg = list(
-            map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1[0], self.gamma2[0])),
-                ntwks))
+        # self.chnls_noPkg = list(
+        #     map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1[0], self.gamma2[0])),
+        #         ntwks))
         self.chnls = list(map(self.add_pkg, ntwks))
-        self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=self.chnls_noPkg, apply_eq=False)
-        self.pulse_resps_noeq = self.gen_pulse_resps(chnls=self.chnls, apply_eq=False)
+        # self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=self.chnls_noPkg, apply_eq=False)
+        self.pulse_resps_noeq = self.gen_pulse_resps(chnls=[self.chnls[0]], apply_eq=False)
 
         # Generate all possible combinations of Tx FFE tap weights.
         c0_min = com_params.c0_min
@@ -177,18 +214,12 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self._tx_combs = [np.zeros(len(com_params.tx_taps_min)), *_tx_combs]
         self._num_tx_combs = len(self._tx_combs)
 
-        @cache
-        def _Htx(tx_combs_ix: int) -> Cvec:
-            return calc_Hffe(self.freqs, 1 / self.fb, array(self._tx_combs[tx_combs_ix]), 3)
-        self._Htx = _Htx
-
-        # Rx linear EQ
-        _f = f / (com_params.f_r * fb)
-        self._Hr = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
-
         # Set Rx FFE quantities.
         self.nRxTaps = len(com_params.rx_taps_max)
         self.nRxPreTaps = com_params.dw
+        self.rx_ffe_phase_matrix = np.exp(np.outer(np.arange(self.nRxTaps), -1j * TWOPI * ui * f))
+        self.null_rx_ffe: Rvec = array([0] * self.nRxPreTaps + [1.0] + [0] * (self.nRxTaps - self.nRxPreTaps - 1))
+        self.empty_array: Rvec = array([])
 
         # Misc.
         self.com_rslts: dict[str, Any] = {}
@@ -233,16 +264,19 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             RuntimeError if EQ optimization fails.
         """
 
+        # print(f"__call__: `dbg_dict`: {dbg_dict}")
+        # if dbg_dict is not None:
+        #     dbg_dict.update({"__call___entered": True})
+            
         # Honor any mode overrides.
-        opt_mode  = opt_mode  or self.opt_mode
-        norm_mode = norm_mode or self.norm_mode
-        if unit_amp is None:
-            unit_amp = self.unit_amp
-        self.opt_mode  = opt_mode
-        self.norm_mode = norm_mode
-        self.unit_amp  = unit_amp
+        if opt_mode:
+            self.opt_mode  = opt_mode
+        if norm_mode:
+            self.norm_mode = norm_mode
+        if unit_amp:
+            self.unit_amp  = unit_amp
         if dbg_dict is not None:
-            self.dbg_dict = dbg_dict
+            self.dbg_dict  = dbg_dict
 
         self.set_status("Optimizing EQ...")
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
@@ -357,16 +391,24 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         return rslt
 
     @property
-    def gamma1(self) -> NDArray:
+    def gamma1_Tx(self) -> float:
         "Reflection coefficient looking out of the left end of the channel."
-        Rd = self.com_params.R_d
-        R0 = self.com_params.R_0
-        return (Rd - R0) / (Rd + R0)
+        return self._gamma1[0]
 
     @property
-    def gamma2(self) -> NDArray:
+    def gamma2_Tx(self) -> float:
         "Reflection coefficient looking out of the right end of the channel."
-        return self.gamma1
+        return self._gamma1[0]
+
+    @property
+    def gamma1_Rx(self) -> float:
+        "Reflection coefficient looking out of the left end of the channel."
+        return self._gamma1[1]
+
+    @property
+    def gamma2_Rx(self) -> float:
+        "Reflection coefficient looking out of the right end of the channel."
+        return self._gamma1[1]
 
     def sDie(self, isRx: bool):
         "On-die parasitic capacitance/inductance ladder network, including bump."
@@ -374,12 +416,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             ix = 1
         else:
             ix = 0
-        try:
-            Cd = list(map(lambda x: x / 1e9, self.com_params.C_d[ix]))
-        except:
-            print(f"self.com_params.C_d: {self.com_params.C_d}")
-            raise
-        Ls = list(map(lambda x: x / 1e9, self.com_params.L_s[ix]))
+        Cd = self.com_params.C_d[ix] / 1e9
+        Ls = self.com_params.L_s[ix] / 1e9
         R0 = [self.com_params.R_0] * len(Cd)  # type: ignore
         rslt = rf.network.cascade_list(
             list(map(lambda trip: sDieLadderSegment(self.freqs, trip),
@@ -392,68 +430,65 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     @property
     def sPkgRx(self) -> rf.Network:
         "Rx package response."
-        return self.sC(self.com_params.C_p[1] / 1e9) ** self.sZp ** self.sDie(True)  # type: ignore
+        return self._sPkgRx[self.zp_sel]
 
     @property
     def sPkgTx(self) -> rf.Network:
         "Tx package response."
-        return self.sDie(False) ** self.sZp ** self.sC(self.com_params.C_p[0] / 1e9)  # type: ignore
+        return self._sPkgTx[self.zp_sel]
 
     @property
     def sPkgNEXT(self) -> rf.Network:
         "NEXT package response."
-        return self.sDie(False) ** self.sZpNEXT ** self.sC(self.com_params.C_p[0] / 1e9)  # type: ignore
+        return self._sPkgTx[0]
 
-    @property
-    def sZp(self) -> rf.Network:
-        "THRU/FEXT package transmission line."
-        return self.calc_sZp()
+    # @property
+    # def sZp(self) -> rf.Network:
+    #     "THRU/FEXT package transmission line."
+    #     return self.calc_sZp()
 
-    @property
-    def sZpNEXT(self) -> rf.Network:
-        "NEXT package transmission line."
-        return self.calc_sZp(NEXT=True)
+    # @property
+    # def sZpNEXT(self) -> rf.Network:
+    #     "NEXT package transmission line."
+    #     return self.calc_sZp(NEXT=True)
 
-    def calc_sZp(self, NEXT: bool = False) -> rf.Network:
-        """
-        Return the 2-port network corresponding to a package transmission line,
-        according to (93A-9:14).
+    # def calc_sZp(self, NEXT: bool = False) -> rf.Network:
+    #     """
+    #     Return the 2-port network corresponding to a package transmission line,
+    #     according to (93A-9:14).
 
-        Keyword Args:
-            NEXT: Use first package T-line length option when True.
-                Default: False
+    #     Keyword Args:
+    #         NEXT: Use first package T-line length option when True.
+    #             Default: False
 
-        Returns:
-            2-port network equivalent to package transmission line.
+    #     Returns:
+    #         2-port network equivalent to package transmission line.
+    #     """
 
-        ToDo:
-            1. Where is the bump parasitic capacitance, ``C_b``? (``C_p`` is the ball.)
-        """
+    #     zc = self.com_params.z_c
+    #     assert len(zc) in [1, 2], ValueError(
+    #         f"Length of `zc` ({len(zc)}) must be 1 or 2!")
 
-        zc = self.com_params.z_c
-        assert len(zc) in [1, 2], ValueError(
-            f"Length of `zc` ({len(zc)}) must be 1 or 2!")
+    #     if NEXT:
+    #         zp = self.com_params.z_p[0]
+    #     else:
+    #         zp = self.com_params.z_p[self.zp_sel]
+    #     if len(zc) == 1:
+    #         zps = [zp]
+    #     else:
+    #         zps = [zp, self.com_params.z_pB]
 
-        if NEXT:
-            zp = self.com_params.z_p[0]
-        else:
-            zp = self.com_params.z_p[self.zp_sel]
-        if len(zc) == 1:
-            zps = [zp]
-        else:
-            zps = [zp, self.com_params.z_pB]
-
-        return sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-                         self.com_params.tau, self.com_params.gamma0, list(zip(zc, zps)))
+    #     return sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
+    #                      self.com_params.tau, self.com_params.gamma0, list(zip(zc, zps)))
 
     # Package modeling
     def add_pkg(self, ntwk: tuple[rf.Network, str]) -> COMChnl:
-        """Add package response to raw channel."""
+        """Add package response to raw channel and pre-calculate H21."""
         ntype = ntwk[1]
         if ntype == 'NEXT':
             _ntwk = self.sPkgNEXT ** ntwk[0] ** self.sPkgRx
         _ntwk = self.sPkgTx ** ntwk[0] ** self.sPkgRx
-        return ((_ntwk, ntype), calc_H21(self.freqs, _ntwk, self.gamma1[0], self.gamma2[0]))
+        return ((_ntwk, ntype), calc_H21(self.freqs, _ntwk, self.gamma1_Tx, self.gamma2_Rx))
 
     # Logging / Debugging
     def set_status(self, status: str) -> None:
@@ -476,6 +511,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
         return sCshunt(self.freqs, c, self.com_params.R_0)
 
+    @cache
     def Htx(self, tx_taps_ix: int) -> Cvec:
         """
         Return the complex frequency response of the Tx deemphasis filter.
@@ -488,30 +524,52 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
         assert 0 <= tx_taps_ix < self.num_tx_combs, ValueError(
             f"tx_taps_ix ({tx_taps_ix}) must be an integer in: [0, {self.num_tx_combs})!")
-        return self._Htx(tx_taps_ix)
+        return calc_Hffe(self.freqs, 1 / self.fb, array(self._tx_combs[tx_taps_ix]), 3)
 
-    def H21(self, s2p: rf.Network) -> Cvec:
+    def Hffe_Rx(self, taps: Optional[Rvec] = None) -> Cvec:
         """
-        Return the voltage transfer function, H21(f), of a terminated two
-        port network, according to (93A-18).
+        Return the complex frequency response of the Rx FFE.
 
-        Args:
-            s2p: Two port network of interest.
+        Keyword Args:
+            taps: Tap weights to use for calculation.
+                Default: None (Means "use self.rx_taps".)
 
         Returns:
-            Complex voltage transfer function at given frequencies.
+            Complex frequency response of Rx FFE.
 
         Raises:
-            ValueError: If given network is not two port.
-
-        Notes:
-            1. It is at this point in the analysis that the "raw" Touchstone data
-            gets interpolated to our system frequency vector.
-
-            2. After this step, the package and R0/Rd mismatch have been accounted for, but not the EQ.
+            ValueError: If ``taps`` is supplied and the length is wrong.
         """
-        # return calc_H21(self.freqs, s2p, self.gamma1, self.gamma2)
-        return calc_H21(self.freqs, s2p, self.gamma1[0][0], self.gamma2[0][0])
+        if taps is None:
+            taps = self.rx_taps
+        else:
+            assert len(taps) == self.nRxTaps, ValueError(
+                f"If `taps` is given then its length ({len(taps)}) must equal `nRxTaps` ({self.nRxTaps})!")
+
+        return taps @ self.rx_ffe_phase_matrix
+
+    # def H21(self, s2p: rf.Network) -> Cvec:
+    #     """
+    #     Return the voltage transfer function, H21(f), of a terminated two
+    #     port network, according to (93A-18).
+
+    #     Args:
+    #         s2p: Two port network of interest.
+
+    #     Returns:
+    #         Complex voltage transfer function at given frequencies.
+
+    #     Raises:
+    #         ValueError: If given network is not two port.
+
+    #     Notes:
+    #         1. It is at this point in the analysis that the "raw" Touchstone data
+    #         gets interpolated to our system frequency vector.
+
+    #         2. After this step, the package and R0/Rd mismatch have been accounted for, but not the EQ.
+    #     """
+    #     # return calc_H21(self.freqs, s2p, self.gamma1, self.gamma2)
+    #     return calc_H21(self.freqs, s2p, self.gamma1[0][0], self.gamma2[0][0])
 
     def H(  # pylint: disable=too-many-arguments,too-many-locals,too-many-positional-arguments
         self, H21: Cvec, tx_ix: int,
@@ -525,10 +583,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         Args:
             H21: Voltage transfer function of channel + package.
+            tx_ix: Tx FFE tap weights index.
 
         Keyword Args:
-            tx_ix: Tx FFE tap weights index.
-                Default: None (i.e. - Use ``self.tx_taps``.)
             Hctf: Complex voltage transfer function of CTLE.
                 Default: None (i.e. - Calculate, using ``self.gDC`` & ``self.gDC2``.)
             rx_taps: Rx FFE tap weights.
@@ -577,9 +634,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             print(f"self.rx_taps: {self.rx_taps}")
             raise
         if nRxTaps:
-            Hrx  = calc_Hffe(freqs, tb, array(rx_taps).flatten(), nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
+            # Hrx  = calc_Hffe(freqs, tb, array(rx_taps).flatten(), nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
+            Hrx = self.Hffe_Rx(rx_taps)
             if passive_RxFFE:
-                Hrx /= max(abs(Hrx))
+                Hrx /= max(np.abs(Hrx))
             rslt *= Hrx
 
         return rslt
@@ -609,18 +667,20 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             f"Length of given H(f) {len(H)} does not match length of f {len(self.freqs)}!")
 
         p = np.fft.irfft(self.Xsinc * H)
-        spln = interp1d(self.t_irfft, p)  # `p` is not yet in our system time domain!
-        try:
-            rslt = spln(self.times)       # Now, it is.
-        except:
-            print(f"max(self.times): {max(self.times)}")
-            print(f"max(self.t_irfft): {max(self.t_irfft)}")
-            raise
+        # spln = interp1d(self.t_irfft, p)  # `p` is not yet in our system time domain!
+        # try:
+        #     rslt = spln(self.times)       # Now, it is.
+        # except:
+        #     print(f"max(self.times): {max(self.times)}")
+        #     print(f"max(self.t_irfft): {max(self.t_irfft)}")
+        #     raise
 
-        return rslt
+        # return rslt
+        return p
 
     def gen_pulse_resps(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        self, chnls: Optional[list[COMChnl]] = None,
+        self,
+        chnls: Optional[list[COMChnl]] = None,
         Hctf: Optional[Cvec] = None,
         tx_ix: Optional[int] = None, rx_taps: Optional[Rvec] = None,
         dfe_taps: Optional[Rvec] = None, apply_eq: bool = True
@@ -667,15 +727,20 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         if Hctf is None:
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
 
-        rx_taps = array(rx_taps)
-        dfe_taps = array(dfe_taps)
+        # rx_taps = array(rx_taps)
+        # dfe_taps = array(dfe_taps)
 
         pulse_resps = []
         for (ntwk, ntype), H21 in chnls:
+        # for pr, H21 in chnls:
+        #     try:
+        #         ntwk, ntype = pr
+        #     except:
+        #         print(f"pr: {pr}")
+        #         raise
             if apply_eq:
                 if ntype == 'NEXT':
                     pr = self.pulse_resp(self.H(
-                        # ntwk, np.zeros(tx_taps.shape), gDC=gDC, gDC2=gDC2, rx_taps=rx_taps, dfe_taps=dfe_taps))
                         H21, 0, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
                 else:
                     pr = self.pulse_resp(self.H(
@@ -755,28 +820,29 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         nspui = self.nspui
 
         pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
-            tx_ix=tx_ix, Hctf=Hctf, rx_taps=array([1.0]), dfe_taps=array([]))
+            tx_ix=tx_ix, Hctf=Hctf,
+            rx_taps=self.null_rx_ffe, dfe_taps=self.empty_array)
         match opt_mode:
             case OptMode.PRZF:
                 # Step a - Pulse response construction.
                 pulse_resps = pulse_resps_preFFE
                 pr_samps = None
-                if nRxTaps:              # If we have an Rx FFE...
-                    if rx_taps is None:  # If we received no explicit override of the Rx FFE tap weight values,
-                        rx_taps, _, pr_samps = przf(  # then optimize them.
+                if nRxTaps:                     # If we have an Rx FFE...
+                    if rx_taps is None:                     # If we received no explicit override of the Rx FFE tap weight values,
+                        rx_taps, _, pr_samps = przf(        # then optimize them.
                             pulse_resps_preFFE[0], M, nRxTaps, nRxPreTaps, nDFE,
-                            array(rx_taps_min), array(rx_taps_max), array(bmin), array(bmax),
+                            rx_taps_min, rx_taps_max, bmin, bmax,
                             norm_mode=norm_mode, unit_amp=unit_amp)
-                    pulse_resps = self.gen_pulse_resps(
-                        tx_ix=tx_ix, Hctf=Hctf, rx_taps=array(rx_taps), dfe_taps=array([]))
+                    pulse_resps = self.gen_pulse_resps(     # Regenerate the pulse responses, including the Rx FFE.
+                        tx_ix=tx_ix, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=self.empty_array)
                 else:
-                    rx_taps=array([1.0])  # Passes signal through unaltered.
+                    rx_taps=self.null_rx_ffe    # Otherwise, pass the signal through unaltered.
 
                 # Step b - Cursor identification.
-                vic_pulse_resp = array(pulse_resps[0])  # Note: Includes any Rx FFE, but not DFE.
+                vic_pulse_resp = pulse_resps[0]  # Note: Includes any Rx FFE, but not DFE.
                 vic_peak_loc = np.argmax(vic_pulse_resp)
                 cursor_ix = loc_curs(vic_pulse_resp, self.nspui,
-                                     array(self.com_params.dfe_max), array(self.com_params.dfe_min))
+                                     self.com_params.dfe_max, self.com_params.dfe_min)
                 if pr_samps is None:
                     pr_samps = vic_pulse_resp[cursor_ix % nspui::nspui]
 
@@ -785,8 +851,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 As = self.com_params.RLM * vic_curs_val / (L - 1)
 
                 # Step d - Tx noise.
-                varX = (L**2 - 1) / (3 * (L - 1)**2)  # (93A-29)
-                varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)  # (93A-30)
+                varX = (L**2 - 1) / (3 * (L - 1)**2)                                                    # (93A-29)
+                varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                         # (93A-30)
 
                 # Step e - ISI.
                 # This is not compliant to the standaard, but is consistent w/ v2.60 of MATLAB code.
@@ -795,7 +861,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 vic_pulse_resp_isi_samps = np.concatenate((vic_pulse_resp[first_pre_ix:cursor_ix:M],
                                                            vic_pulse_resp[cursor_ix + M::M]))
                 vic_pulse_resp_post_samps = vic_pulse_resp_isi_samps[n_pre:]
-                dfe_tap_weights = np.maximum(  # (93A-26)
+                dfe_tap_weights = np.maximum(                                                           # (93A-26)
                     self.com_params.dfe_min,
                     np.minimum(
                         self.com_params.dfe_max,
@@ -804,30 +870,26 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                      - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
                                              (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
                                              mode='constant',
-                                             constant_values=0)  # (93A-27)
-                # varISI = varX * sum(hISI**2)  # (93A-31)
-                varISI = varX * (hISI**2).sum()  # (93A-31)
+                                             constant_values=0)                                         # (93A-27)
+                varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
                 # Step f - Jitter noise.
                 hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
-                # varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * sum(hJ**2)  # (93A-32)
-                varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * (hJ**2).sum()  # (93A-32)
+                varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * (hJ**2).sum()   # (93A-32)
 
                 # Step g - Crosstalk.
                 varXT = 0.
-                for pulse_resp in pulse_resps[1:]:  # (93A-34)
-                    # pylint: disable=consider-using-generator
-                    # varXT += max([sum(array(filt_pr_samps(pulse_resp[m::M], As))**2)
+                for pulse_resp in pulse_resps[1:]:                                                      # (93A-34)
                     varXT += max([(filt_pr_samps(pulse_resp[m::M], As)**2).sum()
-                                  for m in range(M)])  # (93A-33)
+                                  for m in range(M)])                                                   # (93A-33)
                 varXT *= varX
 
                 # Step h - Spectral noise.
                 df = freqs[1]
-                varN = (self.com_params.eta_0 / 1e9) * (abs(self.Hr * Hctf)**2).sum() * df  # (93A-35)
+                varN = (self.com_params.eta_0 / 1e9) * (abs(self.Hr * Hctf)**2).sum() * df              # (93A-35)
 
                 # Step i - FOM calculation.
-                fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))  # (93A-36)
+                fom = 10 * np.log10(As**2 / (varTx + varISI + varJ + varXT + varN))                     # (93A-36)
 
             case OptMode.MMSE:
                 theNoiseCalc = NoiseCalc(
@@ -836,7 +898,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                     self.com_params.eta_0, self.com_params.A_v, self.com_params.SNR_TX,
                     self.com_params.A_DD, self.com_params.sigma_Rj)
                 rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, len(self.com_params.dfe_min), self.com_params.RLM,
-                            self.com_params.L, array(bmin), array(bmax), array(rx_taps_min), array(rx_taps_max),
+                            self.com_params.L, bmin, bmax, rx_taps_min, rx_taps_max,
                             norm_mode=norm_mode)
                 fom = rslt["fom"]
                 rx_taps = rslt["rx_taps"]
@@ -852,6 +914,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 varXT = rslt["varXT"]
                 varN = rslt["varN"]
                 self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else None
+                self.theNoiseCalc = theNoiseCalc
+                self.mmse_rslt = rslt
             case _:
                 raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")
 
@@ -909,7 +973,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             # Honor any mode overrides.
             opt_mode  = opt_mode  or self.opt_mode
             norm_mode = norm_mode or self.norm_mode
-            if unit_amp is None:
+            if unit_amp is None:  # Don't try the more Pythonic syntax above; it doesn't work for Boolean values.
                 unit_amp = self.unit_amp
 
             # Run the nested optimization loops.
@@ -961,12 +1025,13 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             mse_best = 0
 
         # Check for error and save the best results.
+        # Note the normalization of the Rx FFE tap weights, to produce unit d.c. gain through that filter.
         if not fom_max_changed:
-            return False  # Flags the caller that the next 5 settings have NOT been made.
+            return False  # Flags the caller that the following settings have NOT been made.
         self.gDC2     = gDC2_best                                   # pylint: disable=possibly-used-before-assignment
         self.gDC      = gDC_best                                    # pylint: disable=possibly-used-before-assignment
         self.tx_ix    = tx_ix_best                                  # pylint: disable=possibly-used-before-assignment
-        self.rx_taps  = rx_taps_best / rx_taps_best.sum()           # pylint: disable=possibly-used-before-assignment
+        self.rx_taps  = rx_taps_best / rx_taps_best[self.nRxPreTaps]  # pylint: disable=possibly-used-before-assignment
         self.dfe_taps = dfe_tap_weights_best                        # pylint: disable=possibly-used-before-assignment
         self.fom_rslts['FOM']            = fom_max                  # pylint: disable=possibly-used-before-assignment
         self.fom_rslts['mse']            = mse_best                 # pylint: disable=possibly-used-before-assignment
@@ -985,9 +1050,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     def calc_noise(
         self,
         cursor_ix: Optional[int] = None,
-        opt_mode: Optional[OptMode] = None,
-        norm_mode: Optional[NormMode] = None,
-        unit_amp: Optional[bool] = None,
         dbg_dict: Optional[Dict[str, Any]] = None
     ) -> tuple[float, float, int]:
         """
@@ -998,13 +1060,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 to be used instead of our own estimate.
                 (In support of MMSE.)
                 Default: None
-            opt_mode: Optimization mode.
-                Default: None (i.e. - Use ``self.opt_mode``.)
-            norm_mode: The tap weight normalization mode to use.
-                Default: None (i.e. - Use ``self.norm_mode``.)
-            unit_amp: Enforce unit pulse response amplitude when True.
-                (For comparing ``przf()`` results to ``mmse()`` results.)
-                Default: None (i.e. - Use ``self.unit_amp``.)
             dbg_dict: Optional dictionary into which debugging values may be stashed,
                 for later analysis.
                 Default: None
@@ -1029,11 +1084,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             2. Fills in the ``com_results`` dictionary w/ various useful values for debugging.
         """
 
-        # Honor any mode overrides.
-        opt_mode  = opt_mode  or self.opt_mode
-        norm_mode = norm_mode or self.norm_mode
-        if unit_amp is None:
-            unit_amp = self.unit_amp
+        # print(f"calc_noise: `dbg_dict`: {dbg_dict}")
+        # if dbg_dict is not None:
+        #     dbg_dict.update({"calc_noise_entered": True})
 
         # Copy instance variables.
         L = self.com_params.L
@@ -1041,13 +1094,14 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         RLM = self.com_params.RLM
         freqs = self.freqs
         nDFE = len(self.com_params.dfe_min)
+        nRxTaps = self.nRxTaps
+        nRxPreTaps = self.nRxPreTaps
 
         self.set_status("Calculating COM...")
-        pulse_resps = self.gen_pulse_resps(dfe_taps=array([]))  # DFE taps are included explicitly, below.
+        pulse_resps = self.gen_pulse_resps(dfe_taps=self.empty_array)  # DFE taps are included explicitly, below.
         vic_pulse_resp = pulse_resps[0]
         if cursor_ix is None:
-            cursor_ix = loc_curs(vic_pulse_resp, self.nspui,
-                                 array(self.com_params.dfe_max), array(self.com_params.dfe_min))
+            cursor_ix = loc_curs(vic_pulse_resp, self.nspui, self.com_params.dfe_max, self.com_params.dfe_min)
         curs_uis, curs_ofst = divmod(cursor_ix, M)
         vic_curs_val = vic_pulse_resp[cursor_ix]
         # Missing `2*` is also missing from `Ani` definition; so, they cancel in COM calc.
@@ -1056,23 +1110,24 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         npts = 2 * min(int(ymax / 0.00001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
         y = np.linspace(-ymax, ymax, npts)
         ystep = 2 * ymax / (npts - 1)
+        pDelta = np.zeros(npts)
+        pDelta[npts // 2] = 1.0
 
         # Sec. 93A.1.7.2
-        varX = (L**2 - 1) / (3 * (L - 1)**2)                                    # (93A-29)
+        varX = (L**2 - 1) / (3 * (L - 1)**2)                                                    # (93A-29)
         df = freqs[1] - freqs[0]
-        if self.nRxTaps:
-            Hrx = calc_Hffe(
-                freqs, 1 / self.fb, array(self.rx_taps).flatten(),
-                self.nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
+        if nRxTaps:
+            Hrx = self.Hffe_Rx()
         else:
             Hrx = np.ones(len(freqs))
-        varN = self.com_params.eta_0 * (abs(self.Hr * self.Hctf * Hrx)**2).sum() * (df / 1e9)  # (93A-35) + Hffe
-        varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                     # (93A-30)
+        varN = self.com_params.eta_0 * (abs(self.Hr[1:] * self.Hctf[1:] * Hrx[1:])**2).sum() * (df / 1e9)   # (93A-35) + Hffe
+        varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                         # (93A-30)
         hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
-        _, pJ = delta_pmf(self.com_params.A_DD * hJ, L=L, y=y)
-        varG = varTx + self.com_params.sigma_Rj**2 * varX * (hJ**2).sum() + varN              # (93A-41)
-        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep         # (93A-42), but converted to PMF.
-        pN = np.convolve(pG, pJ, mode='same')                                   # (93A-43)
+        _, pJ = delta_pmf(filt_pr_samps(self.com_params.A_DD * hJ, ymax), L=L, y=y)             # (93A-40)
+        varG = varTx + self.com_params.sigma_Rj**2 * varX * (hJ**2).sum() + varN                # (93A-41)
+        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep                         # (93A-42), but converted to PMF.
+        pN = np.convolve(pG, pJ, mode='same')                                                   # (93A-43)
+        pN /= pN.sum()  # Enforce a PMF.
 
         # Sec. 93A.1.7.3
         self.set_status("Sec. 93A.1.7.3")
@@ -1080,38 +1135,35 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         n_pre = min(5, curs_uis)
         # Sample every M points, such that we include our identified cursor sample.
         isi_sample_slice = slice(curs_ofst, len(vic_pulse_resp), M)
-        isi_select_slice = slice(curs_uis - n_pre, curs_uis + 101)  # Ignore everything beyond 100 UI after cursor.
+        isi_select_slice = slice(curs_uis - n_pre, curs_uis + 2048)
         tISI = self.times[isi_sample_slice][isi_select_slice]
         hISI = vic_pulse_resp[isi_sample_slice][isi_select_slice].copy()
         hISI[n_pre] = 0  # No ISI at cursor.
         dfe_slice = slice(n_pre + 1, n_pre + 1 + nDFE)
-        dfe_tap_weights = np.maximum(                                           # (93A-26)
+        dfe_tap_weights = np.maximum(                                                           # (93A-26)
             self.com_params.dfe_min,
             np.minimum(
                 self.com_params.dfe_max,
                 (hISI[dfe_slice] / vic_curs_val)))
-        hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val
-        hISI *= As
-        _, pISI = delta_pmf(filt_pr_samps(hISI, ymax), L=L, y=y, dbg_dict=dbg_dict)  # `hISI` from (93A-27); `p(y)` as per (93A-40)
-        varISI = varX * (hISI**2).sum()  # (93A-31)
+        hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val                                       # (93A-27)
+        varISI = varX * (hISI**2).sum()                                                         # (93A-31)
+        _, pISI = delta_pmf(filt_pr_samps(hISI, ymax), L=L, y=y)                                # (93A-40)
 
         # - Crosstalk
-        xt_samps = []
-        pks = []  # For debugging.
-        py = pISI.copy()
-        for pulse_resp in pulse_resps[1:]:  # (93A-44)
-            i = np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)])  # (93A-33)
-            samps = pulse_resp[i::M]
-            xt_samps.append(samps)
-            _, pk = delta_pmf(samps, L=L, y=y)  # For debugging.
-            pks.append(pk)
-            py = np.convolve(py, pk, mode='same')
-        py = np.convolve(py, pN, mode='same')  # (93A-45)
+        pXT = pDelta
+        for pulse_resp in pulse_resps[1:]:                                                      # (93A-44)
+            i = np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)])                      # (93A-33)
+            samps = pulse_resp[i::M]  # [isi_select_slice]
+            _, pk = delta_pmf(filt_pr_samps(samps, ymax), L=L, y=y)  # , dbg_dict=dbg_dict)
+            pXT = np.convolve(pXT, pk, mode='same')
+        pXT /= pXT.sum()  # Enforce a PMF.
+        varXT = sum(_y**2 * p for (_y, p) in zip(y, pXT))
 
         # Final calculation
+        py = np.convolve(np.convolve(pISI, pN, mode='same'), pXT, mode='same')                  # (93A-45)
         Py = np.cumsum(py)
         Py /= Py[-1]  # Enforce cumulative probability distribution.
-        Ani = -y[np.where(Py >= self.com_params.DER_0)[0][0]]  # ToDo: `DER0 / 2`?
+        Ani = -y[np.where(Py >= self.com_params.DER_0)[0][0]]
 
         # Store some results.
         self.com_rslts['As']          = As
@@ -1122,18 +1174,20 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self.com_rslts['sigma_G']     = np.sqrt(varG)
         self.com_rslts['sigma_N']     = np.sqrt(varN)
         self.com_rslts['sigma_ISI']   = np.sqrt(varISI)
+        self.com_rslts['sigma_XT']    = np.sqrt(varXT)
         self.com_rslts['tISI']        = tISI
         self.com_rslts['hISI']        = hISI
         self.com_rslts['pG']          = pG
         self.com_rslts['pN']          = pN
         self.com_rslts['pJ']          = pJ
         self.com_rslts['pISI']        = pISI
+        self.com_rslts['pXT']         = pXT
         self.com_rslts['py']          = py
         self.com_rslts['Py']          = Py
         self.com_rslts['y']           = y
-        self.com_rslts['pks']         = pks
+        # self.com_rslts['pks']         = pks
         self.com_rslts['dfe_taps']    = dfe_tap_weights
-        self.com_rslts['xt_samps']    = xt_samps
+        # self.com_rslts['xt_samps']    = xt_samps
 
         return (As, Ani, cursor_ix)
 

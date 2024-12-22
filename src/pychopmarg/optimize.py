@@ -107,11 +107,11 @@ def clip_taps(
     if w_min is None:
         w_min = -ones(len(w))
     else:
-        w_min = array(w_min)
+        w_min = w_min
     if w_max is None:
         w_max = ones(len(w))
     else:
-        w_max = array(w_max)
+        w_max = w_max
 
     assert len(w) == len(w_min) == len(w_max), ValueError(
         f"Lengths of: `w` ({len(w)}), `w_min` ({len(w_min)}), and `w_max` ({len(w_max)}), must be equal!")
@@ -192,7 +192,7 @@ def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 
     # Construct null filter, as default.
     dw = nPreTaps
-    wn = zeros(nTaps)
+    wn: Rvec = zeros(nTaps)
     if nTaps > 0:
         wn[dw] = 1.0
 
@@ -208,13 +208,13 @@ def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         h_norm = h.copy()
         if unit_amp:
             h_norm /= max(h_norm)
-        fv = zeros(len_h)
+        fv: Rvec = zeros(len_h)
         fv[dh] = h_norm[dh]                         # Don't force the cursor to zero.
         dfe_ixs = slice(dh + 1, dh + nDFETaps + 1)  # indices of DFE taps
         # Bound first `nDFETaps` post-cursor taps to DFE's correction limits.
-        fv[dfe_ixs] = minimum(np.array(b_max) * h_norm[dh],
-                              maximum(np.array(b_min) * h_norm[dh],
-                                      np.array(h_norm[dfe_ixs])))
+        fv[dfe_ixs] = minimum(b_max * h_norm[dh],
+                              maximum(b_min * h_norm[dh],
+                                      h_norm[dfe_ixs]))
         fv = pad(fv, (nPreTaps, 0))[:len_h]  # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
 
         # Find the optimum FFE tap weights.
@@ -314,7 +314,9 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         for ts_ix in range(curs_ix - ts_sweep_ix, curs_ix + ts_sweep_ix):
             theNoiseCalc.ts_ix = ts_ix
             dh, first_samp = divmod(ts_ix, nspui)
-            h = vic_pr[first_samp::nspui]
+            # n_pre = min(5, dh)
+            _h = vic_pr[first_samp::nspui]
+            h = _h[:2048]  # default value for `num_ui_RXFF_noise` parameter in MATLAB code
             d = dw + dh
             first_col = concatenate((h, zeros(Nw - 1)))
             H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
@@ -375,7 +377,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["cursor_ix"] = ts_ix
                 df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
                 rslt["varTx"] = sum(theNoiseCalc.Stn) * df
-                rslt["varISI"] = 0
+                rslt["varISI"] = 0  # ToDo: Why?
                 rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
                 rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
                 rslt["varN"] = sum(theNoiseCalc.Srn) * df

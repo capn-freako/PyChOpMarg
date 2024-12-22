@@ -171,8 +171,8 @@ def import_s32p(  # pylint: disable=too-many-locals
         vic_rx_ports = [vic_ports[n] for n in [0, 2]]
     else:
         vic_rx_ports = [vic_ports[n] for n in [1, 3]]
-    agg_chnls = list(np.array(range(8)) + 1)
-    agg_chnls.remove(vic_chnl)
+    agg_chnls = list(np.arange(8) + 1)
+    agg_chnls.remove(vic_chnl)  # type: ignore
     aggs = []
     for agg_chnl in agg_chnls:
         agg_ports = ports_from_chnls(agg_chnl, agg_chnl)
@@ -206,7 +206,7 @@ def sCshunt(freqs: Rvec, c: float, r0: float = 50.0) -> rf.Network:
         The network corresponding to a shunt capacitance, ``c``,
         calculated at the given frequencies, ``freqs``.
     """
-    w = TWOPI * np.array(freqs)
+    w = TWOPI * freqs
     s = 1j * w
     jwRC = s * r0 * c
     s11 = -jwRC / (2 + jwRC)
@@ -297,7 +297,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             return gamma0
         return gamma0 + gamma1 * np.sqrt(f) + gamma2(f) * f
 
-    g = array(list(map(gamma, f_GHz)))
+    g = array(list(map(gamma, f_GHz)))  # type: ignore
 
     def mk_s2p(z_pair: tuple[float, float]) -> rf.Network:
         """
