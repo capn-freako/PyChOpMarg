@@ -165,7 +165,7 @@ cython_debug/
 # Misc.
 .DS_Store
 *.sublime-workspace
-# *.html
+*.html
 chnl_data/example1.s32p
 chnl_data/P8023dj
 enable-6.0.0/
@@ -177,3 +177,7 @@ COM_MATLAB/
 test_results_*/
 *.m
 *results.csv
+*.orig
+*.bak
+*.png
+*.zip

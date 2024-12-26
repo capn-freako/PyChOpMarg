@@ -107,11 +107,11 @@ def clip_taps(
     if w_min is None:
         w_min = -ones(len(w))
     else:
-        w_min = array(w_min)
+        w_min = w_min
     if w_max is None:
         w_max = ones(len(w))
     else:
-        w_max = array(w_max)
+        w_max = w_max
 
     assert len(w) == len(w_min) == len(w_max), ValueError(
         f"Lengths of: `w` ({len(w)}), `w_min` ({len(w_min)}), and `w_max` ({len(w_max)}), must be equal!")
@@ -192,7 +192,7 @@ def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 
     # Construct null filter, as default.
     dw = nPreTaps
-    wn = zeros(nTaps)
+    wn: Rvec = zeros(nTaps)
     if nTaps > 0:
         wn[dw] = 1.0
 
@@ -208,13 +208,13 @@ def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         h_norm = h.copy()
         if unit_amp:
             h_norm /= max(h_norm)
-        fv = zeros(len_h)
+        fv: Rvec = zeros(len_h)
         fv[dh] = h_norm[dh]                         # Don't force the cursor to zero.
         dfe_ixs = slice(dh + 1, dh + nDFETaps + 1)  # indices of DFE taps
         # Bound first `nDFETaps` post-cursor taps to DFE's correction limits.
-        fv[dfe_ixs] = minimum(np.array(b_max) * h_norm[dh],
-                              maximum(np.array(b_min) * h_norm[dh],
-                                      np.array(h_norm[dfe_ixs])))
+        fv[dfe_ixs] = minimum(b_max * h_norm[dh],
+                              maximum(b_min * h_norm[dh],
+                                      h_norm[dfe_ixs]))
         fv = pad(fv, (nPreTaps, 0))[:len_h]  # Adding expected delay, `dw`, due to Rx FFE pre-cursor taps.
 
         # Find the optimum FFE tap weights.
@@ -309,113 +309,134 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     # Initialize and run the search for optimum `ts` and Rx FFE tap weights.
     max_fom = -1000
     rslt = {}
-    for ts_ix in range(curs_ix - ts_sweep_ix, curs_ix + ts_sweep_ix):
-        theNoiseCalc.ts_ix = ts_ix
-        varX = theNoiseCalc.varX
-        dh, first_samp = divmod(ts_ix, nspui)
-        h = vic_pr[first_samp::nspui]
-        d = dw + dh
-        if Nw:
+    varX = theNoiseCalc.varX
+    if Nw:
+        for ts_ix in range(curs_ix - ts_sweep_ix, curs_ix + ts_sweep_ix):
+            theNoiseCalc.ts_ix = ts_ix
+            dh, first_samp = divmod(ts_ix, nspui)
+            # n_pre = min(5, dh)
+            _h = vic_pr[first_samp::nspui]
+            h = _h[:2048]  # default value for `num_ui_RXFF_noise` parameter in MATLAB code
+            d = dw + dh
             first_col = concatenate((h, zeros(Nw - 1)))
-        else:
-            first_col = h
-            Nw = 1
-            w_min = w_max = array([1.0])
-        H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
+            H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
+            h0 = H[d]
+            Hb = H[d + 1: d + 1 + Nb]
+            Rn = theNoiseCalc.Rn()[:Nw]
+            R = H.T @ H + toeplitz(Rn) / varX
+            A = concatenate((concatenate(( R, -Hb.T,         -h0.reshape((Nw, 1))), axis=1),  # noqa=E201
+                             concatenate((-Hb, ones((Nb, 1)), zeros((Nb, 1))),      axis=1),
+                             concatenate(( h0, zeros(2))).reshape((1, Nw + 2))))              # noqa=E201
+            y = concatenate((h0, zeros(Nb), ones(1)))
+            x = solve(A, y)
+            w = x[:Nw]
+            lam = x[-1]
+
+            # Check DFE tap weights, enforcing limits if necessary.
+            b = x[Nw: Nw + Nb]
+            b_lim = maximum(b_min, minimum(b_max, b))
+            delta_w = zeros(len(w))
+            hit_b_limit = False
+            if not array_equal(b_lim, b):
+                hit_b_limit = True
+                _A = concatenate((concatenate((R, -h0.reshape((Nw, 1))), axis=1),
+                                  concatenate((h0, zeros(1))).reshape((1, -1))))
+                _y = concatenate((h0 + Hb.T @ b_lim, ones(1)))
+                _x = solve(_A, _y)
+                _w = _x[:Nw]
+                delta_w = _w - w
+                lam = _x[-1]
+                w = _w
+
+            # Clip to limits if apropos.
+            if norm_mode == NormMode.P8023dj:
+                w_lim = clip_taps(w, dw, w_min, w_max)
+            else:
+                w_lim = w
+
+            # Maintain unit pulse response amplitude, regardless of normalization mode, through end of optimization.
+            w_lim /= dot(h0, w_lim)
+
+            # Adjust DFE tap weights if necessary.
+            if not array_equal(w_lim, w):
+                b = Hb @ w_lim.flatten()
+                b_lim = maximum(b_min, minimum(b_max, b))
+
+            mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
+            fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
+            if fom > max_fom:
+                max_fom = fom
+                rslt["fom"] = fom
+                rslt["mse"] = mse
+                rslt["lambda"] = lam  # Should be `mse / varX`.
+                rslt["delta_w"] = delta_w
+                rslt["hit_b_limit"] = hit_b_limit
+                rslt["rx_taps"] = w_lim
+                rslt["dfe_tap_weights"] = b_lim
+                rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
+                rslt["cursor_ix"] = ts_ix
+                df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
+                rslt["varTx"] = sum(theNoiseCalc.Stn) * df
+                rslt["varISI"] = 0  # ToDo: Why?
+                rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
+                rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
+                rslt["varN"] = sum(theNoiseCalc.Srn) * df
+                # DEBUGGING:
+                rslt["h"] = h
+                rslt["h0"] = h0
+                rslt["H"] = H
+                rslt["d"] = d
+                rslt["R"] = R
+                rslt["A"] = A
+                rslt["y"] = y
+                rslt["x"] = x
+                rslt["b"] = b
+                rslt["theNoiseCalc"] = theNoiseCalc
+                rslt["varX"] = varX
+                rslt["Rn"] = Rn
+        # Apply desired normalization to tap weights.
+        w = rslt["rx_taps"]
+        match norm_mode:
+            case NormMode.P8023dj:
+                w_lim = w  # Done above as part of optimization loop.
+            case NormMode.Scaled:
+                w_lim = scale_taps(w, w_min, w_max)
+            case NormMode.Unaltered:
+                w_lim = w
+            case NormMode.UnitDcGain:
+                w_lim = w / sum(w)
+            case _:
+                raise RuntimeError(
+                    f"Received unknown normalization mode: {norm_mode}!")
+        rslt["rx_taps"] = w_lim
+    else:
+        theNoiseCalc.ts_ix = int(curs_ix)
+        d, first_samp = divmod(int(curs_ix), nspui)
+        h = vic_pr[first_samp::nspui]
+        H = convolution_matrix(h, 1, mode='full')[:len(h)]
         h0 = H[d]
         Hb = H[d + 1: d + 1 + Nb]
-        Rn = theNoiseCalc.Rn()[:Nw]
+        Rn = theNoiseCalc.Rn()[:1]
         R = H.T @ H + toeplitz(Rn) / varX
-        A = concatenate((concatenate(( R, -Hb.T,         -h0.reshape((Nw, 1))), axis=1),  # noqa=E201
-                         concatenate((-Hb, ones((Nb, 1)), zeros((Nb, 1))),      axis=1),
-                         concatenate(( h0, zeros(2))).reshape((1, Nw + 2))))              # noqa=E201
-        y = concatenate((h0, zeros(Nb), ones(1)))
-        x = solve(A, y)
-        w = x[:Nw]
-        lam = x[-1]
-
-        # Check DFE tap weights, enforcing limits if necessary.
-        b = x[Nw: Nw + Nb]
-        b_lim = maximum(b_min, minimum(b_max, b))
-        delta_w = zeros(len(w))
-        hit_b_limit = False
-        if not array_equal(b_lim, b):
-            hit_b_limit = True
-            _A = concatenate((concatenate((R, -h0.reshape((Nw, 1))), axis=1),
-                              concatenate((h0, zeros(1))).reshape((1, -1))))
-            _y = concatenate((h0 + Hb.T @ b_lim, ones(1)))
-            _x = solve(_A, _y)
-            _w = _x[:Nw]
-            delta_w = _w - w
-            lam = _x[-1]
-            w = _w
-
-        # Clip to limits if apropos.
-        if norm_mode == NormMode.P8023dj:
-            w_lim = clip_taps(w, dw, w_min, w_max)
-        else:
-            w_lim = w
-
-        # Maintain unit pulse response amplitude, regardless of normalization mode, through end of optimization.
-        w_lim /= dot(h0, w_lim)
-
-        # Adjust DFE tap weights if necessary.
-        if not array_equal(w_lim, w):
-            b = Hb @ w_lim.flatten()
-            b_lim = maximum(b_min, minimum(b_max, b))
-
+        w_lim = array([1.0 / vic_pr[curs_ix]])
+        b_lim = maximum(b_min, minimum(b_max, h[d + 1: d + 1 + Nb]))
         mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
-        # else:
-        #     w = array([1.0])
-        #     w_lim = array([1.0 / h[dh]])
-        #     mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
-
         fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
-        if fom > max_fom:
-            max_fom = fom
-            rslt["fom"] = fom
-            rslt["mse"] = mse
-            rslt["lambda"] = lam  # Should be `mse / varX`.
-            rslt["delta_w"] = delta_w
-            rslt["hit_b_limit"] = hit_b_limit
-            rslt["rx_taps"] = w_lim
-            rslt["dfe_tap_weights"] = b_lim
-            rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
-            rslt["cursor_ix"] = ts_ix
-            df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
-            rslt["varTx"] = sum(theNoiseCalc.Stn) * df
-            rslt["varISI"] = 0
-            rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
-            rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
-            rslt["varN"] = sum(theNoiseCalc.Srn) * df
-            # DEBUGGING:
-            rslt["h"] = h
-            rslt["h0"] = h0
-            rslt["H"] = H
-            rslt["d"] = d
-            rslt["R"] = R
-            rslt["A"] = A
-            rslt["y"] = y
-            rslt["x"] = x
-            rslt["b"] = b
-            rslt["theNoiseCalc"] = theNoiseCalc
-            rslt["varX"] = varX
-            rslt["Rn"] = Rn
-
-    # Apply desired normalization to tap weights.
-    w = rslt["rx_taps"]
-    match norm_mode:
-        case NormMode.P8023dj:
-            w_lim = w  # Done above as part of optimization loop.
-        case NormMode.Scaled:
-            w_lim = scale_taps(w, w_min, w_max)
-        case NormMode.Unaltered:
-            w_lim = w
-        case NormMode.UnitDcGain:
-            w_lim = w / sum(w)
-        case _:
-            raise RuntimeError(
-                f"Received unknown normalization mode: {norm_mode}!")
-    rslt["rx_taps"] = w_lim
+        rslt["fom"] = fom
+        rslt["mse"] = mse
+        rslt["lambda"] = None
+        rslt["delta_w"] = None
+        rslt["hit_b_limit"] = False
+        rslt["rx_taps"] = w_lim
+        rslt["dfe_tap_weights"] = b_lim
+        rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
+        rslt["h"] = h
+        rslt["cursor_ix"] = curs_ix
+        df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
+        rslt["varTx"] = sum(theNoiseCalc.Stn) * df
+        rslt["varISI"] = 0
+        rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
+        rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
+        rslt["varN"] = sum(theNoiseCalc.Srn) * df
 
     return rslt

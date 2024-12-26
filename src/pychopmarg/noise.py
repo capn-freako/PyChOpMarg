@@ -9,11 +9,11 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 # pylint: disable=redefined-builtin
-from numpy                  import argmax, array, concatenate, diff, mean, roll, sinc, sum, where
+from numpy                  import argmax, array, concatenate, diff, mean, reshape, roll, sinc, sum, where
 from numpy.fft              import irfft, rfft
 from scipy.interpolate      import interp1d
 
-from pychopmarg.common      import Rvec, Cvec
+from pychopmarg.common      import Rvec, Cvec, Rmat
 
 
 class NoiseCalc():  # pylint: disable=too-many-instance-attributes
@@ -200,7 +200,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             the implicit ``1/N`` of the ``irfft()`` function, this gives ``df``.
         """
         # "/ 2" in [1] omitted, since we're only considering: m >= 0.
-        rslt  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
+        rslt: Cvec  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
         _rslt = abs(rfft(self.from_irfft(irfft(rslt)))) * 2 * self.f[-1] * self.Tb
         return _rslt
 
@@ -220,11 +220,11 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
         # Truncate at # of whole UIs in `t`, to avoid +/-1 length variation, due to sampling phase.
         nUI = int(len(t) / nspui)
+        _agg_pulse_resp = agg_pulse_resp[:nUI * nspui]
+        sampled_agg_prs: Rmat = array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
+        best_m = argmax(list(map(lambda pr_samps: (pr_samps**2).sum(), sampled_agg_prs)))
 
-        sampled_agg_prs = [agg_pulse_resp[m::nspui] for m in range(nspui)]
-        best_m = argmax(list(map(lambda pr_samps: sum(array(pr_samps)**2), sampled_agg_prs)))
-
-        return self.varX * abs(rfft(sampled_agg_prs[best_m][:nUI]))**2 * self.Tb  # i.e. - / fB
+        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb * 2  # i.e. - 2/fB = 1/(fB/2) = 1/fN
 
     @property
     def Stn(self) -> Rvec:
@@ -260,26 +260,32 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         varX           = self.varX
         vic_pulse_resp = self.vic_pulse_resp
 
-        # Truncate at # of whole UIs in `t`, to avoid +/-1 length variation, due to sampling phase.
-        nUI = int(len(t) / nspui)
-
-        dV = diff(vic_pulse_resp)
+        dV: Rvec = diff(vic_pulse_resp)
+        # Truncate at # of whole UIs in `dV`, to avoid +/-1 length variation, due to sampling phase.
+        nUI = int(len(dV) / nspui)
         try:
-            hJ = mean(array([dV[(ts_ix - 1) % nspui::nspui][:nUI],
-                             dV[(ts_ix    ) % nspui::nspui][:nUI]]),
+            hJ = mean(reshape(concatenate((dV[(ts_ix - 1) % nspui::nspui][:nUI],
+                                           dV[(ts_ix    ) % nspui::nspui][:nUI])),
+                              shape=(2, nUI)),
                       axis=0) / t[1]
         except:
             print(f"dV: {dV}")
             print(f"ts_ix: {ts_ix}")
             print(f"nspui: {nspui}")
             print(f"nUI: {nUI}")
+            print(f"len(dV[(ts_ix - 1) % nspui::nspui]): {len(dV[(ts_ix - 1) % nspui::nspui])}")
+            print(f"len(dV[(ts_ix    ) % nspui::nspui]): {len(dV[(ts_ix    ) % nspui::nspui])}")
             raise
-        # hJ = hJ[:int(len(t) / nspui)]
 
         return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
 
     def Rn(self) -> Rvec:
         """Noise autocorrelation vector at Rx FFE input."""
-        Sn = self.Srn + sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)[:len(self.Srn)] + self.Stn + self.Sjn
+        Srn = self.Srn
+        Sxn = sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)
+        Stn = self.Stn
+        Sjn = self.Sjn
+        min_len = min(len(Srn), len(Sxn), len(Stn), len(Sjn))
+        Sn = Srn[:min_len] + Sxn[:min_len] + Stn[:min_len] + Sjn[:min_len]
         # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
         return irfft(Sn) / self.Tb

@@ -86,6 +86,9 @@ ignore = [
     "D107", # Missing docstring in __init__
 ]
 
+[tool.mypy]
+plugins = "numpy.typing.mypy_plugin"
+
 [[tool.mypy.overrides]]
 module = [
     "scipy.*",

@@ -91,36 +91,32 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         ystep = y[1] - y[0]
         h_samps_filt = h_samps
 
-    delta = np.zeros(npts)
-    delta[npts // 2] = 1
-
     if dbg_dict is not None:
         dbg_dict.update({"h_samps":      h_samps})
         dbg_dict.update({"h_samps_filt": h_samps_filt})
         dbg_dict.update({"ystep":        ystep})
 
-    def pn(hn: float) -> Rvec:
-        """
-        (93A-39)
-        """
-        if dbg_dict:
-            dbg_dict.update({"hn":     hn})
-            dbg_dict.update({"shifts": []})
-        _rslt = np.zeros(npts)
-        for el in range(L):
-            _shift = int((2 * el / (L - 1) - 1) * hn / ystep)
-            if dbg_dict:
-                dbg_dict["shifts"].append(_shift)
-            assert abs(_shift) < npts // 2, ValueError(
-                f"Wrap around: _shift: {_shift}, npts: {npts}.")
-            _rslt += np.roll(delta, _shift)
-        return 1 / L * _rslt
+    # Pre-calculated constant values.
+    delta = np.zeros(npts)
+    zero_ix = npts // 2
+    delta[zero_ix] = 1.0
+    inv_L = 1.0 / L
+    sig_step = 2.0 / (L - 1)
+    sig_shifts = (np.arange(L) * sig_step - 1) / ystep
 
+    # PMF calculation proper - a more efficient form of convolution, given our apriori knowledge of the input.
     rslt = delta
     for hn in h_samps_filt:
-        _pn = pn(hn)
-        rslt = np.convolve(rslt, _pn, mode='same')
-    rslt /= sum(rslt)  # Enforce a PMF.
+        shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn)))  # (93A-39) + filter out zeros, as per MATLAB code
+        if shifts:
+            _rslt = sum(np.roll(rslt, shift) for shift in shifts)
+            try:
+                rslt = _rslt / _rslt.sum()  # Enforce a PMF.
+            except:
+                print(f"_rslt: {_rslt}")
+                print(f"rslt: {rslt}")
+                print(f"shifts: {shifts}")
+                raise
 
     return y, rslt
 

@@ -11,6 +11,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
+from pychopmarg.common import Rvec
 
 
 @dataclass
@@ -49,17 +50,21 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
     c0_min: float
     # Rx EQ
     f_r: float                  # (fb)
-    dfe_min: list[float]
-    dfe_max: list[float]
-    rx_taps_min: list[float]
-    rx_taps_max: list[float]
+    # dfe_min: list[float]
+    # dfe_max: list[float]
+    dfe_min: Rvec
+    dfe_max: Rvec
+    # rx_taps_min: list[float]
+    # rx_taps_max: list[float]
+    rx_taps_min: Rvec
+    rx_taps_max: Rvec
     dw: int
     # Die & Package (Class A Test 1) Sec. 178.10.1
     # R_d: list[float]            # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
-    R_d: NDArray                # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
-    C_d: list[float]            # (pF)
-    C_b: list[float]            # (pF)
-    C_p: list[float]            # (pF); as per config_com_ieee8023_93a=100GBASE-KR4.xls
+    R_d: Rvec                   # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
+    C_d: list[float]            # (nF)
+    C_b: list[float]            # (nF)
+    C_p: list[float]            # (nF)
     L_s: list[float]            # (nH)
     z_c: list[float]            # (Ohms)
     z_p: list[float]            # (mm)
@@ -115,9 +120,9 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
         check_range("SNR_TX", self.SNR_TX, 25, 35)
         check_range("eta_0", self.eta_0, 1e-10, 1e-6)
         check_range("sigma_Rj", self.sigma_Rj, 0.0, 1.0)
-        check_range("f_z", self.f_z, 1.0, 2 * self.fb)
-        check_range("f_p1", self.f_p1, 1.0, 2 * self.fb)
-        check_range("f_p2", self.f_p2, 1.0, 5 * self.fb)
+        check_range("f_z", self.f_z, 1.0, 1000)
+        check_range("f_p1", self.f_p1, 1.0, 1000)
+        check_range("f_p2", self.f_p2, 1.0, 1000)
         check_range("f_LF", self.f_LF, 0.1, 10.)
         check_range("g_DC", self.g_DC, -30, 0)
         check_range("g_DC2", self.g_DC2, -20, 0)

@@ -19,7 +19,7 @@ from pychopmarg.common import Rvec
 T = TypeVar('T', Any, Any)
 
 
-def all_combs(xss: list[NDArray[T]]) -> list[NDArray[T]]:
+def all_combs(xss: list[list[T]]) -> list[list[T]]:
     """
     Generate all combinations of input.
 
@@ -30,10 +30,10 @@ def all_combs(xss: list[NDArray[T]]) -> list[NDArray[T]]:
         All possible combinations of inputs.
     """
     if not xss:
-        return [np.array([])]
+        return [[]]
     head, *tail = xss
     yss = all_combs(tail)
-    return [np.insert(ys, 0, x) for x in head for ys in yss]
+    return [[x, *ys] for x in head for ys in yss]  # type: ignore
 
 
 def mk_combs(trips: list[tuple[float, float, float]]) -> list[Rvec]:
@@ -49,10 +49,23 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[Rvec]:
     ranges = []
     for trip in trips:
         if trip[2]:  # non-zero step?
-            ranges.append(np.arange(trip[0], trip[1] + trip[2], trip[2]))
+            ranges.append(list(np.arange(trip[0], trip[1] + trip[2], trip[2])))
         else:
-            ranges.append(np.array([0.0]))
-    return all_combs(ranges)
+            ranges.append([0.0])  # type: ignore
+    # return list(map(lambda xs: np.array(xs), all_combs(ranges)))
+    return list(map(np.array, all_combs(ranges)))
+    # rslt = []
+    # combs = all_combs(ranges)
+    # for xs in combs:
+    #     try:
+    #         ys = np.array(xs)[::-1]
+    #     except:
+    #         print(f"xs: {xs}")
+    #         print(f"len(combs): {len(combs)}")
+    #         print(f"Empty combs: {len(list(filter(lambda x: not x, combs)))}")
+    #         raise
+    #     rslt.append(ys)
+    # return rslt
 
 
 def from_irfft(x: Rvec, t_irfft: Rvec, t: Rvec, nspui: int) -> Rvec:
