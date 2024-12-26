@@ -220,13 +220,11 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
         # Truncate at # of whole UIs in `t`, to avoid +/-1 length variation, due to sampling phase.
         nUI = int(len(t) / nspui)
-
-        # sampled_agg_prs = [agg_pulse_resp[m::nspui] for m in range(nspui)]
-        # best_m = argmax(list(map(lambda pr_samps: sum(array(pr_samps)**2), sampled_agg_prs)))
-        sampled_agg_prs: Rmat = array([agg_pulse_resp[m::nspui] for m in range(nspui)])
+        _agg_pulse_resp = agg_pulse_resp[:nUI * nspui]
+        sampled_agg_prs: Rmat = array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
         best_m = argmax(list(map(lambda pr_samps: (pr_samps**2).sum(), sampled_agg_prs)))
 
-        return self.varX * abs(rfft(sampled_agg_prs[best_m][:nUI]))**2 * self.Tb * 2  # i.e. - 2/fB = 1/(fB/2) = 1/fN
+        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb * 2  # i.e. - 2/fB = 1/(fB/2) = 1/fN
 
     @property
     def Stn(self) -> Rvec:

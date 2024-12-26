@@ -151,16 +151,17 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         # Create the system time & frequency vectors.
         fb = com_params.fb * 1e9
-        fstep = com_params.fstep * 1e9
+        # fstep = com_params.fstep * 1e9
+        fstep = 50e6
         # - time
         tmax = 1 / fstep           # Just enough to cover one full cycle of the fundamental.
+        # tmax = 25e-9               # Matching the maximum I see in the MATLAB results.
         ui = 1 / fb
         tstep = ui / com_params.M  # Obeying requested samps. per UI.
         t = arange(0, tmax, tstep)
         # - freq.
         fmax = 0.5 / t[1]  # Nyquist freq.
         f = arange(0, fmax + fstep, fstep)  # "+ fstep", to include `fmax`.
-        # self.fSparam = arange(0, 67e9 + 10e6, 10e6)  # 67 GHz from D1.3 Annex 178A.
         self.t: Rvec = t
         self.f: Rvec = f
 
@@ -187,11 +188,12 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self._sPkgRx = [sdd_21(rf.network.concat_ports([sPkgRx_SE, sPkgRx_SE], port_order='first'))]
 
         self.chnls = list(map(self.add_pkg, ntwks))
-        self.chnls_noPkg = list(
-            map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1_Tx, self.gamma2_Rx)),
-                [ntwks[0]]))
-        self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=[self.chnls_noPkg[0]], apply_eq=False)
-        self.pulse_resps_noeq  = self.gen_pulse_resps(chnls=[self.chnls[0]],       apply_eq=False)
+        if debug:
+            self.chnls_noPkg = list(
+                map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1_Tx, self.gamma2_Rx)),
+                    [ntwks[0]]))
+            self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=[self.chnls_noPkg[0]], apply_eq=False)
+            self.pulse_resps_noeq  = self.gen_pulse_resps(chnls=[self.chnls[0]],       apply_eq=False)
 
         # Generate all possible combinations of Tx FFE tap weights.
         c0_min = com_params.c0_min
@@ -254,10 +256,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             RuntimeError if EQ optimization fails.
         """
 
-        # print(f"__call__: `dbg_dict`: {dbg_dict}")
-        # if dbg_dict is not None:
-        #     dbg_dict.update({"__call___entered": True})
-            
         # Honor any mode overrides.
         if opt_mode:
             self.opt_mode  = opt_mode
@@ -427,45 +425,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         "NEXT package response."
         return self._sPkgTx[0]
 
-    # @property
-    # def sZp(self) -> rf.Network:
-    #     "THRU/FEXT package transmission line."
-    #     return self.calc_sZp()
-
-    # @property
-    # def sZpNEXT(self) -> rf.Network:
-    #     "NEXT package transmission line."
-    #     return self.calc_sZp(NEXT=True)
-
-    # def calc_sZp(self, NEXT: bool = False) -> rf.Network:
-    #     """
-    #     Return the 2-port network corresponding to a package transmission line,
-    #     according to (93A-9:14).
-
-    #     Keyword Args:
-    #         NEXT: Use first package T-line length option when True.
-    #             Default: False
-
-    #     Returns:
-    #         2-port network equivalent to package transmission line.
-    #     """
-
-    #     zc = self.com_params.z_c
-    #     assert len(zc) in [1, 2], ValueError(
-    #         f"Length of `zc` ({len(zc)}) must be 1 or 2!")
-
-    #     if NEXT:
-    #         zp = self.com_params.z_p[0]
-    #     else:
-    #         zp = self.com_params.z_p[self.zp_sel]
-    #     if len(zc) == 1:
-    #         zps = [zp]
-    #     else:
-    #         zps = [zp, self.com_params.z_pB]
-
-    #     return sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-    #                      self.com_params.tau, self.com_params.gamma0, list(zip(zc, zps)))
-
     # Package modeling
     def add_pkg(self, ntwk: COMNtwk) -> COMChnl:
         """Add package response to raw channel and pre-calculate H21."""
@@ -547,29 +506,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 f"If `taps` is given then its length ({len(taps)}) must equal `nRxTaps` ({self.nRxTaps})!")
 
         return taps @ self.rx_ffe_phase_matrix
-
-    # def H21(self, s2p: rf.Network) -> Cvec:
-    #     """
-    #     Return the voltage transfer function, H21(f), of a terminated two
-    #     port network, according to (93A-18).
-
-    #     Args:
-    #         s2p: Two port network of interest.
-
-    #     Returns:
-    #         Complex voltage transfer function at given frequencies.
-
-    #     Raises:
-    #         ValueError: If given network is not two port.
-
-    #     Notes:
-    #         1. It is at this point in the analysis that the "raw" Touchstone data
-    #         gets interpolated to our system frequency vector.
-
-    #         2. After this step, the package and R0/Rd mismatch have been accounted for, but not the EQ.
-    #     """
-    #     # return calc_H21(self.freqs, s2p, self.gamma1, self.gamma2)
-    #     return calc_H21(self.freqs, s2p, self.gamma1[0][0], self.gamma2[0][0])
 
     def H(  # pylint: disable=too-many-arguments,too-many-locals,too-many-positional-arguments
         self, H21: Cvec, tx_ix: int,
@@ -659,15 +595,14 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 function differs from that of the system frequency vector.
 
         Notes:
-            1. It is at this point in the signal processing chain that we change
-            time domains.
+            1. The pulse response is trimmed to match the length of the system time vector.
         """
 
         assert len(H) == len(self.freqs), ValueError(
             f"Length of given H(f) {len(H)} does not match length of f {len(self.freqs)}!")
 
         p = np.fft.irfft(self.Xsinc * H)
-        return p
+        return p[:len(self.times)]
 
     def gen_pulse_resps(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
@@ -718,17 +653,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         if Hctf is None:
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
 
-        # rx_taps = array(rx_taps)
-        # dfe_taps = array(dfe_taps)
-
         pulse_resps = []
         for (ntwk, ntype), H21 in chnls:
-        # for pr, H21 in chnls:
-        #     try:
-        #         ntwk, ntype = pr
-        #     except:
-        #         print(f"pr: {pr}")
-        #         raise
             if apply_eq:
                 if ntype == 'NEXT':
                     pr = self.pulse_resp(self.H(
@@ -1176,9 +1102,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self.com_rslts['py']          = py
         self.com_rslts['Py']          = Py
         self.com_rslts['y']           = y
-        # self.com_rslts['pks']         = pks
         self.com_rslts['dfe_taps']    = dfe_tap_weights
-        # self.com_rslts['xt_samps']    = xt_samps
 
         return (As, Ani, cursor_ix)
 
