@@ -79,8 +79,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     # Channel data
     vic_chnl_ix = int(1)  # Used with s32p file.
     chnls: list[COMChnl] = []
-    # chnls_noPkg: list[COMChnl] = []
-    # pulse_resps_nopkg: list[Rvec] = []
+    chnls_noPkg: list[COMChnl] = []
+    pulse_resps_nopkg: list[Rvec] = []
     pulse_resps_noeq:  list[Rvec] = []
     cursor_ix: int = 0
 
@@ -156,26 +156,16 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         tmax = 1 / fstep           # Just enough to cover one full cycle of the fundamental.
         ui = 1 / fb
         tstep = ui / com_params.M  # Obeying requested samps. per UI.
-        _t = arange(0, tmax, tstep)
-        # t = _t[_t < t_irfft[-1]]  # to avoid interpolation bounds errors
-        # t_irfft = array([n * 0.5 / fmax for n in range(2 * (len(f) - 1))])  # independent of `t`
-        t = _t
-        t_irfft = t
+        t = arange(0, tmax, tstep)
         # - freq.
-        # fmax = min(map(lambda ch: ch[0].f[-1], ntwks))
         fmax = 0.5 / t[1]  # Nyquist freq.
         f = arange(0, fmax + fstep, fstep)  # "+ fstep", to include `fmax`.
         # self.fSparam = arange(0, 67e9 + 10e6, 10e6)  # 67 GHz from D1.3 Annex 178A.
         self.t: Rvec = t
         self.f: Rvec = f
-        self._t_irfft: Rvec = t_irfft
-
-        # Extrapolate channel networks, both to D.C. and to `fmax`.
-        # for ntwk in ntwks:
-        #     ntwk[0].resample(f, kind='linear', coords='polar', basis='t', bounds_error=False, fill_value='extrapolate', assume_sorted=True)
 
         # Pre-calculate constant responses.
-        self._Xsinc = int(ui / t_irfft[1]) * np.sinc(ui * f)
+        self._Xsinc = int(ui / t[1]) * np.sinc(ui * f)
         self._Ht = np.exp(-2 * (PI * (f / 1e9) * com_params.T_r / 1.6832)**2)  # 93A-46 calls for f in GHz.
         _f = f / (com_params.f_r * fb)
         self._Hr = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
@@ -183,25 +173,25 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         R0 = com_params.R_0
         self._gamma1: Rvec = (Rd - R0) / (Rd + R0)
         z_pairs = list(zip(com_params.z_c, [com_params.z_p[self.zp_sel], com_params.z_pB]))
-        self._sPkgTx = [
-            rf.network.cascade_list([
-                self.sDie(False),
-                sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-                          self.com_params.tau, self.com_params.gamma0, z_pairs),
-                self.sC(self.com_params.C_p[0] / 1e9)])]
-        self._sPkgRx = [
-            rf.network.cascade_list([
+        sPkgTx_SE = rf.network.cascade_list([
+            self.sDie(False),
+            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
+                      self.com_params.tau, self.com_params.gamma0, z_pairs),
+            self.sC(self.com_params.C_p[0] / 1e9)])
+        self._sPkgTx = [sdd_21(rf.network.concat_ports([sPkgTx_SE, sPkgTx_SE], port_order='first'))]
+        sPkgRx_SE = rf.network.cascade_list([
             self.sC(self.com_params.C_p[1] / 1e9),
             sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
                       self.com_params.tau, self.com_params.gamma0, z_pairs),
-            self.sDie(True)])]
+            self.sDie(True)])
+        self._sPkgRx = [sdd_21(rf.network.concat_ports([sPkgRx_SE, sPkgRx_SE], port_order='first'))]
 
-        # self.chnls_noPkg = list(
-        #     map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1[0], self.gamma2[0])),
-        #         ntwks))
         self.chnls = list(map(self.add_pkg, ntwks))
-        # self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=self.chnls_noPkg, apply_eq=False)
-        self.pulse_resps_noeq = self.gen_pulse_resps(chnls=[self.chnls[0]], apply_eq=False)
+        self.chnls_noPkg = list(
+            map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1_Tx, self.gamma2_Rx)),
+                [ntwks[0]]))
+        self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=[self.chnls_noPkg[0]], apply_eq=False)
+        self.pulse_resps_noeq  = self.gen_pulse_resps(chnls=[self.chnls[0]],       apply_eq=False)
 
         # Generate all possible combinations of Tx FFE tap weights.
         c0_min = com_params.c0_min
@@ -325,11 +315,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         return self.f
 
     @property
-    def t_irfft(self) -> Rvec:
-        "`irfft()` result time index (s) (i.e. - time vector coupled to frequency vector)."
-        return self._t_irfft
-
-    @property
     def Xsinc(self) -> Rvec:
         """Frequency domain sinc(f) corresponding to Rect(ui) in time domain."""
         return self._Xsinc
@@ -410,7 +395,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         "Reflection coefficient looking out of the right end of the channel."
         return self._gamma1[1]
 
-    def sDie(self, isRx: bool):
+    def sDie(self, isRx: bool) -> rf.Network:
         "On-die parasitic capacitance/inductance ladder network, including bump."
         if isRx:
             ix = 1
@@ -482,12 +467,27 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     #                      self.com_params.tau, self.com_params.gamma0, list(zip(zc, zps)))
 
     # Package modeling
-    def add_pkg(self, ntwk: tuple[rf.Network, str]) -> COMChnl:
+    def add_pkg(self, ntwk: COMNtwk) -> COMChnl:
         """Add package response to raw channel and pre-calculate H21."""
+
+        # Pre-interpolate channel model to system frequency vector, to prevent noisy non-causal artifacts.
+        freqs = self.freqs
+        sChnl = ntwk[0]
+        sChnlInterp = sChnl.extrapolate_to_dc().interpolate(freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True)
+        new_s = sChnlInterp.s.tolist()  # I couldn't make NumPy array padding work correctly here.
+        pad_len = len(freqs) - len(sChnlInterp.f)
+        new_s.extend(
+            [[[sChnlInterp.s11.s[-1, 0, 0], sChnlInterp.s12.s[-1, 0, 0]],
+              [sChnlInterp.s21.s[-1, 0, 0], sChnlInterp.s22.s[-1, 0, 0]]]
+            ] * pad_len)
+        new_s = np.array(new_s)
+        sChnlInterp = rf.Network(s=new_s, z0=sChnlInterp.z0[0], f=freqs)
+
         ntype = ntwk[1]
         if ntype == 'NEXT':
-            _ntwk = self.sPkgNEXT ** ntwk[0] ** self.sPkgRx
-        _ntwk = self.sPkgTx ** ntwk[0] ** self.sPkgRx
+            _ntwk = self.sPkgNEXT ** sChnlInterp ** self.sPkgRx
+        else:
+            _ntwk = self.sPkgTx   ** sChnlInterp ** self.sPkgRx
         return ((_ntwk, ntype), calc_H21(self.freqs, _ntwk, self.gamma1_Tx, self.gamma2_Rx))
 
     # Logging / Debugging
@@ -667,15 +667,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             f"Length of given H(f) {len(H)} does not match length of f {len(self.freqs)}!")
 
         p = np.fft.irfft(self.Xsinc * H)
-        # spln = interp1d(self.t_irfft, p)  # `p` is not yet in our system time domain!
-        # try:
-        #     rslt = spln(self.times)       # Now, it is.
-        # except:
-        #     print(f"max(self.times): {max(self.times)}")
-        #     print(f"max(self.t_irfft): {max(self.t_irfft)}")
-        #     raise
-
-        # return rslt
         return p
 
     def gen_pulse_resps(  # pylint: disable=too-many-arguments,too-many-positional-arguments

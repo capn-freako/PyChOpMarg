@@ -15,7 +15,7 @@ import numpy.typing as npt  # type: ignore
 import skrf         as rf  # type: ignore
 
 Real = TypeVar('Real', np.float64, np.float64)
-Comp = TypeVar('Comp', np.complex64, np.complex64)
+Comp = TypeVar('Comp', np.complex64, np.complex128)
 Rvec: TypeAlias = npt.NDArray[Real]
 Cvec: TypeAlias = npt.NDArray[Comp]
 Rmat: TypeAlias = npt.NDArray[Real]

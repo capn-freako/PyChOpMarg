@@ -104,8 +104,8 @@ def se2mm(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Net
     z = np.zeros((len(f), 4), dtype=complex)
     z[:, 0] = ntwk.z0[:, 0] + ntwk.z0[:, 2]
     z[:, 1] = ntwk.z0[:, 1] + ntwk.z0[:, 3]
-    z[:, 2] = (ntwk.z0[:, 0] + ntwk.z0[:, 2]) / 2
-    z[:, 3] = (ntwk.z0[:, 1] + ntwk.z0[:, 3]) / 2
+    z[:, 2] = (ntwk.z0[:, 0] * ntwk.z0[:, 2]) / (ntwk.z0[:, 0] + ntwk.z0[:, 2])
+    z[:, 3] = (ntwk.z0[:, 1] * ntwk.z0[:, 3]) / (ntwk.z0[:, 1] + ntwk.z0[:, 3])
 
     return rf.Network(frequency=f, s=s, z0=z)
 

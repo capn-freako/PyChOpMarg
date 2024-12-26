@@ -99,7 +99,7 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     # Pre-calculated constant values.
     delta = np.zeros(npts)
     zero_ix = npts // 2
-    delta[zero_ix] = 1
+    delta[zero_ix] = 1.0
     inv_L = 1.0 / L
     sig_step = 2.0 / (L - 1)
     sig_shifts = (np.arange(L) * sig_step - 1) / ystep
@@ -107,9 +107,16 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     # PMF calculation proper - a more efficient form of convolution, given our apriori knowledge of the input.
     rslt = delta
     for hn in h_samps_filt:
-        shifts = filter(lambda x: x != 0, np.round(sig_shifts * hn))  # (93A-39) + filter out zeros, as per MATLAB code
-        _rslt = sum(np.roll(rslt, shift) for shift in shifts)
-        rslt = _rslt / _rslt.sum()          # Enforce a PMF.
+        shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn)))  # (93A-39) + filter out zeros, as per MATLAB code
+        if shifts:
+            _rslt = sum(np.roll(rslt, shift) for shift in shifts)
+            try:
+                rslt = _rslt / _rslt.sum()  # Enforce a PMF.
+            except:
+                print(f"_rslt: {_rslt}")
+                print(f"rslt: {rslt}")
+                print(f"shifts: {shifts}")
+                raise
 
     return y, rslt
 
