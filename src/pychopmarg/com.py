@@ -570,7 +570,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             print(f"self.rx_taps: {self.rx_taps}")
             raise
         if nRxTaps:
-            # Hrx  = calc_Hffe(freqs, tb, array(rx_taps).flatten(), nRxTaps - self.nRxPreTaps - 1, hasCurs=True)
             Hrx = self.Hffe_Rx(rx_taps)
             if passive_RxFFE:
                 Hrx /= max(np.abs(Hrx))
