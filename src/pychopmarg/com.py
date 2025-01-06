@@ -270,7 +270,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
             "EQ optimization failed!")
         self.set_status("Calculating noise...")
-        As, Ani, self.cursor_ix = self.calc_noise(dbg_dict=dbg_dict)
+        As, Ani, self.cursor_ix = self.calc_noise(
+            cursor_ix=self.fom_rslts['cursor_ix'],
+            dbg_dict=dbg_dict)
         com = 20 * np.log10(As / Ani)
         self.com_rslts["COM"] = com
         self.set_status(f"Ready; COM = {com: 5.1f} dB")
@@ -683,7 +685,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         rx_taps: Optional[Rvec] = None,
         opt_mode: Optional[OptMode] = None,
         norm_mode: Optional[NormMode] = None,
-        unit_amp: Optional[bool] = None
+        unit_amp: Optional[bool] = None,
+        n_pre: Optional[int] = None
     ) -> float:
         """
         Calculate the **figure of merit** (FOM), given the existing linear EQ settings.
@@ -703,6 +706,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             unit_amp: Enforce unit pulse response amplitude when True.
                 (For comparing ``optimize.przf()`` results to ``optimize.mmse()`` results.)
                 Default: None (i.e. - Use ``self.unit_amp``.)
+            n_pre: Number of pre-cursor taps to use in calculating ISI.
+                Default: None (i.e. - Use ``self.nRxPreTaps``.)
 
         Returns:
             The resultant figure of merit.
@@ -733,7 +738,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         bmin = self.com_params.dfe_min
         bmax = self.com_params.dfe_max
         tb = 1 / self.fb
-        nspui = self.nspui
+
+        # Resolve remaining optionals.
+        n_pre = n_pre or nRxPreTaps
 
         pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
             tx_ix=tx_ix, Hctf=Hctf,
@@ -742,28 +749,33 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             case OptMode.PRZF:
                 # Step a - Pulse response construction.
                 pulse_resps = pulse_resps_preFFE
-                pr_samps = None
-                if nRxTaps:                     # If we have an Rx FFE...
-                    if rx_taps is None:                     # If we received no explicit override of the Rx FFE tap weight values,
-                        rx_taps, _, pr_samps = przf(        # then optimize them.
+                if nRxTaps:  # If we have an Rx FFE...
+                    if rx_taps is None:        # If we received no explicit override of the Rx FFE
+                        rx_taps, _, _ = przf(  # tap weight values,then optimize them.
                             pulse_resps_preFFE[0], M, nRxTaps, nRxPreTaps, nDFE,
                             rx_taps_min, rx_taps_max, bmin, bmax,
                             norm_mode=norm_mode, unit_amp=unit_amp)
-                    pulse_resps = self.gen_pulse_resps(     # Regenerate the pulse responses, including the Rx FFE.
-                        tx_ix=tx_ix, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=self.empty_array)
-                else:
-                    rx_taps=self.null_rx_ffe    # Otherwise, pass the signal through unaltered.
+                    pulse_resps = self.gen_pulse_resps(           # Regenerate the pulse responses,
+                        tx_ix=tx_ix, Hctf=Hctf, rx_taps=rx_taps,  # including the Rx FFE.
+                        dfe_taps=self.empty_array)
+                else:        # Otherwise, pass the signal through unaltered.
+                    rx_taps=self.null_rx_ffe
 
                 # Step b - Cursor identification.
                 vic_pulse_resp = pulse_resps[0]  # Note: Includes any Rx FFE, but not DFE.
                 vic_peak_loc = np.argmax(vic_pulse_resp)
-                cursor_ix = loc_curs(vic_pulse_resp, self.nspui,
+                cursor_ix = loc_curs(vic_pulse_resp, M,
                                      self.com_params.dfe_max, self.com_params.dfe_min)
-                if pr_samps is None:
-                    pr_samps = vic_pulse_resp[cursor_ix % nspui::nspui]
+                curs_uis, curs_ofst = divmod(cursor_ix, M)
+                pr_samps = vic_pulse_resp[curs_ofst::M]
+                if n_pre > curs_uis:
+                    pr_samps = pad(pr_samps, (n_pre - curs_uis, 0))
+                else:
+                    pr_samps = pr_samps[curs_uis - n_pre:]
+                # At this point, `pr_samps` contains one sample per UI w/ exactly `n_pre` pre-cursor samples.
 
                 # Step c - As.
-                vic_curs_val = vic_pulse_resp[cursor_ix]
+                vic_curs_val = pr_samps[n_pre]
                 As = self.com_params.RLM * vic_curs_val / (L - 1)
 
                 # Step d - Tx noise.
@@ -771,26 +783,19 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                         # (93A-30)
 
                 # Step e - ISI.
-                # This is not compliant to the standaard, but is consistent w/ v2.60 of MATLAB code.
-                n_pre = cursor_ix // M
-                first_pre_ix = cursor_ix - n_pre * M
-                vic_pulse_resp_isi_samps = np.concatenate((vic_pulse_resp[first_pre_ix:cursor_ix:M],
-                                                           vic_pulse_resp[cursor_ix + M::M]))
-                vic_pulse_resp_post_samps = vic_pulse_resp_isi_samps[n_pre:]
+                hISI = pr_samps.copy()
+                hISI[n_pre] = 0  # No ISI at cursor.
+                dfe_slice = slice(n_pre + 1, n_pre + 1 + nDFE)
                 dfe_tap_weights = np.maximum(                                                           # (93A-26)
                     self.com_params.dfe_min,
                     np.minimum(
                         self.com_params.dfe_max,
-                        (vic_pulse_resp_post_samps[:nDFE] / vic_curs_val)))
-                hISI = vic_pulse_resp_isi_samps \
-                     - vic_curs_val * np.pad(dfe_tap_weights,  # noqa E127
-                                             (n_pre, len(vic_pulse_resp_post_samps) - nDFE),
-                                             mode='constant',
-                                             constant_values=0)                                         # (93A-27)
+                        (hISI[dfe_slice] / vic_curs_val)))
+                hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val                                       # (93A-27)
                 varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
                 # Step f - Jitter noise.
-                hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
+                hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, M)
                 varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * (hJ**2).sum()   # (93A-32)
 
                 # Step g - Crosstalk.
@@ -823,7 +828,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 vic_pulse_resp = rslt["vic_pulse_resp"]  # Note: Does not include Rx FFE/DFE!
                 vic_peak_loc = np.argmax(vic_pulse_resp)
                 cursor_ix = rslt["cursor_ix"]
-                As = 1.0
+                # As = 1.0
+                As = vic_pulse_resp[cursor_ix]
                 varTx = rslt["varTx"]
                 varISI = rslt["varISI"]
                 varJ = rslt["varJ"]
@@ -1032,6 +1038,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         # Sec. 93A.1.7.2
         varX = (L**2 - 1) / (3 * (L - 1)**2)                                                    # (93A-29)
         df = freqs[1] - freqs[0]
+        # varN = self.com_params.eta_0 * (abs(self.Hr[1:] * self.Hctf[1:])**2).sum() * (df / 1e9) # (93A-35)
         if nRxTaps:
             Hrx = self.Hffe_Rx()
         else:
@@ -1040,7 +1047,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                         # (93A-30)
         hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
         _, pJ = delta_pmf(filt_pr_samps(self.com_params.A_DD * hJ, ymax), L=L, y=y)             # (93A-40)
-        varG = varTx + self.com_params.sigma_Rj**2 * varX * (hJ**2).sum() + varN                # (93A-41)
+        varJ = self.com_params.sigma_Rj**2 * varX * (hJ**2).sum()                               # (93A-31)
+        varG = varTx + varJ + varN                                # (93A-41)
         pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep                         # (93A-42), but converted to PMF.
         pN = np.convolve(pG, pJ, mode='same')                                                   # (93A-43)
         pN /= pN.sum()  # Enforce a PMF.
@@ -1089,6 +1097,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self.com_rslts['sigma_Tx']    = np.sqrt(varTx)
         self.com_rslts['sigma_G']     = np.sqrt(varG)
         self.com_rslts['sigma_N']     = np.sqrt(varN)
+        self.com_rslts['sigma_J']     = np.sqrt(varJ)
         self.com_rslts['sigma_ISI']   = np.sqrt(varISI)
         self.com_rslts['sigma_XT']    = np.sqrt(varXT)
         self.com_rslts['tISI']        = tISI

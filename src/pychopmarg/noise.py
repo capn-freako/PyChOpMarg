@@ -133,6 +133,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         self.nspui   = int(Tb // t[1])                                              # Samples per unit interval
         self.varX    = (L**2 - 1) / (3 * (L - 1)**2)                                # Signal power
         self.t_irfft = array([n * (0.5 / f[-1]) for n in range(2 * (len(f) - 1))])  # Time indices for `irfft()` output
+        self.baud_rate_sampling_slice = slice(ts_ix % nspui, len(t), nspui)
 
     def get_aliased_freq(self, f: float) -> float:
         """
@@ -172,12 +173,18 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             2. The sub-sampling phase is adjusted, so as to ensure that we catch the peak.
         """
 
+        # return x[baud_rate_sampling_slice]
+
         t       = self.t
         t_irfft = self.t_irfft
         nspui   = self.nspui
 
         assert len(x) == len(t_irfft), IndexError(
             f"Length of input ({len(x)}) must match length of `t_irfft` vector ({len(t_irfft)})!")
+
+        x_samplings = [(x[k::nspui]**2).sum() for k in range(nspui)]
+        k_best = argmax([(_x**2).sum() for _x in x_samplings])
+        return x_samplings[k_best]
 
         t_pk = 0.1 * t[-1]                      # target peak location time
         targ_ix = where(t_irfft >= t_pk)[0][0]  # target peak vector index, in `x`
@@ -186,8 +193,8 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
         krnl = interp1d(t_irfft, _x, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
         y = krnl(t)
-        _, curs_ofst = divmod(argmax(y), nspui)  # Ensure that we capture the peak in the next step.
-        return y[curs_ofst::nspui]                      # Sampled at fBaud, w/ peak captured.
+        _, curs_ofst = divmod(argmax(y), nspui) # Ensure that we capture the peak in the next step.
+        return y[curs_ofst::nspui]              # Sampled at fBaud, w/ peak captured.
 
     @property
     def Srn(self) -> Rvec:
