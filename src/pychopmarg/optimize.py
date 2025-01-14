@@ -21,6 +21,7 @@ from scipy.linalg import convolution_matrix, solve, toeplitz
 
 from pychopmarg.common  import Rvec
 from pychopmarg.noise   import NoiseCalc
+from pychopmarg.utility import calc_Hffe
 
 
 class NormMode(Enum):
@@ -307,6 +308,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         f"Insufficient room at end of pulse response: {len(vic_pr) - curs_ix}!")
 
     # Initialize and run the search for optimum `ts` and Rx FFE tap weights.
+    H_LEN = 2048  # 2048 is the default value for `num_ui_RXFF_noise` parameter in the MATLAB code.
     max_fom = -1000
     rslt = {}
     varX = theNoiseCalc.varX
@@ -315,14 +317,18 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             theNoiseCalc.ts_ix = ts_ix
             dh, first_samp = divmod(ts_ix, nspui)
             _h = vic_pr[first_samp::nspui]
+            # if dw > dh:
+            #     h = pad(_h, (dw - dh, 0))[: H_LEN]
+            # else:
+            #     h = _h[dh - dw: H_LEN]
             if dw > dh:
-                h = pad(_h, (dw - dh, 0))[: 2048]
+                h = pad(_h, (dw - dh, 0))
             else:
-                h = _h[dh - dw: 2048]  # 2048 is the default value for `num_ui_RXFF_noise` parameter in MATLAB code
+                h = _h[dh - dw:]
             dh = dw  # At this point, there are exactly `dw` pre-cursor samples in `h`.
             d = dh + dw
             h_thresh = 0.001 * max(h)
-            h[abs(h) < h_thresh] = 0
+            h[abs(h) < h_thresh] = 0  # We don't want to be summing long runs of numerical precision "noise".
             first_col = concatenate((h, zeros(Nw - 1)))
             H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
             h0 = H[d]
@@ -369,6 +375,9 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             hISI = concatenate((array([h0 @ w_lim - 1]), Hb @ w_lim, H[d + 1 + Nb:] @ w_lim))
             varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
+            # MATLAB v4.70:
+            # sigma_e=sqrt(sigma_X2*(w'*R*w+1+b'*b-2*w'*h0'-2*w'*Hb'*b)); % Commit request 4p4_5 from healey_3dj_COM_01_240416
+            # FOM=20*log10((param.R_LM/(param.levels-1)/sigma_e)); 
             mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
             fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
             if fom > max_fom:
@@ -384,7 +393,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["cursor_ix"] = ts_ix
                 # df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
                 df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
-                rslt["varTx"] = sum(theNoiseCalc.Stn) * df
+                rslt["varTx"] = sum(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1))) * df
                 rslt["varISI"] = varISI
                 rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
                 rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df

@@ -30,6 +30,7 @@ from typing  import Any, Dict, Optional, TypeVar
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
 from numpy             import array, arange
+from numpy.fft         import irfft, rfft
 from numpy.typing      import NDArray
 from scipy.interpolate import interp1d
 
@@ -169,7 +170,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self._Xsinc = int(ui / t[1]) * np.sinc(ui * f)
         self._Ht = np.exp(-2 * (PI * (f / 1e9) * com_params.T_r / 1.6832)**2)  # 93A-46 calls for f in GHz.
         _f = f / (com_params.f_r * fb)
-        self._Hr = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
+        H_Butterworth   = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
+        # H_BesselThomson = 
+        self._Hr = H_Butterworth
         Rd = com_params.R_d
         R0 = com_params.R_0
         self._gamma1: Rvec = (Rd - R0) / (Rd + R0)
@@ -655,8 +658,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
 
         pulse_resps = []
-        for (ntwk, ntype), H21 in chnls:
-            if apply_eq:
+        for (_, ntype), H21 in chnls:
+            if apply_eq:  # ToDo: Clean this up.
                 if ntype == 'NEXT':
                     pr = self.pulse_resp(self.H(
                         H21, 0, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
@@ -1006,10 +1009,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             2. Fills in the ``com_results`` dictionary w/ various useful values for debugging.
         """
 
-        # print(f"calc_noise: `dbg_dict`: {dbg_dict}")
-        # if dbg_dict is not None:
-        #     dbg_dict.update({"calc_noise_entered": True})
-
         # Copy instance variables.
         L = self.com_params.L
         M = self.nspui
@@ -1038,13 +1037,16 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         # Sec. 93A.1.7.2
         varX = (L**2 - 1) / (3 * (L - 1)**2)                                                    # (93A-29)
         df = freqs[1] - freqs[0]
-        # varN = self.com_params.eta_0 * (abs(self.Hr[1:] * self.Hctf[1:])**2).sum() * (df / 1e9) # (93A-35)
         if nRxTaps:
             Hrx = self.Hffe_Rx()
         else:
             Hrx = np.ones(len(freqs))
         varN = self.com_params.eta_0 * (abs(self.Hr[1:] * self.Hctf[1:] * Hrx[1:])**2).sum() * (df / 1e9)   # (93A-35) + Hffe
-        varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                         # (93A-30)
+        if self.opt_mode == OptMode.PRZF:
+            varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                     # (93A-30)
+        else:
+            Stx = self.theNoiseCalc.Stn(Hrx=Hrx)
+            varTx = sum(Stx) * df                                                              # (178A-17)
         hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
         _, pJ = delta_pmf(filt_pr_samps(self.com_params.A_DD * hJ, ymax), L=L, y=y)             # (93A-40)
         varJ = self.com_params.sigma_Rj**2 * varX * (hJ**2).sum()                               # (93A-31)

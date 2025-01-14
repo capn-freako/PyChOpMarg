@@ -9,9 +9,12 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 # pylint: disable=redefined-builtin
-from numpy                  import argmax, array, concatenate, diff, mean, reshape, roll, sinc, sum, where
+from typing                 import Optional
+
+from numpy                  import argmax, array, concatenate, diff, mean, ones, reshape, roll, sinc, sum, where
 from numpy.fft              import irfft, rfft
 from scipy.interpolate      import interp1d
+from scipy.signal           import lfilter
 
 from pychopmarg.common      import Rvec, Cvec, Rmat
 
@@ -41,7 +44,6 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
     fN       = float(53.125e9)            # Nyquist frequency (Hz)
     nspui    = int(32)                    # Number of samples per UI
     varX     = float(0)                   # Signal power (V^2)
-    t_irfft  = array([0], dtype=float)    # Time vector for indexing `irfft()` result.
 
     def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
         self, L: int, Tb: float, ts_ix: int, t: Rvec,
@@ -83,6 +85,11 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             IndexError: Unless `f`, `Ht`, `H21`, `Hr`, and `Hctf` all have the same length.
             ValueError: Unless `t[0]` == 0.
             ValueError: Unless `Tb` is an integral multiple of `t[1]`.
+            ValueError: Unless `t` is uniformly sampled.
+            ValueError: Unless `f[0]` == 0.
+            ValueError: Unless `f[1]` == 1 / (t[1] * len(t)).
+            ValueError: Unless `f[-1]` == 0.5 / t[1].
+            ValueError: Unless `f` is uniformly sampled.
 
         Notes:
             1. No assumption is made, re: any linkage between `t` and `f`.
@@ -107,6 +114,20 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             f"The first element of `t` ({t[0]}) must be zero!")
         assert abs(Tb / t[1] - Tb // t[1]) < eps, ValueError(
             f"`Tb` ({Tb}) must be an integral multiple of `t[1]` ({t[1]})!")
+        dts = diff(t)
+        assert all((dts - dts[0]) < 1e-15), ValueError(
+            f"The time vector, `t`, must be uniformly sampled!")
+        assert f[0] == 0, ValueError(
+            f"The first element of `f` ({f[0]}) must be zero!")
+        f0 = 1 / (t[1] * len(t))
+        assert f[1] == f0, ValueError(
+            f"The second element of `f` ({f[1]}) must be the fundamental frequency implied by the time vector ({f0})!")
+        fs = 1 / t[1]
+        assert f[-1] == fs / 2, ValueError(
+            f"The last element of `f` ({f[-1]}) must be half the sampling frequency ({fs})!")
+        dfs = diff(f)
+        assert all(dfs == dfs[0]), ValueError(
+            f"The frequency vector, `f`, must be uniformly sampled!")
 
         super().__init__()
 
@@ -132,8 +153,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         self.fN      = 0.5 / Tb                                                     # Nyquist frequency
         self.nspui   = int(Tb // t[1])                                              # Samples per unit interval
         self.varX    = (L**2 - 1) / (3 * (L - 1)**2)                                # Signal power
-        self.t_irfft = array([n * (0.5 / f[-1]) for n in range(2 * (len(f) - 1))])  # Time indices for `irfft()` output
-        self.baud_rate_sampling_slice = slice(ts_ix % nspui, len(t), nspui)
+        # self._df     = 
 
     def get_aliased_freq(self, f: float) -> float:
         """
@@ -146,55 +166,18 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
         return fN - (f % fN)
 
-    def from_irfft(self, x: Rvec) -> Rvec:
+    def baud_rate_sample(self, x: Rvec) -> Rvec:
         """
-        Interpolate ``irfft()`` output to ``t`` and subsample at fBaud.
+        Resample the input at fBaud., respecting the current sampling phase.
 
         Args:
-            x: ``irfft()`` results to be interpolated and subsampled.
+            x: Signal to be resampled.
 
         Returns:
-            Interpolated and subsampled vector.
-
-        Raises:
-            IndexError: If length of input doesn't match length of ``t_irfft`` vector.
-
-        Notes:
-            1. Input vector is shifted, such that its peak occurs at ``0.1 * max(t)``, before interpolating.
-               This is done to:
-
-                * ensure that we don't omit any non-causal behavior,
-                  which ends up at the end of an IFFT output vector
-                  when the peak is very near the beginning, and
-
-                * to ensure that the majority of our available time span
-                  is available for capturing reflections.
-
-            2. The sub-sampling phase is adjusted, so as to ensure that we catch the peak.
+            Resampled vector.
         """
-
-        # return x[baud_rate_sampling_slice]
-
-        t       = self.t
-        t_irfft = self.t_irfft
-        nspui   = self.nspui
-
-        assert len(x) == len(t_irfft), IndexError(
-            f"Length of input ({len(x)}) must match length of `t_irfft` vector ({len(t_irfft)})!")
-
-        x_samplings = [(x[k::nspui]**2).sum() for k in range(nspui)]
-        k_best = argmax([(_x**2).sum() for _x in x_samplings])
-        return x_samplings[k_best]
-
-        t_pk = 0.1 * t[-1]                      # target peak location time
-        targ_ix = where(t_irfft >= t_pk)[0][0]  # target peak vector index, in `x`
-        curr_ix = argmax(x)                     # current peak vector index, in `x`
-        _x = roll(x, targ_ix - curr_ix)         # `x` with peak repositioned
-
-        krnl = interp1d(t_irfft, _x, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
-        y = krnl(t)
-        _, curs_ofst = divmod(argmax(y), nspui) # Ensure that we capture the peak in the next step.
-        return y[curs_ofst::nspui]              # Sampled at fBaud, w/ peak captured.
+        nspui = self.nspui
+        return x[self.ts_ix % nspui::nspui]
 
     @property
     def Srn(self) -> Rvec:
@@ -208,7 +191,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         """
         # "/ 2" in [1] omitted, since we're only considering: m >= 0.
         rslt: Cvec  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
-        _rslt = abs(rfft(self.from_irfft(irfft(rslt)))) * 2 * self.f[-1] * self.Tb
+        _rslt = abs(rfft(self.baud_rate_sample(irfft(rslt)))) * 2 * self.f[-1] * self.Tb
         return _rslt
 
     def Sxn(self, agg_pulse_resp: Rvec) -> Rvec:
@@ -233,25 +216,38 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
         return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb * 2  # i.e. - 2/fB = 1/(fB/2) = 1/fN
 
-    @property
-    def Stn(self) -> Rvec:
+    def Stn(self, Hrx: Optional[Cvec] = None) -> Rvec:
         """
         One-sided Tx noise PSD at Rx FFE input,
         uniformly sampled over [0, PI] (rads./s norm.).
 
-        ToDo:
-            1. Do I need to honor ``ts_ix``?
+        Keyword Args:
+            Hrx: Complex voltage transfer function of Rx FFE.
+                Default: None (Use flat unity response.)
         """
 
         Tb    = self.Tb
         f     = self.f
 
-        Htn  = self.Ht * self.H21 * self.Hr * self.Hctf
-        # * f[-1]  # See `_get_Srn()`. But, note that `* df` is not appropriate here.
-        _htn = irfft(sinc(f * Tb) * Htn) * 2
-        htn  = self.from_irfft(_htn)
+        if Hrx is None:
+            Hrx = ones(len(f))
 
-        return self.varX * 10**(-self.snr_tx / 10) * abs(rfft(htn))**2 * Tb  # i.e. - / fB
+        Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx
+        # htn  = irfft(sinc(f * Tb) * Htn)            # pulse response of complete signal path, except Tx FFE
+        htn  = irfft(Htn)                               # impulse response of complete signal path, except Tx FFE
+        htn_ave_xM = lfilter(ones(self.nspui), 1, htn)  # combination averaging and pre-normalization filter
+        # _htn = self.baud_rate_sample(htn)           # decimated by `nspui`
+        # _Htn = rfft(_htn) * self.nspui              # `* self.nspui` correction ensures that `_Htn` matches `Htn`.
+        _htn = self.baud_rate_sample(htn_ave_xM)        # decimated by `nspui`
+        _Htn = rfft(_htn)
+
+        self.Stn_debug = {
+            'Htn':  Htn,
+            'htn':  htn,
+            '_Htn': _Htn,
+            '_htn': _htn,
+        }
+        return self.varX * self.Tb * 10**(-self.snr_tx / 10) * abs(_Htn)**2
 
     @property
     def Sjn(self) -> Rvec:
@@ -270,19 +266,10 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         dV: Rvec = diff(vic_pulse_resp)
         # Truncate at # of whole UIs in `dV`, to avoid +/-1 length variation, due to sampling phase.
         nUI = int(len(dV) / nspui)
-        try:
-            hJ = mean(reshape(concatenate((dV[(ts_ix - 1) % nspui::nspui][:nUI],
-                                           dV[(ts_ix    ) % nspui::nspui][:nUI])),
-                              shape=(2, nUI)),
-                      axis=0) / t[1]
-        except:
-            print(f"dV: {dV}")
-            print(f"ts_ix: {ts_ix}")
-            print(f"nspui: {nspui}")
-            print(f"nUI: {nUI}")
-            print(f"len(dV[(ts_ix - 1) % nspui::nspui]): {len(dV[(ts_ix - 1) % nspui::nspui])}")
-            print(f"len(dV[(ts_ix    ) % nspui::nspui]): {len(dV[(ts_ix    ) % nspui::nspui])}")
-            raise
+        hJ = mean(reshape(concatenate((dV[(ts_ix - 1) % nspui::nspui][:nUI],
+                                       dV[(ts_ix    ) % nspui::nspui][:nUI])),
+                          shape=(2, nUI)),
+                  axis=0) / t[1]
 
         return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
 
@@ -290,7 +277,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         """Noise autocorrelation vector at Rx FFE input."""
         Srn = self.Srn
         Sxn = sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)
-        Stn = self.Stn
+        Stn = self.Stn()
         Sjn = self.Sjn
         min_len = min(len(Srn), len(Sxn), len(Stn), len(Sjn))
         Sn = Srn[:min_len] + Sxn[:min_len] + Stn[:min_len] + Sjn[:min_len]
