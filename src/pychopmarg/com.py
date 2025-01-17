@@ -34,21 +34,16 @@ from numpy.fft         import irfft, rfft
 from numpy.typing      import NDArray
 from scipy.interpolate import interp1d
 
-from pychopmarg.common   import Rvec, Cvec, Cmat, PI, TWOPI, COMChnl, COMNtwk
+# from pychopmarg.common   import Rvec, Cvec, Cmat, PI, TWOPI, COMChnl, COMNtwk
+from pychopmarg.common   import *
 from pychopmarg.config.ieee_8023by import IEEE_8023by
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
-from pychopmarg.config.template import COMParams
+from pychopmarg.config.template    import COMParams
 from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import NormMode, mmse, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
     delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs)
-
-
-class OptMode(Enum):
-    "Linear equalization optimization mode."
-    PRZF = 1
-    MMSE = 2
 
 
 class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-methods
@@ -459,7 +454,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         "Set the GUI status string and print it if we're debugging."
         self.status_str = status
         if self.debug:
-            print(status, flush=True)
+            # print(status, flush=True)
+            pass
 
     # General functions
     def sC(self, c: float) -> rf.Network:
@@ -831,7 +827,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 vic_pulse_resp = rslt["vic_pulse_resp"]  # Note: Does not include Rx FFE/DFE!
                 vic_peak_loc = np.argmax(vic_pulse_resp)
                 cursor_ix = rslt["cursor_ix"]
-                # As = 1.0
                 As = vic_pulse_resp[cursor_ix]
                 varTx = rslt["varTx"]
                 varISI = rslt["varISI"]
@@ -1129,6 +1124,56 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
           <LI><a href="https://readthedocs.org/projects/pychopmarg/"><em>Read the Docs</em> Home</a>
         </UL>
     """
+
+
+def run_com(
+    chnl_sets: list[tuple[ChnlGrpName, list[ChnlSet]]],
+    com_params: COMParams,
+    opt_mode: OptMode = OptMode.MMSE,
+    norm_mode: NormMode = NormMode.P8023dj,
+    unit_amp: bool = True,
+    dbg_dict: Optional[Dict[str, Any]] = None
+) -> dict[ChnlGrpName, dict[ChnlSetName, COM]]:
+    """
+    Run COM on a list of grouped channel sets.
+
+    Args:
+        chnl_sets: List of pairs, each consisting of:
+            - ch_grp_name: The group name for this list of channel sets.
+            - ch_sets: List of channel sets to run.
+        params: The COM configuration parameters to use.
+
+    Keyword Args:
+        opt_mode: The optimization mode desired.
+            Default: OptMode.MMSE
+        norm_mode: The normalization mode desired for Rx FFE tap weights.
+            Default: NormMode.P8023dj
+        dbg_dict: Optional dictionary into which debugging values may be stashed,
+            for later analysis.
+            Default: None
+    
+    Returns:
+        2D dictionary indexed by channel group name, then by channel set name, containing the completed COM objects.
+    """
+
+    theCOMs = {}
+    for grp, ch_set in chnl_sets:
+        lbl = ch_set['THRU'][0].stem
+        print(f"{grp} : {lbl}")
+        if dbg_dict is not None:
+            theCOM = COM(com_params, ch_set, debug=True)
+        else:
+            theCOM = COM(com_params, ch_set)
+        
+        # Calling the object calculates the COM value, as well as many other intermediate results.
+        com = theCOM(opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp, dbg_dict=dbg_dict)
+    
+        if grp in theCOMs:
+            theCOMs[grp].update({ch_set['THRU'][0].stem: theCOM})
+        else:
+            theCOMs.update({grp: {ch_set['THRU'][0].stem: theCOM}})
+
+    return theCOMs
 
 
 if __name__ == "__main__":

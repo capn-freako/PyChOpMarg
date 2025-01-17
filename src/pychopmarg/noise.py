@@ -229,24 +229,26 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         Tb    = self.Tb
         f     = self.f
 
+        fom = False
         if Hrx is None:
             Hrx = ones(len(f))
+            fom = True
 
-        Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx
-        # htn  = irfft(sinc(f * Tb) * Htn)            # pulse response of complete signal path, except Tx FFE
+        Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx * self.Av  # "* Av" is for consistency w/ MATLAB code.
         htn  = irfft(Htn)                               # impulse response of complete signal path, except Tx FFE
         htn_ave_xM = lfilter(ones(self.nspui), 1, htn)  # combination averaging and pre-normalization filter
-        # _htn = self.baud_rate_sample(htn)           # decimated by `nspui`
-        # _Htn = rfft(_htn) * self.nspui              # `* self.nspui` correction ensures that `_Htn` matches `Htn`.
         _htn = self.baud_rate_sample(htn_ave_xM)        # decimated by `nspui`
         _Htn = rfft(_htn)
 
-        self.Stn_debug = {
-            'Htn':  Htn,
-            'htn':  htn,
-            '_Htn': _Htn,
-            '_htn': _htn,
-        }
+        # Stash debugging info if FOM'ing.
+        if fom:
+            self.Stn_debug = {
+                'Htn':  Htn,
+                'htn':  htn,
+                '_Htn': _Htn,
+                '_htn': _htn,
+            }
+
         return self.varX * self.Tb * 10**(-self.snr_tx / 10) * abs(_Htn)**2
 
     @property

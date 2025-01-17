@@ -8,11 +8,13 @@ Original date:   March 3, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from pathlib import Path
+from pathlib    import Path
+from typing     import Optional
 
 import numpy as np  # type: ignore
 import skrf  as rf
 from numpy import array
+from scipy.interpolate  import interp1d
 
 from pychopmarg.common import Rvec, PI, TWOPI, COMNtwk
 
@@ -319,3 +321,44 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         return rf.Network(s=array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)
 
     return rf.network.cascade_list(list(map(mk_s2p, z_pairs)))
+
+
+def s2p_pulse_response(s2p: rf.Network, ui: float, t: Optional[Rvec] = None) -> Rvec:
+    """
+    Calculate the __pulse__ response of a 2-port network, using the SciKit-RF provided __step__ response.
+
+    Args:
+        s2p: The 2-port network to use.
+        ui: The unit interval (s).
+
+    Keyword Args:
+        t: Optional time vector for use in interpolating the resultant pulse response (s).
+            Default: None (Use time vector returned by __SciKit-RF__ step response function.)
+            
+    Returns:
+        t, p: A pair consisting of:
+        
+            - The time values at which the pulse response has been sampled, and
+            - The real-valued pulse response samples of the given 2-port network.
+
+    Raises:
+        ValueError: If given network is not 2-port.
+    """
+
+    # Confirm correct network dimmensions.
+    (_, rs, cs) = s2p.s.shape
+    assert rs == cs, ValueError("Non-square Touchstone file S-matrix!")
+    assert rs == 2, ValueError(f"Touchstone file must have 2 ports, not {rs}!")
+    
+    _t, _s = s2p.s21.extrapolate_to_dc().step_response()
+    if t is not None:
+        krnl = interp1d(_t, _s, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
+        s = krnl(t)
+    else:
+        t = _t
+        s = _s
+    delta_t = t[1] - t[0]
+    nspui = int(np.round(ui / delta_t))
+    p = s - np.pad(s, (nspui, 0))[:len(s)]
+
+    return t, p

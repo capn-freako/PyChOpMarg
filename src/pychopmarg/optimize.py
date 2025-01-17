@@ -19,25 +19,9 @@ from numpy import (
 from numpy.linalg import lstsq
 from scipy.linalg import convolution_matrix, solve, toeplitz
 
-from pychopmarg.common  import Rvec
+from pychopmarg.common  import *
 from pychopmarg.noise   import NoiseCalc
 from pychopmarg.utility import calc_Hffe
-
-
-class NormMode(Enum):
-    "Tap weight normalization mode."
-
-    P8023dj   = 1
-    "As per standard (i.e. - clip then renormalize for unit amplitude pulse response.)"
-
-    Scaled    = 2
-    "Uniformly and minimally scaled to bring tap weights just within their limits."
-
-    Unaltered = 3
-    "Use constrained optimization solution, unchanged."
-
-    UnitDcGain = 4
-    "Tap weights are uniformly scaled, to yield unity gain at d.c."
 
 
 def scale_taps(w: Rvec, w_min: Optional[Rvec] = None, w_max: Optional[Rvec] = None) -> Rvec:
