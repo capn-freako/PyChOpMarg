@@ -323,7 +323,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     return rf.network.cascade_list(list(map(mk_s2p, z_pairs)))
 
 
-def s2p_pulse_response(s2p: rf.Network, ui: float, t: Optional[Rvec] = None) -> Rvec:
+def s2p_pulse_response(s2p: rf.Network, ui: float, t: Optional[Rvec] = None) -> tuple[Rvec, Rvec]:
     """
     Calculate the __pulse__ response of a 2-port network, using the SciKit-RF provided __step__ response.
 

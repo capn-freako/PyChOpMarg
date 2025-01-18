@@ -60,11 +60,11 @@ ignored_fields = [
     "Histogram_Window_Weight",
 ]
 
-def first(f: Callable[T1, T2]) -> Callable[tuple[T1, T3], tuple[T2, T3]]:
+def first(f: Callable[[T1], T2]) -> Callable[[tuple[T1, T3]], tuple[T2, T3]]:
     "Translation of Haskell ``first`` function."
     return lambda pr: (f(pr[0]), pr[1])
 
-def second(f: Callable[T1, T2]) -> Callable[tuple[T3, T1], tuple[T3, T2]]:
+def second(f: Callable[[T1], T2]) -> Callable[[tuple[T3, T1]], tuple[T3, T2]]:
     "Translation of Haskell ``second`` function."
     return lambda pr: (pr[0], f(pr[1]))
 
@@ -73,15 +73,15 @@ def compose(*functions):
     return reduce(lambda f, g: lambda x: f(g(x)), functions)
 
 def apply2(
-    f: Callable[T1, T2],
-    g: Callable[T3, T4]
-) -> Callable[tuple[T1, T3], tuple[T2, T4]]:
+    f: Callable[[T1], T2],
+    g: Callable[[T3], T4]
+) -> Callable[[tuple[T1, T3]], tuple[T2, T4]]:
     "Translation of Haskell ``***`` operator."
     return compose(first(f), second(g))
 
 def alternative(
-    f: Callable[T1, T2],
-    g: Callable[T1, T2],
+    f: Callable[[T1], T2],
+    g: Callable[[T1], T2],
     x: T1
 ) -> T2:
     """
@@ -128,16 +128,8 @@ def parse_Mlist(mStr: str) -> NDArray:
     "Parse a string containing an M-code list of numbers."
     tokens = list(map(lambda s: s.strip(","),
                       mStr.strip("[] ").split()))
-    try:
-        rslt = concatenate(list(map(lambda s: alternative(parse_Mfloat, parse_Mfloats, s),
-                                    tokens)))
-    except:
-        print(f"mStr: {mStr}")
-        print(f"tokens: {tokens}")
-        # print(f"rslt: {rslt}")
-        raise
-        
-    return rslt
+    return concatenate(list(map(lambda s: alternative(parse_Mfloat, parse_Mfloats, s),
+                                tokens)))
     
 def parse_Marray(mStr: str) -> NDArray:
     "Parse a string containing either an M-code range or list of numbers."
@@ -161,7 +153,7 @@ def match_ignored_field_name_prefix(mName: str) -> bool:
     
 def cfg_trans(com_cfg: NDArray) -> dict[str, Any]:
     "Translate/filter the names/values of the given 2D NumPy array."
-    return dict(map(apply2(lambda s: com_fields[s] if s in com_fields else s,
+    return dict(map(apply2(lambda s: com_fields[s] if s in com_fields else s,  # type: ignore
                            lambda s: parse_Mmatrix(s) if isinstance(s, str) else s),
                     filter(lambda pr: not pd.isna(pr[0]) and not match_ignored_field_name_prefix(pr[0]),
                            com_cfg)))
@@ -173,7 +165,8 @@ def get_com_params(cfg_file: Path) -> COMParams:
     global com_params_dict
     
     if cfg_file.suffix == "xlsx":  # You'll need to manually export to `*.xls` from within Excel.
-        com_cfg = pd.read_excel(cfg_file, engine_kwargs={"read_only": True})  # Doesn't work, currently.
+        raise RuntimeError("Currently, *.XLSX files must first be manually converted to *.XLS.")
+        # com_cfg = pd.read_excel(cfg_file, engine_kwargs={"read_only": True})  # Doesn't work, currently.
     else:
         com_cfg = pd.read_excel(cfg_file)
 
@@ -186,11 +179,11 @@ def get_com_params(cfg_file: Path) -> COMParams:
     com_params_dict.update(cfg_trans(com_cfg2))
 
     # Set the Tx tap ranges/steps.
-    N_TX_TAPS = 6  # not including the cursor
-    N_TX_TAPS_2 = N_TX_TAPS // 2
-    tx_taps_min = [0] * N_TX_TAPS
-    tx_taps_max = [0] * N_TX_TAPS
-    tx_taps_step = [0] * N_TX_TAPS
+    N_TX_TAPS    = 6  # not including the cursor
+    N_TX_TAPS_2  = N_TX_TAPS // 2
+    tx_taps_min  = [0.] * N_TX_TAPS
+    tx_taps_max  = [0.] * N_TX_TAPS
+    tx_taps_step = [0.] * N_TX_TAPS
         
     def set_tap(ix, weights):
         if isinstance(weights, list) or isinstance(weights, np.ndarray):

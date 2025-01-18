@@ -65,45 +65,68 @@ def calc_Hffe(
 
     Returns:
         The complex voltage transfer function, H(f), for the FFE.
+
+    The simple expression being returned is defended, as follows:
+
+    1. Take axiomatically that what we want to return is the sum of the rows of the following matrix:
+
+        .. math::
+            \\begin{bmatrix}
+                b_0 e^{-j 2 \\pi T 0 f_0} & b_0 e^{-j 2 \\pi T 0 f_1} & b0 e^{-j 2 \\pi T 0 f_2} ... \\\\
+                b_1 e^{-j 2 \\pi T 1 f_0} & b_1 e^{-j 2 \\pi T 1 f_1} & b1 e^{-j 2 \\pi T 1 f_2} ... \\\\
+                b_2 e^{-j 2 \\pi T 2 f_0} & b_2 e^{-j 2 \\pi T 2 f_1} & b2 e^{-j 2 \\pi T 2 f_2} ... \\\\
+                \\vdots
+            \\end{bmatrix}
+
+    2. Now, note that each columnar sum is a dot product of the vectors:
+
+        - :math:`\\{b_n\\}`, and
+
+        - :math:`\\{e^{-j 2 \\pi n T \\cdot f_m}\\}`, where:
+
+        - :math:`f_m = m \\Delta f = \\frac{m}{NT}`, giving:
+
+        .. math::
+            H(f) = [ b_0, b_1, b_2, ... ] e^{-j 2 \\pi T \\mathbf{F}}
+
+        where:
+
+        .. math::
+            \\mathbf{F} = \\begin{bmatrix}
+                f0 \\cdot 0 & f1 \\cdot 0 & f2 \\cdot 0 ... \\\\
+                f0 \\cdot 1 & f1 \\cdot 1 & f2 \\cdot 1 ... \\\\
+                f0 \\cdot 2 & f1 \\cdot 2 & f2 \\cdot 2 ... \\\\
+                \\vdots
+            \\end{bmatrix} =
+            \\begin{bmatrix}
+                0 \\\\
+                1 \\\\
+                2 \\\\
+                \\vdots
+            \\end{bmatrix} [f_0, f_1, f_2, ...] = \\mathbf{n}^T \\mathbf{f}
+
+        giving:
+
+        .. math::
+            H(f) = \\mathbf{b} e^{-j 2 \\pi T \\mathbf{n}^T \\mathbf{f}}
+
+    3. Finally, comparing the final expression above to the Python code reveals a match:
+
+        .. code-block:: python
+
+            return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * freqs))
+
+    Note that **F** may be pre-calculated, and needn't be recalculated,
+    once the system time/frequency vectors have been established.
+    Doing so yields a significant performance improvement in cases with many Tx FFE combinations.
     """
 
-    # bs = list(np.array(tap_weights).flatten())
-    # if not hasCurs:
-    #     b0 = 1 - sum(list(map(abs, tap_weights)))
-    #     bs.insert(-n_post, b0)
     bs = tap_weights
     if not hasCurs:
         b0 = 1 - abs(tap_weights).sum()
         bs = np.insert(bs, -n_post, b0)
-    if False:
-        return sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * n_b[0] * td * freqs),
-                            enumerate(bs))))
-    else:
-        return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * freqs))  # 50% perf. improvement
+    return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * freqs))  # 50% perf. improvement
 
-    # Row sum:
-    # (b0 * e(-j 2pi T 0*f0)) (b0 * e(-j 2pi T 0*f1)) (b0 * e(-j 2pi T 0*f2))
-    # (b1 * e(-j 2pi T 1*f0)) (b1 * e(-j 2pi T 1*f1)) (b1 * e(-j 2pi T 1*f2))
-    # (b2 * e(-j 2pi T 2*f0)) (b2 * e(-j 2pi T 2*f1)) (b2 * e(-j 2pi T 2*f2))
-
-    # Transposing the above:
-
-    # (b0 * e(-j 2pi T 0*f0)) + (b1 * e(-j 2pi T 1*f0)) + (b2 * e(-j 2pi T 2*f0))
-    # (b0 * e(-j 2pi T 0*f1)) + (b1 * e(-j 2pi T 1*f1)) + (b2 * e(-j 2pi T 2*f1))
-    # (b0 * e(-j 2pi T 0*f2)) + (b1 * e(-j 2pi T 1*f2)) + (b2 * e(-j 2pi T 2*f2))
-    # =
-    # b `dot` e(-j 2pi T f0 * n), n = [0,1,2]
-    # b `dot` e(-j 2pi T f1 * n)
-    # b `dot` e(-j 2pi T f2 * n)
-    # Transposing:
-    # b `dot` e(-j 2pi T f0 * n)   b `dot` e(-j 2pi T f1 * n)   b `dot` e(-j 2pi T f2 * n)
-    # =
-    # b @ e(-j 2pi T f0 * 0)   e(-j 2pi T f1 * 0)   e(-j 2pi T f2 * 0)
-    #     e(-j 2pi T f0 * 1)   e(-j 2pi T f1 * 1)   e(-j 2pi T f2 * 1)
-    #     e(-j 2pi T f0 * 2)   e(-j 2pi T f1 * 2)   e(-j 2pi T f2 * 2)
-    # =
-    # b @ e(n.T @ -j*2pi*T*f)
-    # n = np.array([list(range(len(bs))),])
 
 def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
     """

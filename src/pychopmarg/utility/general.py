@@ -55,20 +55,7 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[Rvec]:
             ranges.append(list(np.arange(trip[0], trip[1] + trip[2], trip[2])))
         else:
             ranges.append([0.0])  # type: ignore
-    # return list(map(lambda xs: np.array(xs), all_combs(ranges)))
     return list(map(np.array, all_combs(ranges)))
-    # rslt = []
-    # combs = all_combs(ranges)
-    # for xs in combs:
-    #     try:
-    #         ys = np.array(xs)[::-1]
-    #     except:
-    #         print(f"xs: {xs}")
-    #         print(f"len(combs): {len(combs)}")
-    #         print(f"Empty combs: {len(list(filter(lambda x: not x, combs)))}")
-    #         raise
-    #     rslt.append(ys)
-    # return rslt
 
 
 def from_irfft(x: Rvec, t_irfft: Rvec, t: Rvec, nspui: int) -> Rvec:
@@ -193,7 +180,7 @@ def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
     
     chnl_groups = list(filter(lambda p: p.is_dir(), path.iterdir()))
     chnl_groups.sort()
-    channels = {}
+    channels: dict[ChnlGrpName, list[ChnlSet]] = {}
     for chnl_grp in chnl_groups:
         channels[chnl_grp.name] = []
         thru_chnls = list(chnl_grp.glob("*[tT][hH][rR][uU]*.[sS]4[pP]"))  # No global option for case insensitive glob().

@@ -11,6 +11,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 from typing import Any, Dict, Optional
 
 import numpy as np  # type: ignore
+from numpy.typing import NDArray
 
 from pychopmarg.common import Rvec
 
@@ -109,14 +110,8 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     for hn in h_samps_filt:
         shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn)))  # (93A-39) + filter out zeros, as per MATLAB code
         if shifts:
-            _rslt = sum(np.roll(rslt, shift) for shift in shifts)
-            try:
-                rslt = _rslt / _rslt.sum()  # Enforce a PMF.
-            except:
-                print(f"_rslt: {_rslt}")
-                print(f"rslt: {rslt}")
-                print(f"shifts: {shifts}")
-                raise
+            _rslt: NDArray = sum(np.roll(rslt, shift) for shift in shifts)  # type: ignore
+            rslt  = _rslt / _rslt.sum()  # Enforce a PMF.
 
     return y, rslt
 

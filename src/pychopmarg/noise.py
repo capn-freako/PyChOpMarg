@@ -150,10 +150,9 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         self.sigma_Rj        = sigma_Rj
 
         # Calculate invariant dependent variable values.
-        self.fN      = 0.5 / Tb                                                     # Nyquist frequency
-        self.nspui   = int(Tb // t[1])                                              # Samples per unit interval
-        self.varX    = (L**2 - 1) / (3 * (L - 1)**2)                                # Signal power
-        # self._df     = 
+        self.fN      = 0.5 / Tb                         # Nyquist frequency
+        self.nspui   = int(Tb // t[1])                  # Samples per unit interval
+        self.varX    = (L**2 - 1) / (3 * (L - 1)**2)    # Tx output signal power
 
     def get_aliased_freq(self, f: float) -> float:
         """

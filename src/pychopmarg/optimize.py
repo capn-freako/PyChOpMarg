@@ -301,10 +301,6 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             theNoiseCalc.ts_ix = ts_ix
             dh, first_samp = divmod(ts_ix, nspui)
             _h = vic_pr[first_samp::nspui]
-            # if dw > dh:
-            #     h = pad(_h, (dw - dh, 0))[: H_LEN]
-            # else:
-            #     h = _h[dh - dw: H_LEN]
             if dw > dh:
                 h = pad(_h, (dw - dh, 0))
             else:
@@ -375,7 +371,6 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["dfe_tap_weights"] = b_lim
                 rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
                 rslt["cursor_ix"] = ts_ix
-                # df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
                 df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
                 rslt["varTx"] = sum(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1))) * df
                 rslt["varISI"] = varISI
@@ -433,8 +428,8 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
         rslt["h"] = h
         rslt["cursor_ix"] = curs_ix
-        df = theNoiseCalc.fN / len(theNoiseCalc.Stn)
-        rslt["varTx"] = sum(theNoiseCalc.Stn) * df
+        df = theNoiseCalc.fN / float(len(theNoiseCalc.Stn()))
+        rslt["varTx"] = sum(theNoiseCalc.Stn()) * df
         rslt["varISI"] = 0
         rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
         rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df

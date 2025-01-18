@@ -12,8 +12,8 @@ from enum   import Enum
 from random import choice, sample
 from typing import Any, Callable, Optional
 
-from matplotlib         import pyplot as plt
-from matplotlib.axes    import Axes
+from matplotlib         import pyplot as plt  # type: ignore
+from matplotlib.axes    import Axes           # type: ignore
 from scipy.interpolate  import interp1d
 
 from pychopmarg.com     import COM
@@ -93,7 +93,7 @@ def plot_group_samps(
         axs = [[axs,],]
     n = 0
     print("     ", end="")
-    chnls_used = {}
+    chnls_used: dict[str, list[str]] = {}
     for grp in group_names:
         print(f"{grp : ^45s}", end="")
         chnls_used.update({grp: []})
@@ -163,7 +163,7 @@ def plot_pulse_resps_gen(
     nopkg: bool = False,
     plot_ntwk: bool = True,
     xlims: Optional[tuple[float, float]] = None,
-) -> Callable[[], None]:
+) -> Callable[[COM, str, str, str, dict[str, str], Any, Any], None]:
     """
     Generate a pulse response plotting function for use with ``plot_group_samps()``.
 
@@ -239,7 +239,6 @@ def plot_pulse_resps_gen(
                 ax1.plot(t * 1e9, y * Av * 1e3, label="SciKit-RF", color=clr, linestyle="dashed")
         else:
             ax1.plot(t * 1e9, com.com_rslts["pulse_resps"][0] * 1e3, label=nm, color=clr)
-            # ax1.plot(t * 1e9, com.fom_rslts["vic_pulse_resp"] * 1e3, label=nm, color=clr)
 
         # Set x-limits appropriately, as per user requested zoom option.
         match zoom:

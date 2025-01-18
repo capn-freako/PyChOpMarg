@@ -17,7 +17,7 @@ from pychopmarg.common import *
 COM_MATLAB_RESULTS: TypeAlias = dict[str, Any]
 
 def run_com_matlab(
-    chnl_sets: list[tuple[ChnlGrpName, list[ChnlSet]]],
+    chnl_sets: list[tuple[ChnlGrpName, ChnlSet]],
     cfg_sheet: Path,
     matlab_exec: Path
 ) -> dict[ChnlGrpName, dict[ChnlSetName, COM_MATLAB_RESULTS]]:
@@ -35,7 +35,7 @@ def run_com_matlab(
         Dictionary, indexed by channel group name, containing dictionaries of MATLAB COM results, indexed by channel set name.
     """
 
-    results = {}
+    results: dict[ChnlGrpName, dict[ChnlSetName, COM_MATLAB_RESULTS]] = {}
     for grp, ch_set in chnl_sets:
         lbl = ch_set['THRU'][0].stem
         n_fexts = len(ch_set["FEXT"])

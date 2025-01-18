@@ -19,7 +19,6 @@ Notes:
 
 ToDo:
     1. Provide type hints for imports.
-    2. Straighten out the new 2-segment package model.
 """
 
 from enum    import Enum
@@ -34,7 +33,6 @@ from numpy.fft         import irfft, rfft
 from numpy.typing      import NDArray
 from scipy.interpolate import interp1d
 
-# from pychopmarg.common   import Rvec, Cvec, Cmat, PI, TWOPI, COMChnl, COMNtwk
 from pychopmarg.common   import *
 from pychopmarg.config.ieee_8023by import IEEE_8023by
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
@@ -49,9 +47,6 @@ from pychopmarg.utility  import (
 class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-methods
     """
     Encoding of the IEEE 802.3-22 Annex 93A/178A 'Channel Operating Margin' (COM) specification.
-
-    ToDo:
-        1. Clean up unused attributes.
     """
 
     # General
@@ -148,10 +143,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         # Create the system time & frequency vectors.
         fb = com_params.fb * 1e9
         # fstep = com_params.fstep * 1e9
-        fstep = 50e6
+        fstep = 50e6               # Dramatically improves performance.
         # - time
         tmax = 1 / fstep           # Just enough to cover one full cycle of the fundamental.
-        # tmax = 25e-9               # Matching the maximum I see in the MATLAB results.
         ui = 1 / fb
         tstep = ui / com_params.M  # Obeying requested samps. per UI.
         t = arange(0, tmax, tstep)
@@ -166,7 +160,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         self._Ht = np.exp(-2 * (PI * (f / 1e9) * com_params.T_r / 1.6832)**2)  # 93A-46 calls for f in GHz.
         _f = f / (com_params.f_r * fb)
         H_Butterworth   = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
-        # H_BesselThomson = 
         self._Hr = H_Butterworth
         Rd = com_params.R_d
         R0 = com_params.R_0
@@ -655,13 +648,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         pulse_resps = []
         for (_, ntype), H21 in chnls:
-            if apply_eq:  # ToDo: Clean this up.
+            if apply_eq:
                 if ntype == 'NEXT':
-                    pr = self.pulse_resp(self.H(
-                        H21, 0, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
-                else:
-                    pr = self.pulse_resp(self.H(
-                        H21, tx_ix, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
+                    tx_ix = 0
+                pr = self.pulse_resp(self.H(H21, tx_ix, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
             else:
                 pr = self.pulse_resp(H21)
 
@@ -768,7 +758,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 curs_uis, curs_ofst = divmod(cursor_ix, M)
                 pr_samps = vic_pulse_resp[curs_ofst::M]
                 if n_pre > curs_uis:
-                    pr_samps = pad(pr_samps, (n_pre - curs_uis, 0))
+                    pr_samps = np.pad(pr_samps, (n_pre - curs_uis, 0))
                 else:
                     pr_samps = pr_samps[curs_uis - n_pre:]
                 # At this point, `pr_samps` contains one sample per UI w/ exactly `n_pre` pre-cursor samples.
@@ -945,9 +935,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             mse_best = 0
 
         # Check for error and save the best results.
-        # Note the normalization of the Rx FFE tap weights, to produce unit d.c. gain through that filter.
         if not fom_max_changed:
             return False  # Flags the caller that the following settings have NOT been made.
+        # Note the normalization of the Rx FFE tap weights, to produce a unit amplitude cursor tap.
+        # This is not dictated by the spec., but is what the MATLAB code does.
         self.gDC2     = gDC2_best                                   # pylint: disable=possibly-used-before-assignment
         self.gDC      = gDC_best                                    # pylint: disable=possibly-used-before-assignment
         self.tx_ix    = tx_ix_best                                  # pylint: disable=possibly-used-before-assignment
@@ -1114,8 +1105,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     about_str = """
       <H2><em>PyChOpMarg</em> - A Python implementation of COM, as per IEEE 802.3-22 Annex 93A/178A.</H2>\n
       <strong>By:</strong> David Banas <capn.freako@gmail.com><p>\n
-      <strong>On:</strong> November 1, 2024<p>\n
-      <strong>At:</strong> v2.2.1\n
+      <strong>On:</strong> January 20, 2025<p>\n
+      <strong>At:</strong> v3.1.0\n
       <H3>Useful Links</H3>\n
       (You'll probably need to: right click, select <em>Copy link address</em>, and paste into your browser.)
         <UL>\n
@@ -1127,7 +1118,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
 
 def run_com(
-    chnl_sets: list[tuple[ChnlGrpName, list[ChnlSet]]],
+    chnl_sets: list[tuple[ChnlGrpName, ChnlSet]],
     com_params: COMParams,
     opt_mode: OptMode = OptMode.MMSE,
     norm_mode: NormMode = NormMode.P8023dj,
@@ -1153,10 +1144,11 @@ def run_com(
             Default: None
     
     Returns:
-        2D dictionary indexed by channel group name, then by channel set name, containing the completed COM objects.
+        2D dictionary indexed by channel group name, then by channel set name,
+        containing the completed COM objects.
     """
 
-    theCOMs = {}
+    theCOMs: dict[ChnlGrpName, dict[ChnlSetName, COM]] = {}
     for grp, ch_set in chnl_sets:
         lbl = ch_set['THRU'][0].stem
         print(f"{grp} : {lbl}")
