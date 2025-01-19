@@ -198,7 +198,8 @@ def calc_H21(freqs: Rvec, s2p: rf.Network, g1: float, g2: float) -> Cvec:
     """
 
     assert s2p.s[0].shape == (2, 2), ValueError("Network must be 2-port!")
-    _s2p = s2p.extrapolate_to_dc().interpolate(freqs[freqs <= s2p.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True)
+    _s2p = s2p.extrapolate_to_dc().interpolate(
+        freqs[freqs <= s2p.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True)
     pad_len = len(freqs) - len(_s2p.f)
     s11 = np.pad(_s2p.s11.s.flatten(),                (0, pad_len), mode='edge')
     s12 = np.pad(raised_cosine(_s2p.s12.s.flatten()), (0, pad_len), mode='edge')

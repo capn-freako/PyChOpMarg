@@ -9,15 +9,15 @@ Copyright (c) 2025 David Banas; all rights reserved World wide.
 """
 
 from enum   import Enum
-from random import choice, sample
+from random import sample
 from typing import Any, Callable, Optional
 
 from matplotlib         import pyplot as plt  # type: ignore
 from matplotlib.axes    import Axes           # type: ignore
-from scipy.interpolate  import interp1d
+import numpy as np
 
 from pychopmarg.com     import COM
-from pychopmarg.common  import *
+from pychopmarg.common  import Cvec
 from pychopmarg.utility import s2p_pulse_response
 
 
@@ -30,7 +30,7 @@ class ZoomMode(Enum):
     RELATIVE = 5    # x-axis min. & max. specified by caller, relative to pulse peak location.
 
 
-def plot_group_samps(
+def plot_group_samps(  # noqa=501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     plot_func: Callable[[COM, str, str, str, dict[str, str], Any, Any], None],
     x_lbl: str, y_lbls: tuple[str, str],
     coms: list[tuple[str, dict[str, str], dict[str, dict[str, COM]]]],
@@ -44,7 +44,7 @@ def plot_group_samps(
 
     Args:
         plot_func: The plotting function to use. Should take the following arguments:
-        
+
             - com: The COM object to use for plotting.
             - grp: Channel set group name
             - lbl: Channel set name
@@ -52,11 +52,11 @@ def plot_group_samps(
             - opts: Plotting options to use
             - ax1: First y-axis
             - ax2: Second y-axis
-            
+
         x_lbl: Label for x-axis
         y_lbls: Pair of labels, one for each y-axis
         coms: List of tuples, each containing:
-        
+
             - name: Identifying name,
             - opts: Plotting options to use,
             - coms: dictionary of COM objects to select from.
@@ -70,31 +70,32 @@ def plot_group_samps(
             Default: 4
         dy: Height of individual plots (in.)
             Default: 3
-        chnls_by_grp: Dictionary of key/value pairs of the form: <group name>: [<channel set name].
+        chnls_by_grp: Dictionary of key/value pairs of the form: <group name>: [<channel set name>].
             (Used to enforce identical channel set choices across multiple calls.)
             Default: None
         auto_yscale: When ``True``, scale the y-axis to just accommodate the visible portion of the plotted waveforms.
             Default: False
-            
+
     Returns:
         Dictionary containing lists of channel sets used by group name (for subsequent calls).
 
     Raises:
-        KeyError: If there are any inconsistencies in dictionary key naming, either within the list of COMs given or between those COMs and the ``chnls_by_grp`` keyword argument, if provided.
+        KeyError: If there are any inconsistencies in dictionary key naming,
+            either within the list of COMs given or between those COMs and the
+            ``chnls_by_grp`` keyword argument, if provided.
     """
     group_names = list(coms[0][2].keys())
     nCols = len(group_names)
-    nRows = min(maxRows, min(list(map(lambda grp: len(list(coms[0][2][grp].keys())),
+    nRows = min(maxRows, min(list(map(lambda grp: len(list(coms[0][2][grp].keys())),  # pylint: disable=nested-min-max
                                       group_names))))
-    fig, axs = plt.subplots(nRows, nCols, figsize=(dx * nCols, dy * nRows))
-    try:  # Handle singleton case gracefully.
-        assert isinstance(axs[0][0], Axes)
-    except:
+    _, axs = plt.subplots(nRows, nCols, figsize=(dx * nCols, dy * nRows))
+    # Handle singleton case gracefully.
+    if not isinstance(axs[0][0], Axes):
         axs = [[axs,],]
     n = 0
     print("     ", end="")
     chnls_used: dict[str, list[str]] = {}
-    for grp in group_names:
+    for grp in group_names:  # pylint: disable=too-many-nested-blocks
         print(f"{grp : ^45s}", end="")
         chnls_used.update({grp: []})
         if chnls_by_grp:
@@ -106,17 +107,10 @@ def plot_group_samps(
             chnls_used[grp].append(lbl)
             col, row = divmod(n, nRows)
             ax1 = axs[row][col]
-            try:
-                ax2 = ax1.twinx()
-            except:
-                print(f"ax1: {ax1}")
-                print(f"axs: {axs}")
-                print(f"type(ax1): {type(ax1)}")
-                print(f"type(axs): {type(axs)}")
-                raise
+            ax2 = ax1.twinx()
             plt.tight_layout()
             for nm, opts, d in coms:
-                com  = d[grp][lbl]
+                com = d[grp][lbl]
                 plot_func(com, grp, lbl, nm, opts, ax1, ax2)
             if auto_yscale:  # Set y-limits automatically.
                 for ax in [ax1, ax2]:
@@ -132,13 +126,9 @@ def plot_group_samps(
                             continue
                         xmax_ix = np.where(xdata >= min(xdata[-1], xmax))[0][0]
                         y_values = ydata[xmin_ix: xmax_ix]
-                        if len(y_values):
-                            _min_y = min(y_values)
-                            _max_y = max(y_values)
-                            if _min_y < ymin:
-                                ymin = _min_y
-                            if _max_y > ymax:
-                                ymax = _max_y
+                        if len(y_values):  # Ignore the `pylint` suggestion; it causes an exception:
+                            ymin = min(min(y_values), ymin)
+                            ymax = max(max(y_values), ymax)
                     delta_y = ymax - ymin
                     if delta_y > 0:
                         ymin -= 0.1 * delta_y
@@ -157,7 +147,7 @@ def plot_group_samps(
     return chnls_used
 
 
-def plot_pulse_resps_gen(
+def plot_pulse_resps_gen(  # pylint: disable=too-many-statements
     zoom: ZoomMode,
     noeq: bool = False,
     nopkg: bool = False,
@@ -188,13 +178,13 @@ def plot_pulse_resps_gen(
     ToDo:
         1. Add a fourth pulse response option: pre-FFE.
     """
-    
-    def plot_pulse_resps(
+
+    def plot_pulse_resps(  # noqa=501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,unused-argument
         com: COM, grp: str, lbl: str, nm: str, opts: dict[str, str], ax1: Any, ax2: Any
     ) -> None:
         """
         Plot pulse response.
-    
+
         Args:
             com: The COM instance to use for plotting.
                 (Should already have been called, to optimize EQ.)
@@ -207,9 +197,9 @@ def plot_pulse_resps_gen(
             opts: Plotting options.
                 (See the ``matplotlib.pyplot`` documentation.)
             ax1: Axis to use for plotting against the left y-axis.
-            ax2: Axis to use for plotting against the right y-axis.            
+            ax2: Axis to use for plotting against the right y-axis.
         """
-        
+
         ui    = com.ui
         nspui = com.nspui
         t     = com.times
@@ -229,7 +219,7 @@ def plot_pulse_resps_gen(
         clr = opts["color"]
         if nopkg:
             ax1.plot(t * 1e9, com.pulse_resps_nopkg[0] * 1e3, label=nm, color=clr)
-            if plot_ntwk and (nm == "MMSE" or nm == "PyChOpMarg"):
+            if plot_ntwk and nm in ["MMSE", "PyChOpMarg"]:
                 _, y = s2p_pulse_response(com.chnls_noPkg[0][0][0], ui, t)
                 ax1.plot(t * 1e9, y * Av * 1e3, label="SciKit-RF", color=clr, linestyle="dashed")
         elif noeq:
@@ -262,15 +252,15 @@ def plot_pulse_resps_gen(
                 assert xlims, ValueError(
                     "X-axis limits must be provided in manual zoom mode!"
                 )
-                xmin=xlims[0]
-                xmax=xlims[1]
+                xmin = xlims[0]
+                xmax = xlims[1]
             case ZoomMode.RELATIVE:
                 assert xlims, ValueError(
                     "X-axis limits must be provided in relative zoom mode!"
                 )
                 curs_t = t[curs_ix]
-                xmin=xlims[0] + curs_t * 1e9
-                xmax=xlims[1] + curs_t * 1e9
+                xmin = xlims[0] + curs_t * 1e9
+                xmax = xlims[1] + curs_t * 1e9
             case _:
                 raise RuntimeError(
                     f"Unrecognized zoom mode value ({zoom}) received!"
@@ -286,6 +276,7 @@ def plot_pulse_resps_gen(
 
 
 def plot_H(H: Cvec) -> None:
+    "Plot magnitude and phase of given frequency response."
     plt.figure(figsize=(10, 3))
     plt.subplot(121)
     plt.plot(abs(H))

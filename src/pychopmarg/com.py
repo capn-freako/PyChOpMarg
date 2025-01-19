@@ -21,20 +21,17 @@ ToDo:
     1. Provide type hints for imports.
 """
 
-from enum    import Enum
 from functools import cache
 from pathlib import Path
-from typing  import Any, Dict, Optional, TypeVar
+from typing  import Any, Dict, Optional
 
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
 from numpy             import array, arange
-from numpy.fft         import irfft, rfft
-from numpy.typing      import NDArray
-from scipy.interpolate import interp1d
 
-from pychopmarg.common   import *
-from pychopmarg.config.ieee_8023by import IEEE_8023by
+from pychopmarg.common import (
+    PI, TWOPI, Cvec, Rvec, Cmat, OptMode,
+    COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName)
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.config.template    import COMParams
 from pychopmarg.noise    import NoiseCalc
@@ -80,7 +77,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     _sPkgTx: list[rf.Network] = []
     _sPkgRx: list[rf.Network] = []
 
-    def __init__(
+    def __init__(  # noqa=E501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
         self,
         com_params: COMParams,
         channels: Path | dict[str, list[Path]],
@@ -121,7 +118,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         ntwks: list[COMNtwk] = []
         if isinstance(channels, str):  # Should be a "*.s32p".
             assert channels.endswith(".s32p"), ValueError(
-                f"When `channels` is a string it must contain a '*.s32p' value!")
+                "When `channels` is a string it must contain a '*.s32p' value!")
             if channels.exists() and channels.is_file():
                 ntwks = import_s32p(channels, vic_chnl_ix)
             else:
@@ -135,7 +132,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             assert len(channels["THRU"]) == 1, ValueError(
                 f"Length of `channels['THRU']` must be 1, not {len(channels['THRU'])}!")
             for fname, chtype in [(chnl_name, chnl_type) for chnl_type in chnl_types
-                                                         for chnl_name in channels[chnl_type]]:
+                                                         for chnl_name in channels[chnl_type]]:  # noqa=E127
                 ntwks.append((sdd_21(rf.Network(fname)), chtype))
         else:
             raise ValueError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
@@ -262,8 +259,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             "EQ optimization failed!")
         self.set_status("Calculating noise...")
         As, Ani, self.cursor_ix = self.calc_noise(
-            cursor_ix=self.fom_rslts['cursor_ix'],
-            dbg_dict=dbg_dict)
+            cursor_ix=self.fom_rslts['cursor_ix'])
         com = 20 * np.log10(As / Ani)
         self.com_rslts["COM"] = com
         self.set_status(f"Ready; COM = {com: 5.1f} dB")
@@ -358,13 +354,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             gDC = self.gDC
         if gDC2 is None:
             gDC2 = self.gDC2
-        try:
-            rslt = calc_Hctle(self.freqs, self.com_params.f_z * 1e9, self.com_params.f_p1 * 1e9,
-                              self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2)
-        except:
-            print(f"self.com_params.g_DC2: {self.com_params.g_DC2}")
-            raise
-        return rslt
+        return calc_Hctle(self.freqs, self.com_params.f_z * 1e9, self.com_params.f_p1 * 1e9,
+                          self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2)
 
     @property
     def gamma1_Tx(self) -> float:
@@ -425,13 +416,14 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         # Pre-interpolate channel model to system frequency vector, to prevent noisy non-causal artifacts.
         freqs = self.freqs
         sChnl = ntwk[0]
-        sChnlInterp = sChnl.extrapolate_to_dc().interpolate(freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True)
+        sChnlInterp = sChnl.extrapolate_to_dc().interpolate(
+            freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True)
         new_s = sChnlInterp.s.tolist()  # I couldn't make NumPy array padding work correctly here.
         pad_len = len(freqs) - len(sChnlInterp.f)
         new_s.extend(
             [[[sChnlInterp.s11.s[-1, 0, 0], sChnlInterp.s12.s[-1, 0, 0]],
               [sChnlInterp.s21.s[-1, 0, 0], sChnlInterp.s22.s[-1, 0, 0]]]
-            ] * pad_len)
+            ] * pad_len)  # noqa=E124
         new_s = np.array(new_s)
         sChnlInterp = rf.Network(s=new_s, z0=sChnlInterp.z0[0], f=freqs)
 
@@ -464,7 +456,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
         return sCshunt(self.freqs, c, self.com_params.R_0)
 
-    @cache
+    @cache  # pylint: disable=method-cache-max-size-none
     def Htx(self, tx_taps_ix: int) -> Cvec:
         """
         Return the complex frequency response of the Tx deemphasis filter.
@@ -544,7 +536,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
 
         freqs = self.freqs
-        tb    = 1 / self.fb
         if rx_taps is None:
             rx_taps = self.rx_taps
         if dfe_taps is None:
@@ -558,11 +549,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         if Hctf is None:
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
         rslt = Htx * H21 * Hr * Hctf
-        try:
-            nRxTaps = len(rx_taps)
-        except:
-            print(f"self.rx_taps: {self.rx_taps}")
-            raise
+        nRxTaps = len(rx_taps)
         if nRxTaps:
             Hrx = self.Hffe_Rx(rx_taps)
             if passive_RxFFE:
@@ -748,7 +735,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                         tx_ix=tx_ix, Hctf=Hctf, rx_taps=rx_taps,  # including the Rx FFE.
                         dfe_taps=self.empty_array)
                 else:        # Otherwise, pass the signal through unaltered.
-                    rx_taps=self.null_rx_ffe
+                    rx_taps = self.null_rx_ffe
 
                 # Step b - Cursor identification.
                 vic_pulse_resp = pulse_resps[0]  # Note: Includes any Rx FFE, but not DFE.
@@ -790,8 +777,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 # Step g - Crosstalk.
                 varXT = 0.
                 for pulse_resp in pulse_resps[1:]:                                                      # (93A-34)
-                    varXT += max([(filt_pr_samps(pulse_resp[m::M], As)**2).sum()
-                                  for m in range(M)])                                                   # (93A-33)
+                    varXT += max((filt_pr_samps(pulse_resp[m::M], As)**2).sum()
+                                  for m in range(M))                                                    # noqa=E127,E501 (93A-33)
                 varXT *= varX
 
                 # Step h - Spectral noise.
@@ -824,8 +811,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 varXT = rslt["varXT"]
                 varN = rslt["varN"]
                 self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else None
-                self.theNoiseCalc = theNoiseCalc
-                self.mmse_rslt = rslt
+                self.theNoiseCalc = theNoiseCalc  # pylint: disable=attribute-defined-outside-init
+                self.mmse_rslt = rslt             # pylint: disable=attribute-defined-outside-init
             case _:
                 raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")
 
@@ -961,7 +948,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     def calc_noise(
         self,
         cursor_ix: Optional[int] = None,
-        dbg_dict: Optional[Dict[str, Any]] = None
     ) -> tuple[float, float, int]:
         """
         Calculate the interference and noise for COM.
@@ -970,9 +956,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             cursor_ix: An optional predetermined cursor index,
                 to be used instead of our own estimate.
                 (In support of MMSE.)
-                Default: None
-            dbg_dict: Optional dictionary into which debugging values may be stashed,
-                for later analysis.
                 Default: None
 
         Returns:
@@ -1002,7 +985,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         freqs = self.freqs
         nDFE = len(self.com_params.dfe_min)
         nRxTaps = self.nRxTaps
-        nRxPreTaps = self.nRxPreTaps
 
         self.set_status("Calculating COM...")
         pulse_resps = self.gen_pulse_resps(dfe_taps=self.empty_array)  # DFE taps are included explicitly, below.
@@ -1021,24 +1003,25 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         pDelta[npts // 2] = 1.0
 
         # Sec. 93A.1.7.2
-        varX = (L**2 - 1) / (3 * (L - 1)**2)                                                    # (93A-29)
+        varX = (L**2 - 1) / (3 * (L - 1)**2)                                        # (93A-29)
         df = freqs[1] - freqs[0]
         if nRxTaps:
             Hrx = self.Hffe_Rx()
         else:
             Hrx = np.ones(len(freqs))
-        varN = self.com_params.eta_0 * (abs(self.Hr[1:] * self.Hctf[1:] * Hrx[1:])**2).sum() * (df / 1e9)   # (93A-35) + Hffe
+        varN = self.com_params.eta_0 * (
+            abs(self.Hr[1:] * self.Hctf[1:] * Hrx[1:])**2).sum() * (df / 1e9)       # (93A-35) + Hffe
         if self.opt_mode == OptMode.PRZF:
-            varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)                     # (93A-30)
+            varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)         # (93A-30)
         else:
             Stx = self.theNoiseCalc.Stn(Hrx=Hrx)
-            varTx = sum(Stx) * df                                                              # (178A-17)
+            varTx = sum(Stx) * df                                                   # (178A-17)
         hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
-        _, pJ = delta_pmf(filt_pr_samps(self.com_params.A_DD * hJ, ymax), L=L, y=y)             # (93A-40)
-        varJ = self.com_params.sigma_Rj**2 * varX * (hJ**2).sum()                               # (93A-31)
-        varG = varTx + varJ + varN                                # (93A-41)
-        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep                         # (93A-42), but converted to PMF.
-        pN = np.convolve(pG, pJ, mode='same')                                                   # (93A-43)
+        _, pJ = delta_pmf(filt_pr_samps(self.com_params.A_DD * hJ, ymax), L=L, y=y)  # (93A-40)
+        varJ = self.com_params.sigma_Rj**2 * varX * (hJ**2).sum()                   # (93A-31)
+        varG = varTx + varJ + varN                                                  # (93A-41)
+        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep             # (93A-42), but converted to PMF.
+        pN = np.convolve(pG, pJ, mode='same')                                       # (93A-43)
         pN /= pN.sum()  # Enforce a PMF.
 
         # Sec. 93A.1.7.3
@@ -1052,7 +1035,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         hISI = vic_pulse_resp[isi_sample_slice][isi_select_slice].copy()
         hISI[n_pre] = 0  # No ISI at cursor.
         dfe_slice = slice(n_pre + 1, n_pre + 1 + nDFE)
-        dfe_tap_weights = np.maximum(                                                           # (93A-26)
+        dfe_tap_weights = np.maximum(                                               # (93A-26)
             self.com_params.dfe_min,
             np.minimum(
                 self.com_params.dfe_max,
@@ -1117,7 +1100,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     """
 
 
-def run_com(
+def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     chnl_sets: list[tuple[ChnlGrpName, ChnlSet]],
     com_params: COMParams,
     opt_mode: OptMode = OptMode.MMSE,
@@ -1142,7 +1125,7 @@ def run_com(
         dbg_dict: Optional dictionary into which debugging values may be stashed,
             for later analysis.
             Default: None
-    
+
     Returns:
         2D dictionary indexed by channel group name, then by channel set name,
         containing the completed COM objects.
@@ -1156,10 +1139,10 @@ def run_com(
             theCOM = COM(com_params, ch_set, debug=True)
         else:
             theCOM = COM(com_params, ch_set)
-        
+
         # Calling the object calculates the COM value, as well as many other intermediate results.
-        com = theCOM(opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp, dbg_dict=dbg_dict)
-    
+        theCOM(opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp, dbg_dict=dbg_dict)
+
         if grp in theCOMs:
             theCOMs[grp].update({ch_set['THRU'][0].stem: theCOM})
         else:

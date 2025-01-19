@@ -9,7 +9,7 @@
 project = 'PyChOpMarg'
 copyright = '2024, David Banas'
 author = 'David Banas'
-release = 'v2.2.1'
+release = 'v3.1.0'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

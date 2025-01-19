@@ -10,14 +10,12 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 
 from pathlib import Path
 import re
-from typing import Any, Dict, Optional, TypeVar
+from typing import Any, TypeVar
 
 import numpy as np  # type: ignore
-from numpy.typing import NDArray
 from scipy.interpolate import interp1d
 
-from pychopmarg.common import *
-from pychopmarg.config.template import COMParams
+from pychopmarg.common import Rvec, Cvec, ChnlSet, ChnlGrpName
 
 T = TypeVar('T', Any, Any)
 
@@ -123,10 +121,10 @@ def print_taps(ws: list[float]) -> str:
 def fwhm(pr: Rvec) -> float:
     """
     Measure the full width at half maximum of the given pulse response.
-    
+
     Args:
         pr: Pulse response to measure.
-        
+
     Returns:
         fwhm: Full width at half max of largest peak in given signal.
 
@@ -147,10 +145,10 @@ def fwhm(pr: Rvec) -> float:
 def reflectivity(pr: Rvec) -> float:
     """
     Measure the _reflectivity_ of a channel with the given pulse response.
-    
+
     Args:
         pr: Pulse response of channel.
-        
+
     Returns:
         ref: Reflectivity of channel.
 
@@ -158,8 +156,8 @@ def reflectivity(pr: Rvec) -> float:
         1. Use sum of: delta-x weighted by power at delta-x.
     """
     pk_loc = np.where(pr == max(pr))[0][0]
-    return sum([dn * y**2 for dn, y in enumerate(pr[pk_loc:])])
-    
+    return sum(dn * y**2 for dn, y in enumerate(pr[pk_loc:]))
+
 
 def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
     """
@@ -177,13 +175,13 @@ def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
         1. A "channel set" is a dictionary containing a thru channel and some number
             of NEXT and FEXT aggressors.
     """
-    
+
     chnl_groups = list(filter(lambda p: p.is_dir(), path.iterdir()))
     chnl_groups.sort()
     channels: dict[ChnlGrpName, list[ChnlSet]] = {}
     for chnl_grp in chnl_groups:
         channels[chnl_grp.name] = []
-        thru_chnls = list(chnl_grp.glob("*[tT][hH][rR][uU]*.[sS]4[pP]"))  # No global option for case insensitive glob().
+        thru_chnls = list(chnl_grp.glob("*[tT][hH][rR][uU]*.[sS]4[pP]"))  # No global option for case insens. glob().
         thru_chnls.sort()
         for thru_chnl in thru_chnls:
             nexts = list(chnl_grp.glob(re.sub("thru", "[nN][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
@@ -206,5 +204,3 @@ def dBm_Hz(x: Rvec) -> Rvec:
 def mag_dB(x: Cvec) -> Rvec:
     "Return the magnitude in dB of a complex amplitude vector."
     return 20 * np.log10(np.abs(x))
-
-

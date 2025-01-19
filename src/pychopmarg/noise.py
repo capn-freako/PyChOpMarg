@@ -11,9 +11,8 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 # pylint: disable=redefined-builtin
 from typing                 import Optional
 
-from numpy                  import argmax, array, concatenate, diff, mean, ones, reshape, roll, sinc, sum, where
+from numpy                  import argmax, array, concatenate, diff, mean, ones, reshape, sum
 from numpy.fft              import irfft, rfft
-from scipy.interpolate      import interp1d
 from scipy.signal           import lfilter
 
 from pychopmarg.common      import Rvec, Cvec, Rmat
@@ -116,7 +115,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             f"`Tb` ({Tb}) must be an integral multiple of `t[1]` ({t[1]})!")
         dts = diff(t)
         assert all((dts - dts[0]) < 1e-15), ValueError(
-            f"The time vector, `t`, must be uniformly sampled!")
+            "The time vector, `t`, must be uniformly sampled!")
         assert f[0] == 0, ValueError(
             f"The first element of `f` ({f[0]}) must be zero!")
         f0 = 1 / (t[1] * len(t))
@@ -127,7 +126,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             f"The last element of `f` ({f[-1]}) must be half the sampling frequency ({fs})!")
         dfs = diff(f)
         assert all(dfs == dfs[0]), ValueError(
-            f"The frequency vector, `f`, must be uniformly sampled!")
+            "The frequency vector, `f`, must be uniformly sampled!")
 
         super().__init__()
 
@@ -225,7 +224,6 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
                 Default: None (Use flat unity response.)
         """
 
-        Tb    = self.Tb
         f     = self.f
 
         fom = False
@@ -241,7 +239,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
         # Stash debugging info if FOM'ing.
         if fom:
-            self.Stn_debug = {
+            self.Stn_debug = {  # pylint: disable=attribute-defined-outside-init
                 'Htn':  Htn,
                 'htn':  htn,
                 '_Htn': _Htn,
@@ -268,7 +266,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         # Truncate at # of whole UIs in `dV`, to avoid +/-1 length variation, due to sampling phase.
         nUI = int(len(dV) / nspui)
         hJ = mean(reshape(concatenate((dV[(ts_ix - 1) % nspui::nspui][:nUI],
-                                       dV[(ts_ix    ) % nspui::nspui][:nUI])),
+                                       dV[(ts_ix    ) % nspui::nspui][:nUI])),  # noqa=E202
                           shape=(2, nUI)),
                   axis=0) / t[1]
 

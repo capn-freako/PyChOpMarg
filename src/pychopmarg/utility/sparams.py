@@ -334,10 +334,10 @@ def s2p_pulse_response(s2p: rf.Network, ui: float, t: Optional[Rvec] = None) -> 
     Keyword Args:
         t: Optional time vector for use in interpolating the resultant pulse response (s).
             Default: None (Use time vector returned by __SciKit-RF__ step response function.)
-            
+
     Returns:
         t, p: A pair consisting of:
-        
+
             - The time values at which the pulse response has been sampled, and
             - The real-valued pulse response samples of the given 2-port network.
 
@@ -349,7 +349,7 @@ def s2p_pulse_response(s2p: rf.Network, ui: float, t: Optional[Rvec] = None) -> 
     (_, rs, cs) = s2p.s.shape
     assert rs == cs, ValueError("Non-square Touchstone file S-matrix!")
     assert rs == 2, ValueError(f"Touchstone file must have 2 ports, not {rs}!")
-    
+
     _t, _s = s2p.s21.extrapolate_to_dc().step_response()
     if t is not None:
         krnl = interp1d(_t, _s, bounds_error=False, fill_value="extrapolate", assume_sorted=True)

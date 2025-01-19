@@ -8,9 +8,7 @@ Original date:   January 17, 2025
 Copyright (c) 2025 David Banas; all rights reserved World wide.
 """
 
-from dataclasses import make_dataclass
 from functools import reduce
-from itertools import repeat
 from pathlib import Path
 import re
 from typing import Any, Callable, TypeVar
@@ -20,7 +18,6 @@ from numpy import arange, array, concatenate, ones, zeros
 from numpy.typing import NDArray
 import pandas as pd
 
-from pychopmarg.config.ieee_8023by import IEEE_8023by
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.config.template    import COMParams
 
@@ -60,17 +57,21 @@ ignored_fields = [
     "Histogram_Window_Weight",
 ]
 
+
 def first(f: Callable[[T1], T2]) -> Callable[[tuple[T1, T3]], tuple[T2, T3]]:
     "Translation of Haskell ``first`` function."
     return lambda pr: (f(pr[0]), pr[1])
+
 
 def second(f: Callable[[T1], T2]) -> Callable[[tuple[T3, T1]], tuple[T3, T2]]:
     "Translation of Haskell ``second`` function."
     return lambda pr: (pr[0], f(pr[1]))
 
+
 def compose(*functions):
     "Function composition w/ NO TYPE CHECKING!"
     return reduce(lambda f, g: lambda x: f(g(x)), functions)
+
 
 def apply2(
     f: Callable[[T1], T2],
@@ -78,6 +79,7 @@ def apply2(
 ) -> Callable[[tuple[T1, T3]], tuple[T2, T4]]:
     "Translation of Haskell ``***`` operator."
     return compose(first(f), second(g))
+
 
 def alternative(
     f: Callable[[T1], T2],
@@ -99,9 +101,10 @@ def alternative(
     """
     try:
         rslt = f(x)
-    except:
+    except:  # noqa=E722 pylint: disable=bare-except
         rslt = g(x)
     return rslt
+
 
 def parse_Mrange(mStr: str) -> NDArray:
     "Parse a string containing an M-code range."
@@ -110,9 +113,11 @@ def parse_Mrange(mStr: str) -> NDArray:
         return array([0.0])
     return arange(start, stop + step / 2, step)
 
+
 def parse_Mfloat(mStr: str) -> NDArray:
     "Parse a string containing a single M-code number."
     return array([float(mStr)])
+
 
 def parse_Mfloats(mStr: str) -> NDArray:
     "Parse a string containing a repeated M-code number."
@@ -121,8 +126,8 @@ def parse_Mfloats(mStr: str) -> NDArray:
     match = re.search(pattern, mStr)
     if match:
         return array([float(match.group(1))] * int(match.group(2)))
-    else:
-        raise RuntimeError(f"Couldn't parse: '{mStr}'.")
+    raise RuntimeError(f"Couldn't parse: '{mStr}'.")
+
 
 def parse_Mlist(mStr: str) -> NDArray:
     "Parse a string containing an M-code list of numbers."
@@ -130,19 +135,21 @@ def parse_Mlist(mStr: str) -> NDArray:
                       mStr.strip("[] ").split()))
     return concatenate(list(map(lambda s: alternative(parse_Mfloat, parse_Mfloats, s),
                                 tokens)))
-    
+
+
 def parse_Marray(mStr: str) -> NDArray:
     "Parse a string containing either an M-code range or list of numbers."
     return array(list(filter(lambda x: x is not None,
                              alternative(parse_Mrange, parse_Mlist, mStr))))
-    
+
+
 def parse_Mmatrix(mStr: str) -> NDArray:
     "Parse a string containing an M-code matrix of numbers."
     rslt = array(list(map(parse_Marray, mStr.strip("[]").split(";"))))
     if rslt.shape[0] == 1:
         return rslt.flatten()
-    else:
-        return rslt
+    return rslt
+
 
 def match_ignored_field_name_prefix(mName: str) -> bool:
     "Match MATLAB field name prefix to any ignored field name."
@@ -150,7 +157,8 @@ def match_ignored_field_name_prefix(mName: str) -> bool:
         if mName.startswith(nm):
             return True
     return False
-    
+
+
 def cfg_trans(com_cfg: NDArray) -> dict[str, Any]:
     "Translate/filter the names/values of the given 2D NumPy array."
     return dict(map(apply2(lambda s: com_fields[s] if s in com_fields else s,  # type: ignore
@@ -158,17 +166,20 @@ def cfg_trans(com_cfg: NDArray) -> dict[str, Any]:
                     filter(lambda pr: not pd.isna(pr[0]) and not match_ignored_field_name_prefix(pr[0]),
                            com_cfg)))
 
-com_params_dict = {}  # Kept global, so I can inspect it later while debugging.
-def get_com_params(cfg_file: Path) -> COMParams:
+
+# Kept global, so I can inspect it later while debugging:
+com_params_dict = {}  # pylint: disable=global-statement
+
+
+def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=too-many-locals,too-many-branches,too-many-statements
     "Read a COM configuration XLS file and return an equivalent ``COMParams`` instance."
 
-    global com_params_dict
-    
+    global com_params_dict  # pylint: disable=global-statement
+
     if cfg_file.suffix == "xlsx":  # You'll need to manually export to `*.xls` from within Excel.
         raise RuntimeError("Currently, *.XLSX files must first be manually converted to *.XLS.")
         # com_cfg = pd.read_excel(cfg_file, engine_kwargs={"read_only": True})  # Doesn't work, currently.
-    else:
-        com_cfg = pd.read_excel(cfg_file)
+    com_cfg = pd.read_excel(cfg_file)
 
     _com_cfg = com_cfg.to_numpy()
     com_cfg1 = _com_cfg[:, range(0, 2)]
@@ -184,9 +195,9 @@ def get_com_params(cfg_file: Path) -> COMParams:
     tx_taps_min  = [0.] * N_TX_TAPS
     tx_taps_max  = [0.] * N_TX_TAPS
     tx_taps_step = [0.] * N_TX_TAPS
-        
+
     def set_tap(ix, weights):
-        if isinstance(weights, list) or isinstance(weights, np.ndarray):
+        if isinstance(weights, (list, np.ndarray)):
             tx_taps_min[ix] = min(weights)
             tx_taps_max[ix] = max(weights)
             tx_taps_step[ix] = (tx_taps_max[ix] - tx_taps_min[ix]) / (len(weights) - 1)
@@ -194,7 +205,7 @@ def get_com_params(cfg_file: Path) -> COMParams:
             tx_taps_min[ix] = weights
             tx_taps_max[ix] = weights
             tx_taps_step[ix] = 0
-        
+
     for n in range(N_TX_TAPS_2):
         mKey = f"c(-{n + 1})"
         pKey = f"c({n + 1})"
@@ -206,13 +217,14 @@ def get_com_params(cfg_file: Path) -> COMParams:
     # Set Rx FFE config.
     if "dw" in com_params_dict:
         assert "ffe_post_tap_len" in com_params_dict, ValueError(
-            f"Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")
+            "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")  # noqa=E501
         nRxPreTaps = com_params_dict["dw"]
         nRxPostTaps = com_params_dict["ffe_post_tap_len"]
         nRxTaps = nRxPreTaps + 1 + nRxPostTaps  # Includes cursor tap.
         rx_taps_min = array([-0.7] * nRxTaps)
         rx_taps_max = array([0.7] * nRxTaps)
-        rx_taps_min[nRxPreTaps] = rx_taps_max[nRxPreTaps] = 1.0  # Set cursor max/min to 1.0 (i.e. - no clipping, because relative).
+        # Set cursor max/min to 1.0 (i.e. - no clipping, because relative).
+        rx_taps_min[nRxPreTaps] = rx_taps_max[nRxPreTaps] = 1.0
         if "ffe_pre_tap1_max" in com_params_dict:
             rx_taps_max[nRxPreTaps - 1] = com_params_dict["ffe_pre_tap1_max"]
             rx_taps_min[nRxPreTaps - 1] = -com_params_dict["ffe_pre_tap1_max"]
@@ -220,19 +232,15 @@ def get_com_params(cfg_file: Path) -> COMParams:
             rx_taps_max[nRxPreTaps + 1] = com_params_dict["ffe_post_tap1_max"]
             rx_taps_min[nRxPreTaps + 1] = -com_params_dict["ffe_post_tap1_max"]
         if "ffe_tapn_max" in com_params_dict:
-            try:
-                rx_taps_max[:nRxPreTaps - 1] = com_params_dict["ffe_tapn_max"] * ones(nRxPreTaps - 1)
-                rx_taps_max[nRxPreTaps + 2:] = com_params_dict["ffe_tapn_max"] * ones(nRxTaps - nRxPreTaps - 2)
-                rx_taps_min[:nRxPreTaps - 1] = -com_params_dict["ffe_tapn_max"] * ones(nRxPreTaps - 1)
-                rx_taps_min[nRxPreTaps + 2:] = -com_params_dict["ffe_tapn_max"] * ones(nRxTaps - nRxPreTaps - 2)
-            except:
-                print(f"nRxPreTaps: {nRxPreTaps}, com_params_dict['ffe_tapn_max']: {com_params_dict['ffe_tapn_max']}")
-                raise
+            rx_taps_max[:nRxPreTaps - 1] = com_params_dict["ffe_tapn_max"] * ones(nRxPreTaps - 1)
+            rx_taps_max[nRxPreTaps + 2:] = com_params_dict["ffe_tapn_max"] * ones(nRxTaps - nRxPreTaps - 2)
+            rx_taps_min[:nRxPreTaps - 1] = -com_params_dict["ffe_tapn_max"] * ones(nRxPreTaps - 1)
+            rx_taps_min[nRxPreTaps + 2:] = -com_params_dict["ffe_tapn_max"] * ones(nRxTaps - nRxPreTaps - 2)
 
     # Make sure CTLE d.c. gains are both lists.
-    if not (isinstance(com_params_dict["g_DC"], list) or isinstance(com_params_dict["g_DC"], np.ndarray)):
+    if not isinstance(com_params_dict["g_DC"], (list, np.ndarray)):
         com_params_dict["g_DC"] = [com_params_dict["g_DC"]]
-    if not (isinstance(com_params_dict["g_DC2"], list) or isinstance(com_params_dict["g_DC2"], np.ndarray)):
+    if not isinstance(com_params_dict["g_DC2"], (list, np.ndarray)):
         com_params_dict["g_DC2"] = [com_params_dict["g_DC2"]]
 
     # Set Rx DFE min./max.
@@ -249,7 +257,7 @@ def get_com_params(cfg_file: Path) -> COMParams:
             if N_b > 1:
                 if "b_maxN" in com_params_dict:
                     dfe_max[1:] = dfe_min[1:] = float(com_params_dict["b_maxN"])
-    
+
     rslt = COMParams(
         com_params_dict["fb"],
         com_params_dict["fstep"],

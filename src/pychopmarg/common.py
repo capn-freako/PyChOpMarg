@@ -36,10 +36,12 @@ ChnlTypName: TypeAlias = str  # channel type name ("thru", "next", or "fext")
 ChnlSetComp: TypeAlias = list[Path]
 ChnlSet:     TypeAlias = dict[ChnlTypName, ChnlSetComp]
 
+
 class OptMode(Enum):
     "Linear equalization optimization mode."
     PRZF = 1
     MMSE = 2
+
 
 class NormMode(Enum):
     "Tap weight normalization mode."

@@ -10,7 +10,6 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 
 from dataclasses import dataclass
 import numpy as np
-from numpy.typing import NDArray
 from pychopmarg.common import Rvec
 
 
@@ -75,7 +74,7 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
     # New as of 802.3dj
     z_pB: float = 1.8           # (mm)
 
-    def __post_init__(self):
+    def __post_init__(self):  # pylint: disable=too-many-statements
         "Validate incoming COM parameters."
 
         def check_range(
@@ -98,9 +97,9 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
                     raise ValueError(
                         "\n\t".join([
                             f"Error converting `{nm}` ({val}):",
-                            str(err)]))
+                            str(err)])) from err
 
-            if isinstance(x_val, list) or isinstance(x_val, np.ndarray):
+            if isinstance(x_val, (list, np.ndarray)):
                 map(lambda n_x: chk_rng(f"{x_name}[{n_x[0]}]", n_x[1]), enumerate(x_val))
             else:
                 chk_rng(x_name, x_val)

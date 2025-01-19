@@ -8,7 +8,6 @@ Original date:   August 30, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from enum       import Enum
 from typing     import Any, Optional
 
 import numpy as np
@@ -19,7 +18,7 @@ from numpy import (
 from numpy.linalg import lstsq
 from scipy.linalg import convolution_matrix, solve, toeplitz
 
-from pychopmarg.common  import *
+from pychopmarg.common  import Rvec, NormMode
 from pychopmarg.noise   import NoiseCalc
 from pychopmarg.utility import calc_Hffe
 
@@ -91,12 +90,8 @@ def clip_taps(
 
     if w_min is None:
         w_min = -ones(len(w))
-    else:
-        w_min = w_min
     if w_max is None:
         w_max = ones(len(w))
-    else:
-        w_max = w_max
 
     assert len(w) == len(w_min) == len(w_max), ValueError(
         f"Lengths of: `w` ({len(w)}), `w_min` ({len(w_min)}), and `w_max` ({len(w_max)}), must be equal!")
@@ -292,7 +287,6 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         f"Insufficient room at end of pulse response: {len(vic_pr) - curs_ix}!")
 
     # Initialize and run the search for optimum `ts` and Rx FFE tap weights.
-    H_LEN = 2048  # 2048 is the default value for `num_ui_RXFF_noise` parameter in the MATLAB code.
     max_fom = -1000
     rslt = {}
     varX = theNoiseCalc.varX
@@ -355,10 +349,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             hISI = concatenate((array([h0 @ w_lim - 1]), Hb @ w_lim, H[d + 1 + Nb:] @ w_lim))
             varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
-            # MATLAB v4.70:
-            # sigma_e=sqrt(sigma_X2*(w'*R*w+1+b'*b-2*w'*h0'-2*w'*Hb'*b)); % Commit request 4p4_5 from healey_3dj_COM_01_240416
-            # FOM=20*log10((param.R_LM/(param.levels-1)/sigma_e)); 
-            mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
+            mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]  # noqa=501
             fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
             if fom > max_fom:
                 max_fom = fom
@@ -372,7 +363,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
                 rslt["cursor_ix"] = ts_ix
                 df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
-                rslt["varTx"] = sum(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1))) * df
+                rslt["varTx"] = sum(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1))) * df  # noqa=E501
                 rslt["varISI"] = varISI
                 rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
                 rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
