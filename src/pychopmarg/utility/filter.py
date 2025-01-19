@@ -11,7 +11,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
 
-from pychopmarg.common import Rvec, Cvec, TWOPI
+from pychopmarg.common import Rvec, Cvec, PI, TWOPI
 
 
 def from_dB(x: float) -> float:
@@ -65,14 +65,67 @@ def calc_Hffe(
 
     Returns:
         The complex voltage transfer function, H(f), for the FFE.
+
+    The simple expression being returned is defended, as follows:
+
+    1. Take axiomatically that what we want to return is the sum of the rows of the following matrix:
+
+        .. math::
+            \\begin{bmatrix}
+                b_0 e^{-j 2 \\pi T 0 f_0} & b_0 e^{-j 2 \\pi T 0 f_1} & b0 e^{-j 2 \\pi T 0 f_2} ... \\\\
+                b_1 e^{-j 2 \\pi T 1 f_0} & b_1 e^{-j 2 \\pi T 1 f_1} & b1 e^{-j 2 \\pi T 1 f_2} ... \\\\
+                b_2 e^{-j 2 \\pi T 2 f_0} & b_2 e^{-j 2 \\pi T 2 f_1} & b2 e^{-j 2 \\pi T 2 f_2} ... \\\\
+                \\vdots
+            \\end{bmatrix}
+
+    2. Now, note that each columnar sum is a dot product of the vectors:
+
+        - :math:`\\{b_n\\}`, and
+
+        - :math:`\\{e^{-j 2 \\pi n T \\cdot f_m}\\}`, where:
+
+        - :math:`f_m = m \\Delta f = \\frac{m}{NT}`, giving:
+
+        .. math::
+            H(f) = [ b_0, b_1, b_2, ... ] e^{-j 2 \\pi T \\mathbf{F}}
+
+        where:
+
+        .. math::
+            \\mathbf{F} = \\begin{bmatrix}
+                f0 \\cdot 0 & f1 \\cdot 0 & f2 \\cdot 0 ... \\\\
+                f0 \\cdot 1 & f1 \\cdot 1 & f2 \\cdot 1 ... \\\\
+                f0 \\cdot 2 & f1 \\cdot 2 & f2 \\cdot 2 ... \\\\
+                \\vdots
+            \\end{bmatrix} =
+            \\begin{bmatrix}
+                0 \\\\
+                1 \\\\
+                2 \\\\
+                \\vdots
+            \\end{bmatrix} [f_0, f_1, f_2, ...] = \\mathbf{n}^T \\mathbf{f}
+
+        giving:
+
+        .. math::
+            H(f) = \\mathbf{b} e^{-j 2 \\pi T \\mathbf{n}^T \\mathbf{f}}
+
+    3. Finally, comparing the final expression above to the Python code reveals a match:
+
+        .. code-block:: python
+
+            return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * freqs))
+
+    Note that **F** may be pre-calculated, and needn't be recalculated,
+    once the system time/frequency vectors have been established.
+    Doing so yields a significant performance improvement in cases with many Tx FFE combinations.
     """
 
-    bs = list(np.array(tap_weights).flatten())
+    bs = tap_weights
     if not hasCurs:
-        b0 = 1 - sum(list(map(abs, tap_weights)))
-        bs.insert(-n_post, b0)
-    return sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * n_b[0] * td * freqs),
-                        enumerate(bs))))
+        b0 = 1 - abs(tap_weights).sum()
+        bs = np.insert(bs, -n_post, b0)
+    return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * freqs))  # 50% perf. improvement
 
 
 def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
@@ -88,7 +141,7 @@ def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
         The complex voltage transfer function, H(f), for the DFE.
     """
 
-    bs = list(np.array(tap_weights).flatten())
+    bs = tap_weights.flatten()
     return 1 / (1 - sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * (n_b[0] + 1) * td * freqs),
                                  enumerate(bs)))))
 
@@ -119,6 +172,13 @@ def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:
     return taps
 
 
+def raised_cosine(x: Cvec) -> Cvec:
+    "Apply raised cosine window to input."
+    len_x = len(x)
+    w = (np.array([np.cos(PI * n / len_x) for n in range(len_x)]) + 1) / 2
+    return w * x
+
+
 def calc_H21(freqs: Rvec, s2p: rf.Network, g1: float, g2: float) -> Cvec:
     """
     Return the voltage transfer function, H21(f), of a terminated two
@@ -138,11 +198,12 @@ def calc_H21(freqs: Rvec, s2p: rf.Network, g1: float, g2: float) -> Cvec:
     """
 
     assert s2p.s[0].shape == (2, 2), ValueError("Network must be 2-port!")
-    s2p = s2p.extrapolate_to_dc()
-    s2p.interpolate_self(freqs)
-    s11 = s2p.s11.s.flatten()
-    s12 = s2p.s12.s.flatten()
-    s21 = s2p.s21.s.flatten()
-    s22 = s2p.s22.s.flatten()
+    _s2p = s2p.extrapolate_to_dc().interpolate(
+        freqs[freqs <= s2p.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True)
+    pad_len = len(freqs) - len(_s2p.f)
+    s11 = np.pad(_s2p.s11.s.flatten(),                (0, pad_len), mode='edge')
+    s12 = np.pad(raised_cosine(_s2p.s12.s.flatten()), (0, pad_len), mode='edge')
+    s21 = np.pad(raised_cosine(_s2p.s21.s.flatten()), (0, pad_len), mode='edge')
+    s22 = np.pad(_s2p.s22.s.flatten(),                (0, pad_len), mode='edge')
     dS = s11 * s22 - s12 * s21
     return (s21 * (1 - g1) * (1 + g2)) / (1 - s11 * g1 - s22 * g2 + g1 * g2 * dS)

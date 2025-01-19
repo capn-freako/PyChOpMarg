@@ -8,13 +8,15 @@ Original date:   March 3, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from pathlib import Path
+from pathlib    import Path
+from typing     import Optional
 
 import numpy as np  # type: ignore
 import skrf  as rf
 from numpy import array
+from scipy.interpolate  import interp1d
 
-from pychopmarg.common import Rvec, PI, TWOPI
+from pychopmarg.common import Rvec, PI, TWOPI, COMNtwk
 
 
 def sdd_21(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Network:
@@ -104,15 +106,15 @@ def se2mm(ntwk: rf.Network, norm: float = 0.5, renumber: bool = False) -> rf.Net
     z = np.zeros((len(f), 4), dtype=complex)
     z[:, 0] = ntwk.z0[:, 0] + ntwk.z0[:, 2]
     z[:, 1] = ntwk.z0[:, 1] + ntwk.z0[:, 3]
-    z[:, 2] = (ntwk.z0[:, 0] + ntwk.z0[:, 2]) / 2
-    z[:, 3] = (ntwk.z0[:, 1] + ntwk.z0[:, 3]) / 2
+    z[:, 2] = (ntwk.z0[:, 0] * ntwk.z0[:, 2]) / (ntwk.z0[:, 0] + ntwk.z0[:, 2])
+    z[:, 3] = (ntwk.z0[:, 1] * ntwk.z0[:, 3]) / (ntwk.z0[:, 1] + ntwk.z0[:, 3])
 
     return rf.Network(frequency=f, s=s, z0=z)
 
 
 def import_s32p(  # pylint: disable=too-many-locals
     filename: Path, vic_chnl: int = 1
-) -> list[tuple[rf.Network, str]]:
+) -> list[COMNtwk]:
     """Read in a 32-port Touchstone file, and return an equivalent list
     of 8 2-port differential networks: a single victim through channel and
     7 crosstalk aggressors, according to the VITA 68.2 convention.
@@ -171,8 +173,8 @@ def import_s32p(  # pylint: disable=too-many-locals
         vic_rx_ports = [vic_ports[n] for n in [0, 2]]
     else:
         vic_rx_ports = [vic_ports[n] for n in [1, 3]]
-    agg_chnls = list(np.array(range(8)) + 1)
-    agg_chnls.remove(vic_chnl)
+    agg_chnls = list(np.arange(8) + 1)
+    agg_chnls.remove(vic_chnl)  # type: ignore
     aggs = []
     for agg_chnl in agg_chnls:
         agg_ports = ports_from_chnls(agg_chnl, agg_chnl)
@@ -206,7 +208,7 @@ def sCshunt(freqs: Rvec, c: float, r0: float = 50.0) -> rf.Network:
         The network corresponding to a shunt capacitance, ``c``,
         calculated at the given frequencies, ``freqs``.
     """
-    w = TWOPI * np.array(freqs)
+    w = TWOPI * freqs
     s = 1j * w
     jwRC = s * r0 * c
     s11 = -jwRC / (2 + jwRC)
@@ -297,7 +299,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             return gamma0
         return gamma0 + gamma1 * np.sqrt(f) + gamma2(f) * f
 
-    g = array(list(map(gamma, f_GHz)))
+    g = array(list(map(gamma, f_GHz)))  # type: ignore
 
     def mk_s2p(z_pair: tuple[float, float]) -> rf.Network:
         """
@@ -319,3 +321,44 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         return rf.Network(s=array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)
 
     return rf.network.cascade_list(list(map(mk_s2p, z_pairs)))
+
+
+def s2p_pulse_response(s2p: rf.Network, ui: float, t: Optional[Rvec] = None) -> tuple[Rvec, Rvec]:
+    """
+    Calculate the __pulse__ response of a 2-port network, using the SciKit-RF provided __step__ response.
+
+    Args:
+        s2p: The 2-port network to use.
+        ui: The unit interval (s).
+
+    Keyword Args:
+        t: Optional time vector for use in interpolating the resultant pulse response (s).
+            Default: None (Use time vector returned by __SciKit-RF__ step response function.)
+
+    Returns:
+        t, p: A pair consisting of:
+
+            - The time values at which the pulse response has been sampled, and
+            - The real-valued pulse response samples of the given 2-port network.
+
+    Raises:
+        ValueError: If given network is not 2-port.
+    """
+
+    # Confirm correct network dimmensions.
+    (_, rs, cs) = s2p.s.shape
+    assert rs == cs, ValueError("Non-square Touchstone file S-matrix!")
+    assert rs == 2, ValueError(f"Touchstone file must have 2 ports, not {rs}!")
+
+    _t, _s = s2p.s21.extrapolate_to_dc().step_response()
+    if t is not None:
+        krnl = interp1d(_t, _s, bounds_error=False, fill_value="extrapolate", assume_sorted=True)
+        s = krnl(t)
+    else:
+        t = _t
+        s = _s
+    delta_t = t[1] - t[0]
+    nspui = int(np.round(ui / delta_t))
+    p = s - np.pad(s, (nspui, 0))[:len(s)]
+
+    return t, p

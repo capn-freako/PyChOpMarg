@@ -11,6 +11,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 from typing import Any, Dict, Optional
 
 import numpy as np  # type: ignore
+from numpy.typing import NDArray
 
 from pychopmarg.common import Rvec
 
@@ -31,7 +32,7 @@ def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
         The subset of ``pr_samps`` passing filtration.
     """
     thresh = As * rel_thresh
-    return np.array(list(filter(lambda x: abs(x) >= thresh, pr_samps)))
+    return pr_samps[abs(pr_samps) > thresh]
 
 
 def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
@@ -91,36 +92,26 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         ystep = y[1] - y[0]
         h_samps_filt = h_samps
 
-    delta = np.zeros(npts)
-    delta[npts // 2] = 1
-
     if dbg_dict is not None:
         dbg_dict.update({"h_samps":      h_samps})
         dbg_dict.update({"h_samps_filt": h_samps_filt})
         dbg_dict.update({"ystep":        ystep})
 
-    def pn(hn: float) -> Rvec:
-        """
-        (93A-39)
-        """
-        if dbg_dict:
-            dbg_dict.update({"hn":     hn})
-            dbg_dict.update({"shifts": []})
-        _rslt = np.zeros(npts)
-        for el in range(L):
-            _shift = int((2 * el / (L - 1) - 1) * hn / ystep)
-            if dbg_dict:
-                dbg_dict["shifts"].append(_shift)
-            assert abs(_shift) < npts // 2, ValueError(
-                f"Wrap around: _shift: {_shift}, npts: {npts}.")
-            _rslt += np.roll(delta, _shift)
-        return 1 / L * _rslt
+    # Pre-calculated constant values.
+    delta = np.zeros(npts)
+    zero_ix = npts // 2
+    delta[zero_ix] = 1.0
+    sig_step = 2.0 / (L - 1)
+    sig_shifts = (np.arange(L) * sig_step - 1) / ystep
 
+    # PMF calculation proper - a more efficient form of convolution, given our apriori knowledge of the input.
     rslt = delta
     for hn in h_samps_filt:
-        _pn = pn(hn)
-        rslt = np.convolve(rslt, _pn, mode='same')
-    rslt /= sum(rslt)  # Enforce a PMF.
+        # Filter out zeros, as per MATLAB code:
+        shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn)))  # (93A-39)
+        if shifts:
+            _rslt: NDArray = sum(np.roll(rslt, shift) for shift in shifts)  # type: ignore
+            rslt  = _rslt / _rslt.sum()  # Enforce a PMF.
 
     return y, rslt
 
@@ -186,7 +177,8 @@ def loc_curs(  # pylint: disable=too-many-arguments,too-many-positional-argument
     ix_best = peak_loc  # To assuage `pylint` only; does not affect code logic.
     res_min = 1e6
     zero_res_ixs = []
-    for ix in range(peak_loc - nspui * max_range, peak_loc + nspui * max_range):
+    for ix in range(max(0, peak_loc - nspui * max_range),
+                    min(len(pulse_resp), peak_loc + nspui * max_range)):
         # Anticipate the DFE first tap value, observing its limits:
         b_1 = min(dfe_max[0],
                   max(dfe_min[0],
