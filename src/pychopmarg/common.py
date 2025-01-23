@@ -10,7 +10,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 
 from enum       import Enum
 from pathlib    import Path
-from typing     import TypeVar, TypeAlias
+from typing     import Any, TypeVar, TypeAlias
 
 import numpy        as np  # type: ignore
 import numpy.typing as npt  # type: ignore
@@ -35,6 +35,9 @@ ChnlSetName: TypeAlias = str  # channel set name (the stem of the thru channel s
 ChnlTypName: TypeAlias = str  # channel type name ("thru", "next", or "fext")
 ChnlSetComp: TypeAlias = list[Path]
 ChnlSet:     TypeAlias = dict[ChnlTypName, ChnlSetComp]
+
+EqComb:      TypeAlias = tuple[float, float, int]       # gDC2, gDC, Tx_ix
+CalcFomRslt: TypeAlias = tuple[float, dict[str, Any]]   # FOM, `fom_rslts`
 
 
 class OptMode(Enum):

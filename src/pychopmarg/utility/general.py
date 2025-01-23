@@ -173,7 +173,7 @@ def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
 
     Notes:
         1. A "channel set" is a dictionary containing a thru channel and some number
-            of NEXT and FEXT aggressors.
+        of NEXT and FEXT aggressors.
     """
 
     chnl_groups = list(filter(lambda p: p.is_dir(), path.iterdir()))

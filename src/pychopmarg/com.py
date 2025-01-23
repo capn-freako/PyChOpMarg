@@ -22,16 +22,21 @@ ToDo:
 """
 
 from functools import cache
+from multiprocessing import Pool, Manager
 from pathlib import Path
-from typing  import Any, Dict, Optional
+from typing  import Any, Callable, Dict, Optional
 
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
 from numpy             import array, arange
+import psutil
+
+# from memory_profiler import memory_usage
 
 from pychopmarg.common import (
     PI, TWOPI, Cvec, Rvec, Cmat, OptMode,
-    COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName)
+    COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName,
+    EqComb, CalcFomRslt)
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.config.template    import COMParams
 from pychopmarg.noise    import NoiseCalc
@@ -39,6 +44,8 @@ from pychopmarg.optimize import NormMode, mmse, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
     delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs)
+
+POOL_SIZE = 10
 
 
 class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-methods
@@ -76,6 +83,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     zp_sel = 0  # package length selector
     _sPkgTx: list[rf.Network] = []
     _sPkgRx: list[rf.Network] = []
+
+    # Misc.
+    mem_data = {}
 
     def __init__(  # noqa=E501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
         self,
@@ -255,8 +265,12 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             self.dbg_dict  = dbg_dict
 
         self.set_status("Optimizing EQ...")
+        # mem_usage, result = memory_usage(
+        #     (self.opt_eq, [], {'do_opt_eq': do_opt_eq, 'tx_taps': tx_taps}), retval=True)
+        # assert result, RuntimeError(
         assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
             "EQ optimization failed!")
+        # print(f"Maximum memory usage: {max(mem_usage):.0f}", flush=True)
         self.set_status("Calculating noise...")
         As, Ani, self.cursor_ix = self.calc_noise(
             cursor_ix=self.fom_rslts['cursor_ix'])
@@ -515,7 +529,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             dfe_taps: Rx DFE tap weights.
                 Default: None (i.e. - Use ``self.dfe_taps``.)
             passive_RxFFE: Enforce passivity of Rx FFE when True.
-                Default: True
+                Default: False
 
         Returns:
             Complex voltage transfer function of complete path.
@@ -663,7 +677,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         norm_mode: Optional[NormMode] = None,
         unit_amp: Optional[bool] = None,
         n_pre: Optional[int] = None
-    ) -> float:
+    ) -> CalcFomRslt:
         """
         Calculate the **figure of merit** (FOM), given the existing linear EQ settings.
         Optimize Rx FFE taps if they aren't specified by caller.
@@ -721,6 +735,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
             tx_ix=tx_ix, Hctf=Hctf,
             rx_taps=self.null_rx_ffe, dfe_taps=self.empty_array)
+        fom_rslts = {}
         match opt_mode:
             case OptMode.PRZF:
                 # Step a - Pulse response construction.
@@ -810,36 +825,49 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 varJ = rslt["varJ"]
                 varXT = rslt["varXT"]
                 varN = rslt["varN"]
-                self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else None
-                self.theNoiseCalc = theNoiseCalc  # pylint: disable=attribute-defined-outside-init
-                self.mmse_rslt = rslt             # pylint: disable=attribute-defined-outside-init
+                fom_rslts['mse']          = rslt['mse'] if 'mse' in rslt else None
+                fom_rslts['theNoiseCalc'] = theNoiseCalc
+                fom_rslts['mmse_rslt']    = rslt
             case _:
                 raise ValueError(f"Unrecognized optimization mode: {opt_mode}, requested!")
 
         # Stash our calculation results.
-        self.fom_rslts['pulse_resps'] = pulse_resps_preFFE
-        self.fom_rslts['vic_pulse_resp'] = vic_pulse_resp
-        self.fom_rslts['vic_peak_loc'] = vic_peak_loc
-        self.fom_rslts['cursor_ix'] = cursor_ix
-        self.fom_rslts['As'] = As
-        self.fom_rslts['varTx'] = varTx
-        self.fom_rslts['varISI'] = varISI
-        self.fom_rslts['varJ'] = varJ
-        self.fom_rslts['varXT'] = varXT
-        self.fom_rslts['varN'] = varN
-        self.fom_rslts['rx_taps'] = rx_taps
-        self.fom_rslts['dfe_tap_weights'] = dfe_tap_weights
-        self.fom_rslts['pr_samps'] = pr_samps
+        fom_rslts['pulse_resps'] = pulse_resps_preFFE
+        fom_rslts['vic_pulse_resp'] = vic_pulse_resp
+        fom_rslts['vic_peak_loc'] = vic_peak_loc
+        fom_rslts['cursor_ix'] = cursor_ix
+        fom_rslts['As'] = As
+        fom_rslts['varTx'] = varTx
+        fom_rslts['varISI'] = varISI
+        fom_rslts['varJ'] = varJ
+        fom_rslts['varXT'] = varXT
+        fom_rslts['varN'] = varN
+        fom_rslts['rx_taps'] = rx_taps
+        fom_rslts['dfe_tap_weights'] = dfe_tap_weights
+        fom_rslts['pr_samps'] = pr_samps
 
-        return fom
+        return (fom, fom_rslts)
+
+    def calc_fom_for_comb(
+        self,
+        comb: EqComb
+    ) -> tuple[EqComb, CalcFomRslt, tuple[int, int, int, int]]:
+        "Calculate the FOM for a particular Tx FFE & CTLE combination."
+
+        fom_rslt = self.calc_fom(
+            comb[2], self.calc_Hctf(comb[1], comb[0]),
+            opt_mode=self.opt_mode, norm_mode=self.norm_mode, unit_amp=self.unit_amp)
+
+        proc = psutil.Process()
+        pid = proc.pid
+        mem_info = proc.memory_full_info()
+
+        return (comb, fom_rslt, (pid, mem_info.rss, mem_info.vms, mem_info.uss))
 
     def opt_eq(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
         self,
         do_opt_eq: bool = True,
         tx_taps: Optional[Rvec] = None,
-        opt_mode: Optional[OptMode] = None,
-        norm_mode: Optional[NormMode] = None,
-        unit_amp: Optional[bool] = None
     ) -> bool:
         """
         Find and set the optimum values for the linear equalization parameters:
@@ -851,13 +879,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 Default: True
             tx_taps: Used when ``do_opt_eq`` = False.
                 Default: None
-            opt_mode: Optimization mode.
-                Default: None (i.e. - Use ``self.opt_mode``.)
-            norm_mode: The tap weight normalization mode to use.
-                Default: None (i.e. - Use ``self.norm_mode``.)
-            unit_amp: Enforce unit pulse response amplitude when True.
-                (For comparing ``przf()`` results to ``mmse()`` results.)
-                Default: None (i.e. - Use ``self.unit_amp``.)
 
         Returns:
             True if no errors encountered; False otherwise.
@@ -867,40 +888,42 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         """
 
         if do_opt_eq:
-            # Honor any mode overrides.
-            opt_mode  = opt_mode  or self.opt_mode
-            norm_mode = norm_mode or self.norm_mode
-            if unit_amp is None:  # Don't try the more Pythonic syntax above; it doesn't work for Boolean values.
-                unit_amp = self.unit_amp
+            # Run the nested optimization loops, using a multiprocessing pool.
+            with Pool(POOL_SIZE) as pool:
+                manager = Manager()
+                mem_data: dict[int, dict[str, list[int]]] = manager.dict({})
+                rslts = pool.map(
+                    self.calc_fom_for_comb,
+                    [(_gDC2, _gDC, _tx_ix)
+                        for _gDC2 in self.com_params.g_DC2
+                        for _gDC in self.com_params.g_DC
+                        for _tx_ix in range(self.num_tx_combs)])
 
-            # Run the nested optimization loops.
-            fom_max = -1000.0
-            fom_max_changed = False
-            for _gDC2 in self.com_params.g_DC2:
-                for _gDC in self.com_params.g_DC:
-                    _Hctle = self.calc_Hctf(_gDC, _gDC2)
-                    for _tx_ix in range(self.num_tx_combs):
-                        fom = self.calc_fom(
-                            _tx_ix, _Hctle,
-                            opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
-                        if fom > fom_max:
-                            fom_max_changed = True
-                            fom_max = fom
-                            gDC2_best = _gDC2
-                            gDC_best = _gDC
-                            tx_ix_best = _tx_ix
-                            rx_taps_best = self.fom_rslts['rx_taps']
-                            pr_samps_best = self.fom_rslts['pr_samps']
-                            dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
-                            cursor_ix_best = self.fom_rslts['cursor_ix']
-                            As_best = self.fom_rslts['As']
-                            varTx_best = self.fom_rslts['varTx']
-                            varISI_best = self.fom_rslts['varISI']
-                            varJ_best = self.fom_rslts['varJ']
-                            varXT_best = self.fom_rslts['varXT']
-                            varN_best = self.fom_rslts['varN']
-                            vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
-                            mse_best = self.fom_rslts['mse'] if 'mse' in self.fom_rslts else 0
+            for (_, _, (pid, rss, vms, uss)) in rslts:
+                if pid in self.mem_data:
+                    self.mem_data[pid]['rss'].append(rss)
+                    self.mem_data[pid]['vms'].append(vms)
+                    self.mem_data[pid]['uss'].append(uss)
+                else:
+                    self.mem_data.update({pid: {'rss': [rss],
+                                                'vms': [vms],
+                                                'uss': [uss]}})
+
+            (gDC2_best, gDC_best, tx_ix_best), (fom_max, fom_rslts), _ = rslts[np.argmax(
+                map(lambda rslt: rslt[1][0], rslts))]
+            rx_taps_best = fom_rslts['rx_taps']
+            pr_samps_best = fom_rslts['pr_samps']
+            dfe_tap_weights_best = fom_rslts['dfe_tap_weights']
+            cursor_ix_best = fom_rslts['cursor_ix']
+            As_best = fom_rslts['As']
+            varTx_best = fom_rslts['varTx']
+            varISI_best = fom_rslts['varISI']
+            varJ_best = fom_rslts['varJ']
+            varXT_best = fom_rslts['varXT']
+            varN_best = fom_rslts['varN']
+            vic_pulse_resp = fom_rslts['vic_pulse_resp']
+            mse_best = fom_rslts['mse'] if 'mse' in fom_rslts else 0
+            self.theNoiseCalc = fom_rslts['theNoiseCalc']
         else:
             assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
             fom = self.calc_fom(0, self.calc_Hctf(self.gDC, self.gDC2))
@@ -922,8 +945,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             mse_best = 0
 
         # Check for error and save the best results.
-        if not fom_max_changed:
-            return False  # Flags the caller that the following settings have NOT been made.
+        # if not fom_max_changed:
+        #     return False  # Flags the caller that the following settings have NOT been made.
         # Note the normalization of the Rx FFE tap weights, to produce a unit amplitude cursor tap.
         # This is not dictated by the spec., but is what the MATLAB code does.
         self.gDC2     = gDC2_best                                   # pylint: disable=possibly-used-before-assignment
@@ -1134,7 +1157,7 @@ def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     theCOMs: dict[ChnlGrpName, dict[ChnlSetName, COM]] = {}
     for grp, ch_set in chnl_sets:
         lbl = ch_set['THRU'][0].stem
-        print(f"{grp} : {lbl}")
+        # print(f"{grp} : {lbl}")
         if dbg_dict is not None:
             theCOM = COM(com_params, ch_set, debug=True)
         else:
