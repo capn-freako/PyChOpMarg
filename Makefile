@@ -5,7 +5,7 @@
 #
 # Copyright (c) 2024 David Banas; all rights reserved World wide.
 
-.PHONY: dflt help check tox format lint flake8 type-check docs build upload test clean etags conda-build conda-skeleton chaco enable pyibis-ami pyibis-ami-dev pybert pybert-dev etags
+.PHONY: dflt help check tox format lint flake8 type-check docs build upload test clean etags conda-build conda-skeleton chaco enable pyibis-ami pyibis-ami-dev pybert pybert-dev etags reports
 
 PROJ_NAME := PyChOpMarg
 PROJ_FILE := pyproject.toml
@@ -18,6 +18,11 @@ TOX_EXEC := tox
 TOX_SKIP_ENV := format
 PYVERS := 310 311 312 313
 PLATFORMS := lin mac win
+NOTEBOOK_DIR := notebook
+NOTEBOOKS := PyChOpMarg_vs_MATLAB
+NOTEBOOK_EXT := .ipynb
+REPORT_EXT := .html
+PYTHON_SRCS := $(wildcard src/pychopmarg/*.py src/pychopmarg/*/*.py)
 
 # Put it first so that "make" without arguments is like "make help".
 dflt: help
@@ -31,6 +36,14 @@ ${VER_FILE}: ${PROJ_INFO}
 ${PROJ_INFO}: ${PROJ_FILE}
 	${PYTHON_EXEC} -m build
 	${PYTHON_EXEC} -m pip install -e .
+
+reports: ${NOTEBOOK_DIR}/$(addsuffix ${REPORT_EXT},${NOTEBOOKS})
+
+%${REPORT_EXT}: %${NOTEBOOK_EXT}
+	${TOX_EXEC} run -e report -- $<
+
+%${NOTEBOOK_EXT}: ${PYTHON_SRCS}
+	${TOX_EXEC} run -e notebook -- $@
 
 tox:
 	TOX_SKIP_ENV="${TOX_SKIP_ENV}" ${TOX_EXEC} -m test
@@ -84,3 +97,5 @@ help:
 	@echo "    (Only David Banas can do this.)"
 	@echo "  test: Run Tox testing for all supported Python versions."
 	@echo "  clean: Remove all previous build results, virtual environments, and cache contents."
+	@echo "  reports: Generate reports from selected Jupyter notebooks."
+	@echo "    To view the resultant reports, open 'notebook/<report_name>.html' in a browser."

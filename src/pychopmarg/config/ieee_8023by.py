@@ -14,7 +14,7 @@ from pychopmarg.config.template import COMParams
 fB = 25 * 66. / 64.
 
 IEEE_8023by = COMParams(
-    fB, 0.01, 40e9, 2, 32, 1e-5, 0.010, 1.0, 0.4, 0.4, 0.6, 50,
+    fB, 0.01, 2, 32, 1e-5, 0.010, 1.0, 0.4, 0.4, 0.6, 50,
     0.05, 27, 5.2e-8, 0.01,
     fB / 4, fB / 4, fB, 1.0, [float(-n) for n in range(13)], [0.],
     [-1.] * 6, [1.] * 6, [0.25] * 6, 0.,

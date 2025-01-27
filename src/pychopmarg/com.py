@@ -139,8 +139,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         # Create the system time & frequency vectors.
         fb = com_params.fb * 1e9
-        # fstep = com_params.fstep * 1e9
-        fstep = 50e6               # Dramatically improves performance.
+        fstep = com_params.fstep * 1e9
+        # fstep = 50e6               # Dramatically improves performance.
         # - time
         tmax = 1 / fstep           # Just enough to cover one full cycle of the fundamental.
         ui = 1 / fb

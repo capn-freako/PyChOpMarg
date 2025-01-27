@@ -261,7 +261,6 @@ def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=to
     rslt = COMParams(
         com_params_dict["fb"],
         com_params_dict["fstep"],
-        com_params_dict["fmax"],
         com_params_dict["L"],
         com_params_dict["M"],
         com_params_dict["DER_0"],

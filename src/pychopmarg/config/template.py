@@ -13,14 +13,37 @@ import numpy as np
 from pychopmarg.common import Rvec
 
 
-@dataclass
+# @dataclass(frozen=True)  # We take COM parameters to be immutable.
+@dataclass()
 class COMParams():  # pylint: disable=too-many-instance-attributes
-    "Template definition for COM parameters."
+    """
+    Template definition for COM parameters.
+
+    ToDo:
+        1. Use `metadata` to provide units:
+
+            .. code-block:: python
+
+                @dataclass
+                class Product:
+                    name: str
+                    price: float = field(metadata={"unit": "USD"})
+
+        2. Is there a `helptext` field available in `metadata`?
+
+        3. If we ever want to exclude some fields from comparison operations:
+
+            .. code-block:: python
+
+                @dataclass
+                class CustomTask:
+                    name: str
+                    priority: int = field(compare=False)
+    """
 
     # General
     fb: float                   # (GBaud)
     fstep: float                # (GHz)
-    fmax: float                 # (Hz)
     L: int                      # modulation levels
     M: int                      # samples per UI
     DER_0: float                # detector error ratio
