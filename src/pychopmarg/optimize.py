@@ -13,7 +13,7 @@ from typing     import Any, Optional
 import numpy as np
 # pylint: disable=redefined-builtin
 from numpy import (
-    argmax, array, array_equal, concatenate, dot,
+    argmax, array, array_equal, concatenate, dot, identity,
     log10, maximum, minimum, ones, pad, sqrt, sum, vectorize, where, zeros)
 from numpy.linalg import lstsq
 from scipy.linalg import convolution_matrix, solve, toeplitz
@@ -309,9 +309,20 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Hb = H[d + 1: d + 1 + Nb]
             Rn = theNoiseCalc.Rn()[:Nw]
             R = H.T @ H + toeplitz(Rn) / varX
-            A = concatenate((concatenate(( R, -Hb.T,         -h0.reshape((Nw, 1))), axis=1),  # noqa=E201
-                             concatenate((-Hb, ones((Nb, 1)), zeros((Nb, 1))),      axis=1),
-                             concatenate(( h0, zeros(2))).reshape((1, Nw + 2))))              # noqa=E201
+            Ib = identity(Nb)
+            zb = zeros(Nb)
+            try:  # FixMe: The following breaks when `Nb` /= 1!
+                A = concatenate((concatenate(( R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),  # noqa=E201
+                                 concatenate((-Hb, Ib,   zeros((Nb, 1))),       axis=1),
+                                 concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1))))    # noqa=E201
+            except ValueError as err:
+                print(f"R.shape: {R.shape}", flush=True)
+                print(f"Hb.shape: {Hb.shape}", flush=True)
+                print(f"Nw: {Nw}", flush=True)
+                print(f"Nb: {Nb}", flush=True)
+                print(f"h0.reshape((Nw, 1)).shape: {h0.reshape((Nw, 1)).shape}", flush=True)
+                print(f"concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1)).shape: {concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1)).shape}", flush=True)
+                raise
             y = concatenate((h0, zeros(Nb), ones(1)))
             x = solve(A, y)
             w = x[:Nw]

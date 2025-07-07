@@ -91,9 +91,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             ValueError: Unless `f` is uniformly sampled.
 
         Notes:
-            1. No assumption is made, re: any linkage between `t` and `f`.
-            2. The transfer functions are assumed to contain only positive frequency values.
-            3. `f` may begin at zero, but is not required to.
+            1. The transfer functions are assumed to contain only positive frequency values.
 
         ToDo:
             1. Consider defining a data class to hold the initialization data.
@@ -267,7 +265,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         nUI = int(len(dV) / nspui)
         hJ = mean(reshape(concatenate((dV[(ts_ix - 1) % nspui::nspui][:nUI],
                                        dV[(ts_ix    ) % nspui::nspui][:nUI])),  # noqa=E202
-                          shape=(2, nUI)),
+                          (2, nUI)),
                   axis=0) / t[1]
 
         return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
@@ -278,7 +276,11 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         Sxn = sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)
         Stn = self.Stn()
         Sjn = self.Sjn
-        min_len = min(len(Srn), len(Sxn), len(Stn), len(Sjn))
-        Sn = Srn[:min_len] + Sxn[:min_len] + Stn[:min_len] + Sjn[:min_len]
+        if self.agg_pulse_resps:
+            min_len = min(len(Srn), len(Sxn), len(Stn), len(Sjn))
+            Sn = Srn[:min_len] + Sxn[:min_len] + Stn[:min_len] + Sjn[:min_len]
+        else:
+            min_len = min(len(Srn), len(Stn), len(Sjn))
+            Sn = Srn[:min_len] + Stn[:min_len] + Sjn[:min_len]
         # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
         return irfft(Sn) / self.Tb
