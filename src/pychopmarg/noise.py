@@ -120,10 +120,10 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         assert f[1] == f0, ValueError(
             f"The second element of `f` ({f[1]}) must be the fundamental frequency implied by the time vector ({f0})!")
         fs = 1 / t[1]
-        assert f[-1] == fs / 2, ValueError(
+        assert (f[-1] - fs / 2) < eps, ValueError(
             f"The last element of `f` ({f[-1]}) must be half the sampling frequency ({fs})!")
         dfs = diff(f)
-        assert all(dfs == dfs[0]), ValueError(
+        assert all((dfs - dfs[0]) < eps), ValueError(
             "The frequency vector, `f`, must be uniformly sampled!")
 
         super().__init__()
