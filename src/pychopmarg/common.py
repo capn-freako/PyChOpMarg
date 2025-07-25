@@ -27,8 +27,9 @@ COMFiles: TypeAlias = str | list[str]
 COMNtwk: TypeAlias = tuple[rf.Network, str]
 COMChnl: TypeAlias = tuple[COMNtwk, Cvec]
 
-PI: float = np.pi
-TWOPI: float = 2 * np.pi
+# PI    = np.pi  # Making autodoc barf.
+PI    = 3.14159     #: Value of Pi
+TWOPI = 2.0 * PI    #: 2 * Pi
 
 ChnlGrpName: TypeAlias = str  # channel group name
 ChnlSetName: TypeAlias = str  # channel set name (the stem of the thru channel s4p file name)
