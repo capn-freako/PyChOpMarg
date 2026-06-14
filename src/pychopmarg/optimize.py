@@ -282,7 +282,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 
     # Confirm sufficient room for `ts` sweeping.
     assert curs_ix >= ts_sweep_ix, ValueError(
-        f"Insufficient room at beginning of pulse response: {curs_ix}!")
+        f"Insufficient room at beginning of pulse response: {curs_ix}!\nvic_pr: {vic_pr}")
     assert curs_ix <= len(vic_pr) - ts_sweep_ix, ValueError(
         f"Insufficient room at end of pulse response: {len(vic_pr) - curs_ix}!")
 
