@@ -168,8 +168,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                       self.com_params.tau, self.com_params.gamma0, z_pairs),
             self.sC(self.com_params.C_p[0] / 1e9)])
         self._sPkgTx = [sdd_21(rf.network.concat_ports([sPkgTx_SE, sPkgTx_SE], port_order='first'))]
+        cp_rx_ix = min(1, len(com_params.C_p) - 1)
         sPkgRx_SE = rf.network.cascade_list([
-            self.sC(self.com_params.C_p[1] / 1e9),
+            self.sC(self.com_params.C_p[cp_rx_ix] / 1e9),
             sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
                       self.com_params.tau, self.com_params.gamma0, z_pairs),
             self.sDie(True)])
@@ -370,26 +371,29 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     @property
     def gamma1_Rx(self) -> float:
         "Reflection coefficient looking out of the left end of the channel."
-        return self._gamma1[1]
+        return self._gamma1[min(1, len(self._gamma1) - 1)]
 
     @property
     def gamma2_Rx(self) -> float:
         "Reflection coefficient looking out of the right end of the channel."
-        return self._gamma1[1]
+        return self._gamma1[min(1, len(self._gamma1) - 1)]
 
     def sDie(self, isRx: bool) -> rf.Network:
         "On-die parasitic capacitance/inductance ladder network, including bump."
-        if isRx:
-            ix = 1
-        else:
-            ix = 0
-        Cd = self.com_params.C_d[ix] / 1e9
-        Ls = self.com_params.L_s[ix] / 1e9
+        ix = 1 if isRx else 0
+        # C_d[ix], L_s[ix], C_b[ix] may be scalars (single-segment die model);
+        # use atleast_1d so zip/len work regardless of whether the config
+        # supplies one value or a list of per-segment values.
+        # L_s and C_b configs may have fewer than 2 elements — fall back to [0].
+        ls_ix = min(ix, len(self.com_params.L_s) - 1)
+        cb_ix = min(ix, len(self.com_params.C_b) - 1)
+        Cd = np.atleast_1d(np.array(self.com_params.C_d[ix], dtype=float) / 1e9)
+        Ls = np.atleast_1d(np.array(self.com_params.L_s[ls_ix], dtype=float) / 1e9)
         R0 = [self.com_params.R_0] * len(Cd)  # type: ignore
         rslt = rf.network.cascade_list(
             list(map(lambda trip: sDieLadderSegment(self.freqs, trip),
                      zip(R0, Cd, Ls))))  # type: ignore
-        rslt = rslt ** self.sC(self.com_params.C_b[ix] / 1e9)
+        rslt = rslt ** self.sC(self.com_params.C_b[cb_ix] / 1e9)
         if isRx:
             rslt.flip()
         return rslt
