@@ -108,7 +108,7 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     rslt = delta
     for hn in h_samps_filt:
         # Filter out zeros, as per MATLAB code:
-        shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn)))  # (93A-39)
+        shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn).astype(int)))  # (93A-39)
         if shifts:
             _rslt: NDArray = sum(np.roll(rslt, shift) for shift in shifts)  # type: ignore
             rslt  = _rslt / _rslt.sum()  # Enforce a PMF.
