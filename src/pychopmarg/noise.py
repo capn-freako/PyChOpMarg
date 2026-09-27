@@ -175,18 +175,30 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         nspui = self.nspui
         return x[self.ts_ix % nspui::nspui]
 
+    def variance(self, S: Rvec) -> float:
+        """
+        Variance of the noise whose folded PSD is ``S`` (as returned by ``Srn``, ``Sxn()``, ``Stn()``, or ``Sjn``).
+
+        Notes:
+            1. ``S`` holds the [0, PI] half of a two-sided PSD, so its full-band integral is
+            ``irfft(S)[0] / Tb`` (i.e. - ``Rn()[0]`` for that term alone), not ``sum(S) * df``,
+            which counts only positive frequencies.
+        """
+        return float(irfft(S)[0] / self.Tb)
+
     @property
     def Srn(self) -> Rvec:
         """
-        One-sided folded noise PSD at Rx sampler input,
+        Folded (two-sided) Rx noise PSD at Rx FFE input,
         uniformly sampled over [0, PI] (rads./s norm.).
 
         Notes:
             1. Re: the scaling term: ``2 * self.f[-1]``, when combined w/
             the implicit ``1/N`` of the ``irfft()`` function, this gives ``df``.
+            2. As in [1] and the MATLAB COM code, the two-sided density is ``eta0 / 2``
+            (``eta0`` being one-sided), so that ``variance(Srn)`` is the Rx noise variance.
         """
-        # "/ 2" in [1] omitted, since we're only considering: m >= 0.
-        rslt: Cvec  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
+        rslt: Cvec  = self.eta0 / 2 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
         # Rx noise is stationary: fold by sampling its autocorrelation at lags of whole UIs,
         # independent of the cursor sampling phase (unlike `Stn()`/`Sjn`, which are symbol-synchronous).
         _rslt = abs(rfft(irfft(rslt)[::self.nspui])) * 2 * self.f[-1] * self.Tb
@@ -200,7 +212,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
             agg_pulse_resp: Aggressor pulse response (V).
 
         Returns:
-            One-sided crosstalk PSD at Rx FFE input, uniformly sampled over [0, PI] (rads./s norm.).
+            Folded (two-sided) crosstalk PSD at Rx FFE input, uniformly sampled over [0, PI] (rads./s norm.).
         """
 
         t     = self.t
@@ -212,11 +224,11 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         sampled_agg_prs: Rmat = array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
         best_m = argmax(list(map(lambda pr_samps: (pr_samps**2).sum(), sampled_agg_prs)))
 
-        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb * 2  # i.e. - 2/fB = 1/(fB/2) = 1/fN
+        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
 
     def Stn(self, Hrx: Optional[Cvec] = None) -> Rvec:
         """
-        One-sided Tx noise PSD at Rx FFE input,
+        Folded (two-sided) Tx noise PSD at Rx FFE input,
         uniformly sampled over [0, PI] (rads./s norm.).
 
         Keyword Args:
@@ -251,7 +263,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
     @property
     def Sjn(self) -> Rvec:
         """
-        One-sided Noise PSD due to jitter at Rx FFE input,
+        Folded (two-sided) noise PSD due to jitter at Rx FFE input,
         uniformly sampled over [0, PI] (rads./s norm.).
         """
 

@@ -1019,7 +1019,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             varTx = vic_curs_val**2 * pow(10, -self.com_params.SNR_TX / 10)         # (93A-30)
         else:
             Stx = self.theNoiseCalc.Stn(Hrx=Hrx)
-            varTx = sum(Stx) * df                                                   # (178A-17)
+            varTx = self.theNoiseCalc.variance(Stx)                                 # (178A-17)
         hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
         _, pJ = delta_pmf(filt_pr_samps(self.com_params.A_DD * hJ, ymax), L=L, y=y)  # (93A-40)
         varJ = self.com_params.sigma_Rj**2 * varX * (hJ**2).sum()                   # (93A-31)
