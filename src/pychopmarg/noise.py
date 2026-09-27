@@ -187,7 +187,9 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         """
         # "/ 2" in [1] omitted, since we're only considering: m >= 0.
         rslt: Cvec  = self.eta0 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
-        _rslt = abs(rfft(self.baud_rate_sample(irfft(rslt)))) * 2 * self.f[-1] * self.Tb
+        # Rx noise is stationary: fold by sampling its autocorrelation at lags of whole UIs,
+        # independent of the cursor sampling phase (unlike `Stn()`/`Sjn`, which are symbol-synchronous).
+        _rslt = abs(rfft(irfft(rslt)[::self.nspui])) * 2 * self.f[-1] * self.Tb
         return _rslt
 
     def Sxn(self, agg_pulse_resp: Rvec) -> Rvec:
