@@ -373,12 +373,11 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["dfe_tap_weights"] = b_lim
                 rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
                 rslt["cursor_ix"] = ts_ix
-                df = theNoiseCalc.f[1] - theNoiseCalc.f[0]
-                rslt["varTx"] = sum(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1))) * df  # noqa=E501
+                rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1)))  # noqa=E501
                 rslt["varISI"] = varISI
-                rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
-                rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
-                rslt["varN"] = sum(theNoiseCalc.Srn) * df
+                rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
+                rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
+                rslt["varN"] = theNoiseCalc.variance(theNoiseCalc.Srn)
                 # DEBUGGING:
                 rslt["h"] = h
                 rslt["h0"] = h0
@@ -430,11 +429,10 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
         rslt["h"] = h
         rslt["cursor_ix"] = curs_ix
-        df = theNoiseCalc.fN / float(len(theNoiseCalc.Stn()))
-        rslt["varTx"] = sum(theNoiseCalc.Stn()) * df
+        rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn())
         rslt["varISI"] = 0
-        rslt["varJ"] = sum(theNoiseCalc.Sjn) * df
-        rslt["varXT"] = sum(sum(array(list(map(theNoiseCalc.Sxn, theNoiseCalc.agg_pulse_resps))), axis=0)) * df
-        rslt["varN"] = sum(theNoiseCalc.Srn) * df
+        rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
+        rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
+        rslt["varN"] = theNoiseCalc.variance(theNoiseCalc.Srn)
 
     return rslt
