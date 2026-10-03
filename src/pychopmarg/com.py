@@ -34,6 +34,7 @@ from pychopmarg.common import (
     COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName)
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.config.template    import COMParams
+from pychopmarg.devmodel import DeviceModel, gamma_term, renormalize_to, s_rx_model, s_tx_model
 from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import NormMode, mmse, przf
 from pychopmarg.utility  import (
@@ -83,7 +84,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         channels: Path | dict[str, list[Path]],
         vic_chnl_ix: int = 1,
         debug: bool = False,
-        do_init: bool = True
+        do_init: bool = True,
+        tx_device: Optional[DeviceModel] = None,
+        rx_device: Optional[DeviceModel] = None,
+        next_device: Optional[DeviceModel] = None,
     ) -> None:
         """
         Args:
@@ -98,6 +102,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                     - "FEXT": A list of "*.s4p"s containing the Touchstone models for all far-end aggressors.
                     - "NEXT": A list of "*.s4p"s containing the Touchstone models for all near-end aggressors.
 
+                  Any list element may instead be a differential 2-port ``skrf.Network``, used as is.
+
         Keyword Args:
             vic_chnl_ix: Index (1-based) of victim path in s32p.
                 Default: 1
@@ -105,6 +111,14 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 Default: ``False``
             do_init: Skip normal initialization behavior when ``False``.
                 Default: ``True``
+            tx_device: Transmitter device termination/package/partial host model (P802.3dj 178A.1.4).
+                When given along with ``rx_device``, it replaces the package model built from ``com_params``;
+                terminations then come from each device's ``Rd``, and channels are renormalized to ``2 * R_0``.
+                Default: ``None``
+            rx_device: Receiver device model (P802.3dj 178A.1.5). (See ``tx_device``.)
+                Default: ``None``
+            next_device: Near-end aggressor transmitter device model.
+                Default: ``None`` (use ``tx_device``)
         """
 
         self.com_params = com_params
@@ -133,7 +147,10 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 f"Length of `channels['THRU']` must be 1, not {len(channels['THRU'])}!")
             for fname, chtype in [(chnl_name, chnl_type) for chnl_type in chnl_types
                                                          for chnl_name in channels[chnl_type]]:  # noqa=E127
-                ntwks.append((sdd_21(rf.Network(fname)), chtype))
+                if isinstance(fname, rf.Network) and fname.nports == 2:  # Already differential.
+                    ntwks.append((fname, chtype))
+                else:
+                    ntwks.append((sdd_21(rf.Network(fname)), chtype))
         else:
             raise ValueError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
 
@@ -161,22 +178,16 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         Rd = com_params.R_d
         R0 = com_params.R_0
         self._gamma1: Rvec = (Rd - R0) / (Rd + R0)
-        z_pairs = list(zip(com_params.z_c, [com_params.z_p[self.zp_sel], com_params.z_pB]))
-        sPkgTx_SE = rf.network.cascade_list([
-            self.sDie(False),
-            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-                      self.com_params.tau, self.com_params.gamma0, z_pairs),
-            self.sC(self.com_params.C_p[0] / 1e9)])
-        self._sPkgTx = [sdd_21(rf.network.concat_ports([sPkgTx_SE, sPkgTx_SE], port_order='first'))]
-        cp_rx_ix = min(1, len(com_params.C_p) - 1)
-        sPkgRx_SE = rf.network.cascade_list([
-            self.sC(self.com_params.C_p[cp_rx_ix] / 1e9),
-            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-                      self.com_params.tau, self.com_params.gamma0, z_pairs),
-            self.sDie(True)])
-        self._sPkgRx = [sdd_21(rf.network.concat_ports([sPkgRx_SE, sPkgRx_SE], port_order='first'))]
-
-        self.chnls = list(map(self.add_pkg, ntwks))
+        self.use_devices = tx_device is not None and rx_device is not None
+        if self.use_devices:
+            assert tx_device is not None and rx_device is not None  # (for type checkers)
+            self._gamma1 = array([gamma_term(tx_device.Rd, R0), gamma_term(rx_device.Rd, R0)])
+            self._sPkgTx = [s_tx_model(self.freqs, tx_device, R0)]
+            self._sPkgRx = [s_rx_model(self.freqs, rx_device, R0)]
+            self._sPkgNext = [s_tx_model(self.freqs, next_device or tx_device, R0)]
+            self.chnls = list(map(self.add_pkg, ntwks))
+        else:
+            self._build_legacy_pkg(ntwks)
         if debug:
             self.chnls_noPkg = list(
                 map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1_Tx, self.gamma2_Rx)),
@@ -267,6 +278,26 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         return com
 
     # Instance Properties
+    def _build_legacy_pkg(self, ntwks: list[COMNtwk]) -> None:
+        "Build the (pre-178A) package model from `com_params`, and add it to the channels."
+        com_params = self.com_params
+        z_pairs = list(zip(com_params.z_c, [com_params.z_p[self.zp_sel], com_params.z_pB]))
+        sPkgTx_SE = rf.network.cascade_list([
+            self.sDie(False),
+            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
+                      self.com_params.tau, self.com_params.gamma0, z_pairs),
+            self.sC(self.com_params.C_p[0] / 1e9)])
+        self._sPkgTx = [sdd_21(rf.network.concat_ports([sPkgTx_SE, sPkgTx_SE], port_order='first'))]
+        cp_rx_ix = min(1, len(com_params.C_p) - 1)
+        sPkgRx_SE = rf.network.cascade_list([
+            self.sC(self.com_params.C_p[cp_rx_ix] / 1e9),
+            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
+                      self.com_params.tau, self.com_params.gamma0, z_pairs),
+            self.sDie(True)])
+        self._sPkgRx = [sdd_21(rf.network.concat_ports([sPkgRx_SE, sPkgRx_SE], port_order='first'))]
+
+        self.chnls = list(map(self.add_pkg, ntwks))
+
     @property
     def fb(self) -> float:
         "Baud. rate (Hz)"
@@ -411,6 +442,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     @property
     def sPkgNEXT(self) -> rf.Network:
         "NEXT package response."
+        if self.use_devices:
+            return self._sPkgNext[0]
         return self._sPkgTx[0]
 
     # Package modeling
@@ -430,6 +463,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             ] * pad_len)  # noqa=E124
         new_s = np.array(new_s)
         sChnlInterp = rf.Network(s=new_s, z0=sChnlInterp.z0[0], f=freqs)
+        if self.use_devices:  # Transform to the reference impedance of the device models (178A-4).
+            sChnlInterp = renormalize_to(sChnlInterp, 2 * self.com_params.R_0)
 
         ntype = ntwk[1]
         if ntype == 'NEXT':
