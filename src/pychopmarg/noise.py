@@ -245,7 +245,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx * self.Av  # "* Av" is for consistency w/ MATLAB code.
         htn  = irfft(Htn)                               # impulse response of complete signal path, except Tx FFE
-        htn_ave_xM = lfilter(ones(self.nspui), 1, htn)  # combination averaging and pre-normalization filter
+        htn_ave_xM = lfilter(ones(self.nspui), ones(1), htn)  # combination averaging and pre-normalization filter
         _htn = self.baud_rate_sample(htn_ave_xM)        # decimated by `nspui`
         _Htn = rfft(_htn)
 

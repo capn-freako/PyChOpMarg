@@ -916,7 +916,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                             'gDC2': _gDC2, 'gDC': _gDC, 'tx_ix': _tx_ix,
                             **{k: rslts[k] for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'cursor_ix', 'As',
                                                      'varTx', 'varISI', 'varJ', 'varXT', 'varN', 'vic_pulse_resp')},
-                            'mse': rslts['mse'] if 'mse' in rslts else 0,
+                            'mse': rslts.get('mse', 0),
                         }
 
         # Check for error and save the best results.
