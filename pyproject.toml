@@ -86,9 +86,6 @@ ignore = [
     "D107", # Missing docstring in __init__
 ]
 
-[tool.mypy]
-plugins = "numpy.typing.mypy_plugin"
-
 [[tool.mypy.overrides]]
 module = [
     "scipy.*",
@@ -100,3 +97,19 @@ module = [
     "traitsui.*"
 ]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "m2r2>=0.3.4",
+    "mcp>=2.0.0",
+    "mypy>=1.19.1",
+    "pip>=25.3",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",
+    "scipy-stubs>=1.15.3.0",
+    "sphinx>=8.1.3",
+    "sphinx-rtd-theme>=3.1.0",
+    "types-pyyaml>=6.0.12.20250915",
+    "typing-extensions>=4.15.0",
+]
