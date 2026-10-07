@@ -23,7 +23,7 @@ ToDo:
 
 from functools import cache
 from pathlib import Path
-from typing  import Any, Dict, Optional
+from typing  import Any, Dict, Optional, cast
 
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
@@ -61,8 +61,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
     dfe_taps: Rvec = array([])
     nRxTaps: int = 0
     nRxPreTaps: int = 0     # `dw` from `com_params`
-    gDC = 0.0               # Choices are in `com_params.g_DC`.
-    gDC2 = 0.0              # Choices are in `com_params.g_DC2`.
+    gDC: float = 0.0            # Choices are in `com_params.g_DC`.
+    gDC2: float = 0.0           # Choices are in `com_params.g_DC2`.
     rx_ffe_phase_matrix: Cmat = array([])
 
     # Channel data
@@ -150,7 +150,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 if isinstance(fname, rf.Network) and fname.nports == 2:  # Already differential.
                     ntwks.append((fname, chtype))
                 else:
-                    ntwks.append((sdd_21(rf.Network(fname)), chtype))
+                    ntwks.append((sdd_21(rf.Network(str(fname))), chtype))
         else:
             raise ValueError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
 
@@ -222,8 +222,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
     def __call__(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         self,
-        do_opt_eq: bool = True,
-        tx_taps:   Optional[Rvec]     = None,
         opt_mode:  Optional[OptMode]  = None,
         norm_mode: Optional[NormMode] = None,
         unit_amp:  Optional[bool]     = None,
@@ -233,10 +231,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         Calculate the COM value.
 
         Keyword Args:
-            do_opt_eq: Perform optimization of linear equalization when True.
-                Default: True
-            tx_taps: Used when `do_opt_eq` = False.
-                Default: None
             opt_mode: Optimization mode.
                 Default: None (i.e. - Use `self.opt_mode`.)
             norm_mode: The tap weight normalization mode to use.
@@ -267,8 +261,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             self.dbg_dict  = dbg_dict
 
         self.set_status("Optimizing EQ...")
-        assert self.opt_eq(do_opt_eq=do_opt_eq, tx_taps=tx_taps), RuntimeError(
-            "EQ optimization failed!")
+        assert self.opt_eq(), RuntimeError("EQ optimization failed!")
         self.set_status("Calculating noise...")
         As, Ani, self.cursor_ix = self.calc_noise(
             cursor_ix=self.fom_rslts['cursor_ix'])
@@ -453,8 +446,9 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         # Pre-interpolate channel model to system frequency vector, to prevent noisy non-causal artifacts.
         freqs = self.freqs
         sChnl = ntwk[0]
-        sChnlInterp = sChnl.extrapolate_to_dc().interpolate(
-            freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True)
+        # (`interpolate()` is typed `Network | ndarray`; it returns the latter only when given `return_array=True`.)
+        sChnlInterp = cast(rf.Network, sChnl.extrapolate_to_dc().interpolate(
+            freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True))
         new_s = sChnlInterp.s.tolist()  # I couldn't make NumPy array padding work correctly here.
         pad_len = len(freqs) - len(sChnlInterp.f)
         new_s.extend(
@@ -872,10 +866,8 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
 
         return fom
 
-    def opt_eq(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
+    def opt_eq(  # pylint: disable=too-many-locals
         self,
-        do_opt_eq: bool = True,
-        tx_taps: Optional[Rvec] = None,
         opt_mode: Optional[OptMode] = None,
         norm_mode: Optional[NormMode] = None,
         unit_amp: Optional[bool] = None
@@ -886,10 +878,6 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         (or, [1] slide 11 if MMSE has been chosen).
 
         Keyword Args:
-            do_opt_eq: Perform optimization of linear EQ when True.
-                Default: True
-            tx_taps: Used when ``do_opt_eq`` = False.
-                Default: None
             opt_mode: Optimization mode.
                 Default: None (i.e. - Use ``self.opt_mode``.)
             norm_mode: The tap weight normalization mode to use.
@@ -905,82 +893,53 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             1. The found optimum equalization values are set for the instance.
         """
 
-        if do_opt_eq:
-            # Honor any mode overrides.
-            opt_mode  = opt_mode  or self.opt_mode
-            norm_mode = norm_mode or self.norm_mode
-            if unit_amp is None:  # Don't try the more Pythonic syntax above; it doesn't work for Boolean values.
-                unit_amp = self.unit_amp
+        # Honor any mode overrides.
+        opt_mode  = opt_mode  or self.opt_mode
+        norm_mode = norm_mode or self.norm_mode
+        if unit_amp is None:  # Don't try the more Pythonic syntax above; it doesn't work for Boolean values.
+            unit_amp = self.unit_amp
 
-            # Run the nested optimization loops.
-            fom_max = -1000.0
-            fom_max_changed = False
-            for _gDC2 in self.com_params.g_DC2:
-                for _gDC in self.com_params.g_DC:
-                    _Hctle = self.calc_Hctf(_gDC, _gDC2)
-                    for _tx_ix in range(self.num_tx_combs):
-                        fom = self.calc_fom(
-                            _tx_ix, _Hctle,
-                            opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
-                        if fom > fom_max:
-                            fom_max_changed = True
-                            fom_max = fom
-                            gDC2_best = _gDC2
-                            gDC_best = _gDC
-                            tx_ix_best = _tx_ix
-                            rx_taps_best = self.fom_rslts['rx_taps']
-                            pr_samps_best = self.fom_rslts['pr_samps']
-                            dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
-                            cursor_ix_best = self.fom_rslts['cursor_ix']
-                            As_best = self.fom_rslts['As']
-                            varTx_best = self.fom_rslts['varTx']
-                            varISI_best = self.fom_rslts['varISI']
-                            varJ_best = self.fom_rslts['varJ']
-                            varXT_best = self.fom_rslts['varXT']
-                            varN_best = self.fom_rslts['varN']
-                            vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
-                            mse_best = self.fom_rslts['mse'] if 'mse' in self.fom_rslts else 0
-        else:
-            assert tx_taps, RuntimeError("You must define `tx_taps` when setting `do_opt_eq` False!")
-            fom = self.calc_fom(0, self.calc_Hctf(self.gDC, self.gDC2))
-            fom_max = fom
-            fom_max_changed = True
-            gDC2_best = self.gDC2
-            gDC_best = self.gDC
-            tx_ix_best = 0
-            rx_taps_best = self.rx_taps
-            dfe_tap_weights_best = self.fom_rslts['dfe_tap_weights']
-            cursor_ix_best = self.fom_rslts['cursor_ix']
-            As_best = self.fom_rslts['As']
-            varTx_best = self.fom_rslts['varTx']
-            varISI_best = self.fom_rslts['varISI']
-            varJ_best = self.fom_rslts['varJ']
-            varXT_best = self.fom_rslts['varXT']
-            varN_best = self.fom_rslts['varN']
-            vic_pulse_resp = self.fom_rslts['vic_pulse_resp']
-            mse_best = 0
+        # Run the nested optimization loops, keeping the best candidate's results.
+        fom_max = -1000.0
+        best: Optional[dict[str, Any]] = None
+        for _gDC2 in self.com_params.g_DC2:
+            for _gDC in self.com_params.g_DC:
+                _Hctle = self.calc_Hctf(_gDC, _gDC2)
+                for _tx_ix in range(self.num_tx_combs):
+                    fom = self.calc_fom(
+                        _tx_ix, _Hctle,
+                        opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
+                    if fom > fom_max:
+                        fom_max = fom
+                        rslts = self.fom_rslts
+                        best = {
+                            'gDC2': _gDC2, 'gDC': _gDC, 'tx_ix': _tx_ix,
+                            **{k: rslts[k] for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'cursor_ix', 'As',
+                                                     'varTx', 'varISI', 'varJ', 'varXT', 'varN', 'vic_pulse_resp')},
+                            'mse': rslts['mse'] if 'mse' in rslts else 0,
+                        }
 
         # Check for error and save the best results.
-        if not fom_max_changed:
+        if best is None:
             return False  # Flags the caller that the following settings have NOT been made.
         # Note the normalization of the Rx FFE tap weights, to produce a unit amplitude cursor tap.
         # This is not dictated by the spec., but is what the MATLAB code does.
-        self.gDC2     = gDC2_best                                   # pylint: disable=possibly-used-before-assignment
-        self.gDC      = gDC_best                                    # pylint: disable=possibly-used-before-assignment
-        self.tx_ix    = tx_ix_best                                  # pylint: disable=possibly-used-before-assignment
-        self.rx_taps  = rx_taps_best / rx_taps_best[self.nRxPreTaps]  # pylint: disable=possibly-used-before-assignment
-        self.dfe_taps = dfe_tap_weights_best                        # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['FOM']            = fom_max                  # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['mse']            = mse_best                 # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['pr_samps']       = pr_samps_best            # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['cursor_ix']      = cursor_ix_best           # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['As']             = As_best                  # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['sigma_ISI']      = np.sqrt(varISI_best)     # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['sigma_J']        = np.sqrt(varJ_best)       # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['sigma_XT']       = np.sqrt(varXT_best)      # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['sigma_Tx']       = np.sqrt(varTx_best)      # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['sigma_N']        = np.sqrt(varN_best)       # pylint: disable=possibly-used-before-assignment
-        self.fom_rslts['vic_pulse_resp'] = vic_pulse_resp           # pylint: disable=possibly-used-before-assignment
+        self.gDC2     = best['gDC2']
+        self.gDC      = best['gDC']
+        self.tx_ix    = best['tx_ix']
+        self.rx_taps  = best['rx_taps'] / best['rx_taps'][self.nRxPreTaps]
+        self.dfe_taps = best['dfe_tap_weights']
+        self.fom_rslts['FOM']            = fom_max
+        self.fom_rslts['mse']            = best['mse']
+        self.fom_rslts['pr_samps']       = best['pr_samps']
+        self.fom_rslts['cursor_ix']      = best['cursor_ix']
+        self.fom_rslts['As']             = best['As']
+        self.fom_rslts['sigma_ISI']      = np.sqrt(best['varISI'])
+        self.fom_rslts['sigma_J']        = np.sqrt(best['varJ'])
+        self.fom_rslts['sigma_XT']       = np.sqrt(best['varXT'])
+        self.fom_rslts['sigma_Tx']       = np.sqrt(best['varTx'])
+        self.fom_rslts['sigma_N']        = np.sqrt(best['varN'])
+        self.fom_rslts['vic_pulse_resp'] = best['vic_pulse_resp']
         return True
 
     # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
