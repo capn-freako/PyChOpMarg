@@ -278,7 +278,7 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         # Truncate at # of whole UIs in `dV`, to avoid +/-1 length variation, due to sampling phase.
         nUI = int(len(dV) / nspui)
         hJ = mean(reshape(concatenate((dV[(ts_ix - 1) % nspui::nspui][:nUI],
-                                       dV[(ts_ix    ) % nspui::nspui][:nUI])),
+                                       dV[ts_ix % nspui::nspui][:nUI])),
                           (2, nUI)),
                   axis=0) / t[1]
 

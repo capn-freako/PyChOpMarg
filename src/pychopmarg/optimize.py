@@ -312,16 +312,16 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Ib = identity(Nb)
             zb = zeros(Nb)
             try:  # FixMe: The following breaks when `Nb` /= 1!
-                A = concatenate((concatenate(( R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),
-                                 concatenate((-Hb, Ib,   zeros((Nb, 1))),       axis=1),
-                                 concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1))))
+                A = concatenate((concatenate((R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),
+                                 concatenate((-Hb, Ib, zeros((Nb, 1))), axis=1),
+                                 concatenate((h0, zb, zeros(1))).reshape((1, Nw + Nb + 1))))
             except ValueError:
                 print(f"R.shape: {R.shape}", flush=True)
                 print(f"Hb.shape: {Hb.shape}", flush=True)
                 print(f"Nw: {Nw}", flush=True)
                 print(f"Nb: {Nb}", flush=True)
                 print(f"h0.reshape((Nw, 1)).shape: {h0.reshape((Nw, 1)).shape}", flush=True)
-                print(f"concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1)).shape: {concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1)).shape}", flush=True)
+                print(f"concatenate((h0, zb, zeros(1))).reshape((1, Nw + Nb + 1)).shape: {concatenate((h0, zb, zeros(1))).reshape((1, Nw + Nb + 1)).shape}", flush=True)
                 raise
             y = concatenate((h0, zeros(Nb), ones(1)))
             x = solve(A, y)

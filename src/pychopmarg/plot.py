@@ -96,7 +96,7 @@ def plot_group_samps(  # pylint: disable=too-many-arguments,too-many-positional-
     print("     ", end="")
     chnls_used: dict[str, list[str]] = {}
     for grp in group_names:  # pylint: disable=too-many-nested-blocks
-        print(f"{grp : ^45s}", end="")
+        print(f"{grp:^45s}", end="")
         chnls_used.update({grp: []})
         if chnls_by_grp:
             chnls = chnls_by_grp[grp]

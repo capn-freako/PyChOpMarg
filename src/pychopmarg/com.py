@@ -138,8 +138,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 f"When `channels` is a dictionary it must contain: {chnl_types} keys, which must all refer to lists!")
             assert len(channels["THRU"]) == 1, ValueError(
                 f"Length of `channels['THRU']` must be 1, not {len(channels['THRU'])}!")
-            for fname, chtype in [(chnl_name, chnl_type) for chnl_type in chnl_types
-                                                         for chnl_name in channels[chnl_type]]:
+            named_chnls = [(chnl_name, chnl_type) for chnl_type in chnl_types for chnl_name in channels[chnl_type]]
+            for fname, chtype in named_chnls:
                 if isinstance(fname, rf.Network) and fname.nports == 2:  # Already differential.
                     ntwks.append((fname, chtype))
                 else:
@@ -441,10 +441,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True))
         new_s = sChnlInterp.s.tolist()  # I couldn't make NumPy array padding work correctly here.
         pad_len = len(freqs) - len(sChnlInterp.f)
-        new_s.extend(
-            [[[sChnlInterp.s11.s[-1, 0, 0], sChnlInterp.s12.s[-1, 0, 0]],
-              [sChnlInterp.s21.s[-1, 0, 0], sChnlInterp.s22.s[-1, 0, 0]]]
-            ] * pad_len)
+        last_s = [[sChnlInterp.s11.s[-1, 0, 0], sChnlInterp.s12.s[-1, 0, 0]],
+                  [sChnlInterp.s21.s[-1, 0, 0], sChnlInterp.s22.s[-1, 0, 0]]]
+        new_s.extend([last_s] * pad_len)
         new_s = np.array(new_s)
         sChnlInterp = rf.Network(s=new_s, z0=sChnlInterp.z0[0], f=freqs)
         if self.use_devices:  # Transform to the reference impedance of the device models (178A-4).
@@ -802,8 +801,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 # Step g - Crosstalk.
                 varXT = 0.
                 for pulse_resp in pulse_resps[1:]:                                                      # (93A-34)
-                    varXT += max((filt_pr_samps(pulse_resp[m::M], As)**2).sum()
-                                  for m in range(M))                                                    # (93A-33)
+                    varXT += max((filt_pr_samps(pulse_resp[m::M], As)**2).sum() for m in range(M))  # (93A-33)
                 varXT *= varX
 
                 # Step h - Spectral noise.

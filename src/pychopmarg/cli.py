@@ -65,6 +65,7 @@ def run_notebook(notebook_file: Path):
     """
     execute_notebook(notebook_file)
 
+
 # @cli.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @cli.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("notebook-file", type=click.Path(exists=True))
@@ -74,4 +75,3 @@ def convert_notebook(notebook_file: Path, out_file: Optional[Path] = None):
     Convert a Jupyter notebook to an HTML report, omitting all code.
     """
     convert_notebook_to_html(Path(notebook_file), results_path=out_file)
-    

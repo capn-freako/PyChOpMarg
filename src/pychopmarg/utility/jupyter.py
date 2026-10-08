@@ -9,7 +9,7 @@ Copyright (c) 2025 David Banas; all rights reserved World wide.
 """
 
 import os
-from   pathlib      import Path
+from pathlib      import Path
 import subprocess
 from typing         import Optional
 
@@ -24,7 +24,7 @@ def execute_notebook(notebook_path: Path) -> None:
 
     if not os.path.exists(notebook_path):
         raise FileNotFoundError(f"The notebook {notebook_path} was not found!")
-    
+
     subprocess.run([
         'jupyter', 'nbconvert', '--to', 'notebook', '--execute', '--inplace', notebook_path],
         check=True)
@@ -44,7 +44,7 @@ def convert_notebook_to_html(notebook_path: Path, results_path: Optional[Path] =
 
     if not os.path.exists(notebook_path):
         raise FileNotFoundError(f"The notebook {notebook_path} was not found!")
-    
+
     html_path = results_path or Path(notebook_path.name).with_suffix('.html')
     subprocess.run(
         ['jupyter', 'nbconvert', '--to', 'html', '--no-input', '--output', html_path, notebook_path],
