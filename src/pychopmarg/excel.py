@@ -101,7 +101,7 @@ def alternative(
     """
     try:
         rslt = f(x)
-    except:  # noqa=E722 pylint: disable=bare-except
+    except:  # pylint: disable=bare-except
         rslt = g(x)
     return rslt
 
@@ -168,10 +168,10 @@ def cfg_trans(com_cfg: NDArray) -> dict[str, Any]:
 
 
 # Kept global, so I can inspect it later while debugging:
-com_params_dict = {}  # pylint: disable=global-statement
+com_params_dict: dict[Any, Any] = {}  # pylint: disable=global-statement
 
 
-def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=too-many-locals,too-many-branches,too-many-statements
+def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     "Read a COM configuration XLS file and return an equivalent ``COMParams`` instance."
 
     global com_params_dict  # pylint: disable=global-statement
@@ -217,7 +217,7 @@ def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=to
     # Set Rx FFE config.
     if "dw" in com_params_dict:
         assert "ffe_post_tap_len" in com_params_dict, ValueError(
-            "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")  # noqa=E501
+            "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")
         nRxPreTaps = com_params_dict["dw"]
         nRxPostTaps = com_params_dict["ffe_post_tap_len"]
         nRxTaps = nRxPreTaps + 1 + nRxPostTaps  # Includes cursor tap.

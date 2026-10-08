@@ -30,7 +30,7 @@ class ZoomMode(Enum):
     RELATIVE = 5    # x-axis min. & max. specified by caller, relative to pulse peak location.
 
 
-def plot_group_samps(  # noqa=501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
+def plot_group_samps(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     plot_func: Callable[[COM, str, str, str, dict[str, str], Any, Any], None],
     x_lbl: str, y_lbls: tuple[str, str],
     coms: list[tuple[str, dict[str, str], dict[str, dict[str, COM]]]],
@@ -179,7 +179,7 @@ def plot_pulse_resps_gen(  # pylint: disable=too-many-statements
         1. Add a fourth pulse response option: pre-FFE.
     """
 
-    def plot_pulse_resps(  # noqa=501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,unused-argument
+    def plot_pulse_resps(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,unused-argument
         com: COM, grp: str, lbl: str, nm: str, opts: dict[str, str], ax1: Any, ax2: Any
     ) -> None:
         """

@@ -312,9 +312,9 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Ib = identity(Nb)
             zb = zeros(Nb)
             try:  # FixMe: The following breaks when `Nb` /= 1!
-                A = concatenate((concatenate(( R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),  # noqa=E201
+                A = concatenate((concatenate(( R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),
                                  concatenate((-Hb, Ib,   zeros((Nb, 1))),       axis=1),
-                                 concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1))))    # noqa=E201
+                                 concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1))))
             except ValueError as err:
                 print(f"R.shape: {R.shape}", flush=True)
                 print(f"Hb.shape: {Hb.shape}", flush=True)
@@ -360,7 +360,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             hISI = concatenate((array([h0 @ w_lim - 1]), Hb @ w_lim, H[d + 1 + Nb:] @ w_lim))
             varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
-            mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]  # noqa=501
+            mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
             fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
             if fom > max_fom:
                 max_fom = fom
@@ -373,7 +373,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["dfe_tap_weights"] = b_lim
                 rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
                 rslt["cursor_ix"] = ts_ix
-                rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1)))  # noqa=E501
+                rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1)))
                 rslt["varISI"] = varISI
                 rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
                 rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])

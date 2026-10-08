@@ -154,7 +154,7 @@ def renormalize_to(ntwk: rf.Network, z0: float) -> rf.Network:
     """
     rslt = ntwk.copy()
     if not np.allclose(rslt.z0, z0):
-        rslt.renormalize(z0)
+        rslt.renormalize(z0)  # type: ignore
     return rslt
 
 
