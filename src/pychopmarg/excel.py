@@ -171,14 +171,11 @@ com_params_dict: dict[Any, Any] = {}  # pylint: disable=global-statement
 
 
 def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-    "Read a COM configuration XLS file and return an equivalent ``COMParams`` instance."
+    "Read a COM configuration spreadsheet (*.xls or *.xlsx) and return an equivalent ``COMParams`` instance."
 
     global com_params_dict  # pylint: disable=global-statement
 
-    if cfg_file.suffix == "xlsx":  # You'll need to manually export to `*.xls` from within Excel.
-        raise RuntimeError("Currently, *.XLSX files must first be manually converted to *.XLS.")
-        # com_cfg = pd.read_excel(cfg_file, engine_kwargs={"read_only": True})  # Doesn't work, currently.
-    com_cfg = pd.read_excel(cfg_file)
+    com_cfg = pd.read_excel(cfg_file)  # (Engine chosen by extension: `xlrd` for *.xls, `openpyxl` for *.xlsx.)
 
     _com_cfg = com_cfg.to_numpy()
     com_cfg1 = _com_cfg[:, range(2)]

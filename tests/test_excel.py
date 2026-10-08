@@ -1,7 +1,10 @@
 """Tests for the COM configuration spreadsheet parser (``pychopmarg.excel``)."""
 
+import dataclasses
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from pychopmarg.excel import get_com_params
@@ -24,3 +27,15 @@ def test_ctle_gains_are_attenuations(params):
 def test_validates(params):
     "The parsed parameters, including the sheet's per-device (2-D) `C_d`/`L_s`, pass `COMParams` validation."
     assert params.C_d.shape == (2, 3)
+
+
+
+@pytest.mark.parametrize("name", ["config.xlsx", "CONFIG.XLSX"])
+def test_xlsx_reads_same_as_xls(tmp_path, params, name):
+    "The same configuration, saved as *.xlsx, parses to identical parameters."
+    xlsx = tmp_path / name
+    pd.read_excel(CFG, header=None).to_excel(xlsx, header=False, index=False)
+    xlsx_params = get_com_params(xlsx)
+    for field in dataclasses.fields(params):
+        assert np.array_equal(np.asarray(getattr(xlsx_params, field.name), dtype=object),
+                              np.asarray(getattr(params, field.name), dtype=object)), field.name

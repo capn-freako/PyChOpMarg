@@ -18,7 +18,10 @@ license = {text = "BSD3"}
 dependencies = [
     "click",
     "numpy",
+    "openpyxl",  # COM configuration spreadsheets: *.xlsx
+    "pandas",
     "scikit-rf>=0.29",
+    "xlrd",      # COM configuration spreadsheets: *.xls
     "typing_extensions",  # SciKit-RF requires this, but doesn't include it itself.
 ]
 keywords=["com", "channel", "margin"]

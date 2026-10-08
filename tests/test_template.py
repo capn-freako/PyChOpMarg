@@ -30,3 +30,10 @@ def test_list_values_are_range_checked(name, value):
     "Each element of a list-valued parameter is range checked (they once weren't checked at all)."
     with pytest.raises(ValueError, match=rf"`{name}\[\d\]`"):
         dataclasses.replace(IEEE_8023dj, **{name: value})
+
+
+@pytest.mark.parametrize("name", ["A_fe", "A_ne"])
+def test_aggressor_amplitudes_are_checked(name):
+    "`A_fe`/`A_ne` are checked against their own values (they were once both checked using `A_v`)."
+    with pytest.raises(ValueError, match=rf"`{name}`"):
+        dataclasses.replace(IEEE_8023dj, **{name: 0.05})
