@@ -45,12 +45,18 @@ def test_xlsx_reads_same_as_xls(tmp_path, params, name):
     ({"b_max(2..N_b)": 0.3}, [0.0, -0.3, -0.3], [0.85, 0.3, 0.3]),                         # `b_min` defaults to `-b_max`.
     ({"b_max(2..N_b)": 0.3, "b_min(2..N_b)": -0.1}, [0.0, -0.1, -0.1], [0.85, 0.3, 0.3]),  # Explicit `b_min`.
     ({"b_max(2..N_b)": 0.3, "b_min(1)": None}, [-0.85, -0.3, -0.3], [0.85, 0.3, 0.3]),    # No `b_min(1)` row.
+    ({"b_max(2..N_b)": None}, [0.0, -0.2, -0.2], [0.85, 0.2, 0.2]),                         # No `b_max(2..N_b)` row.
+    ({"b_max(2..N_b)": "[0.3 0.25]"}, [0.0, -0.3, -0.25], [0.85, 0.3, 0.25]),               # Per-tap `b_max`.
 ])
 def test_dfe_limits(tmp_path, rows, dfe_min, dfe_max):
-    "Each DFE tap's minimum is the sheet's `b_min` (tap 1: `b_min(1)`; taps 2..N_b: `b_min(2..N_b)`), or else `-b_max`."
+    """Each DFE tap's minimum is the sheet's `b_min` (tap 1: `b_min(1)`; taps 2..N_b: `b_min(2..N_b)`), or else `-b_max`.
+    Taps 2..N_b's maximum is `b_max(2..N_b)` (a scalar, or one per tap), or else 0.2. (As MATLAB COM.)"""
     sheet = pd.read_excel(CFG, header=None)
     sheet.loc[sheet[0] == "N_b", 1] = 3
-    sheet.loc[sheet[0] == "b_max(2..N_b)", 1] = rows["b_max(2..N_b)"]
+    if rows["b_max(2..N_b)"] is None:  # Omit `b_max(2..N_b)`.
+        sheet = sheet[sheet[0] != "b_max(2..N_b)"]
+    else:
+        sheet.loc[sheet[0] == "b_max(2..N_b)", 1] = rows["b_max(2..N_b)"]
     if "b_min(2..N_b)" in rows:
         sheet.loc[len(sheet), [0, 1]] = ["b_min(2..N_b)", rows["b_min(2..N_b)"]]
     if rows.get("b_min(1)", 0.0) is None:  # Omit `b_min(1)`.

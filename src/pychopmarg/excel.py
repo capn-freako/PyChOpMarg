@@ -252,9 +252,9 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
             if "b_max1" in com_params_dict:
                 dfe_max[0] = float(com_params_dict["b_max1"])
             dfe_min[0] = float(com_params_dict.get("b_min1", -dfe_max[0]))  # As MATLAB COM, defaults to `-b_max`.
-            if N_b > 1 and "b_maxN" in com_params_dict:  # Taps 2..N_b: as MATLAB COM, `b_min` defaults to `-b_max`.
-                dfe_max[1:] = float(com_params_dict["b_maxN"])
-                dfe_min[1:] = float(com_params_dict.get("b_minN", -dfe_max[1]))
+            if N_b > 1:  # Taps 2..N_b, as MATLAB COM: `b_max` defaults to 0.2, `b_min` to `-b_max`; each may be per tap.
+                dfe_max[1:] = np.asarray(com_params_dict.get("b_maxN", 0.2), dtype=float).ravel()
+                dfe_min[1:] = np.asarray(com_params_dict.get("b_minN", -dfe_max[1:]), dtype=float).ravel()
 
     rslt = COMParams(
         com_params_dict["fb"],
