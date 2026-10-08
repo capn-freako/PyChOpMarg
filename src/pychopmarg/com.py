@@ -23,7 +23,7 @@ ToDo:
 
 from functools import cache
 from pathlib import Path
-from typing  import Any, Dict, Optional, cast
+from typing  import Any, Optional, cast
 
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
@@ -32,7 +32,6 @@ from numpy             import array, arange
 from pychopmarg.common import (
     PI, TWOPI, Cvec, Rvec, Cmat, OptMode,
     COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName)
-from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.config.template    import COMParams
 from pychopmarg.devmodel import DeviceModel, gamma_term, renormalize_to, s_rx_model, s_tx_model
 from pychopmarg.noise    import NoiseCalc
@@ -42,43 +41,12 @@ from pychopmarg.utility  import (
     delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs)
 
 
-class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-methods
+class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-methods
     """
     Encoding of the IEEE 802.3-22 Annex 93A/178A 'Channel Operating Margin' (COM) specification.
     """
 
-    # General
-    status_str = str("Ready")
-    debug = bool(False)
-    opt_mode = OptMode(OptMode.MMSE)
-    norm_mode = NormMode(NormMode.P8023dj)
-    unit_amp = bool(True)
-    com_params = IEEE_8023dj
-
-    # Linear EQ
-    tx_ix: int = 0          # Index into list of all possible combinations of Tx FFE tap weights.
-    rx_taps: Rvec = array([1.0])
-    dfe_taps: Rvec = array([])
-    nRxTaps: int = 0
-    nRxPreTaps: int = 0     # `dw` from `com_params`
-    gDC: float = 0.0            # Choices are in `com_params.g_DC`.
-    gDC2: float = 0.0           # Choices are in `com_params.g_DC2`.
-    rx_ffe_phase_matrix: Cmat = array([])
-
-    # Channel data
-    vic_chnl_ix = int(1)  # Used with s32p file.
-    chnls: list[COMChnl] = []
-    chnls_noPkg: list[COMChnl] = []
-    pulse_resps_nopkg: list[Rvec] = []
-    pulse_resps_noeq:  list[Rvec] = []
-    cursor_ix: int = 0
-
-    # Package
-    zp_sel = 0  # package length selector
-    _sPkgTx: list[rf.Network] = []
-    _sPkgRx: list[rf.Network] = []
-
-    def __init__(  # noqa=E501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
+    def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
         self,
         com_params: COMParams,
         channels: Path | dict[str, list[Path]],
@@ -121,9 +89,36 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 Default: ``None`` (use ``tx_device``)
         """
 
-        self.com_params = com_params
-        self.debug = debug
-        self.do_init = do_init
+        # General
+        self.com_params: COMParams = com_params
+        self.debug: bool = debug
+        self.do_init: bool = do_init
+        self.status_str: str = "Ready"
+        self.opt_mode: OptMode = OptMode(OptMode.MMSE)
+        self.norm_mode: NormMode = NormMode(NormMode.P8023dj)
+        self.unit_amp: bool = True
+
+        # Linear EQ
+        self.tx_ix: int = 0             #: Index into list of all possible combinations of Tx FFE tap weights.
+        self.rx_taps: Rvec = array([1.0])
+        self.dfe_taps: Rvec = array([])
+        self.nRxTaps: int = 0
+        self.nRxPreTaps: int = 0        #: `dw` from `com_params`
+        self.gDC: float = 0.0           #: Choices are in `com_params.g_DC`.
+        self.gDC2: float = 0.0          #: Choices are in `com_params.g_DC2`.
+        self.rx_ffe_phase_matrix: Cmat = array([])
+
+        # Channel data
+        self.chnls: list[COMChnl] = []
+        self.chnls_noPkg: list[COMChnl] = []
+        self.pulse_resps_nopkg: list[Rvec] = []
+        self.pulse_resps_noeq: list[Rvec] = []
+        self.cursor_ix: int = 0
+
+        # Package
+        self.zp_sel: int = 0            #: Package length selector.
+        self._sPkgTx: list[rf.Network] = []
+        self._sPkgRx: list[rf.Network] = []
 
         if not do_init:
             return
@@ -146,7 +141,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
             assert len(channels["THRU"]) == 1, ValueError(
                 f"Length of `channels['THRU']` must be 1, not {len(channels['THRU'])}!")
             for fname, chtype in [(chnl_name, chnl_type) for chnl_type in chnl_types
-                                                         for chnl_name in channels[chnl_type]]:  # noqa=E127
+                                                         for chnl_name in channels[chnl_type]]:
                 if isinstance(fname, rf.Network) and fname.nports == 2:  # Already differential.
                     ntwks.append((fname, chtype))
                 else:
@@ -225,7 +220,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         opt_mode:  Optional[OptMode]  = None,
         norm_mode: Optional[NormMode] = None,
         unit_amp:  Optional[bool]     = None,
-        dbg_dict:  Optional[Dict[str, Any]] = None
+        dbg_dict:  Optional[dict[str, Any]] = None
     ) -> float:
         """
         Calculate the COM value.
@@ -454,7 +449,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
         new_s.extend(
             [[[sChnlInterp.s11.s[-1, 0, 0], sChnlInterp.s12.s[-1, 0, 0]],
               [sChnlInterp.s21.s[-1, 0, 0], sChnlInterp.s22.s[-1, 0, 0]]]
-            ] * pad_len)  # noqa=E124
+            ] * pad_len)
         new_s = np.array(new_s)
         sChnlInterp = rf.Network(s=new_s, z0=sChnlInterp.z0[0], f=freqs)
         if self.use_devices:  # Transform to the reference impedance of the device models (178A-4).
@@ -811,7 +806,7 @@ class COM():  # pylint: disable=too-many-instance-attributes,too-many-public-met
                 varXT = 0.
                 for pulse_resp in pulse_resps[1:]:                                                      # (93A-34)
                     varXT += max((filt_pr_samps(pulse_resp[m::M], As)**2).sum()
-                                  for m in range(M))                                                    # noqa=E127,E501 (93A-33)
+                                  for m in range(M))                                                    # (93A-33)
                 varXT *= varX
 
                 # Step h - Spectral noise.
@@ -1104,7 +1099,7 @@ def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     opt_mode: OptMode = OptMode.MMSE,
     norm_mode: NormMode = NormMode.P8023dj,
     unit_amp: bool = True,
-    dbg_dict: Optional[Dict[str, Any]] = None
+    dbg_dict: Optional[dict[str, Any]] = None
 ) -> dict[ChnlGrpName, dict[ChnlSetName, COM]]:
     """
     Run COM on a list of grouped channel sets.
