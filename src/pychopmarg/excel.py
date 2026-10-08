@@ -42,6 +42,7 @@ com_fields: dict[str, str] = {
     "b_max(1)": "b_max1",
     "b_min(1)": "b_min1",
     "b_max(2..N_b)": "b_maxN",
+    "b_min(2..N_b)": "b_minN",
     "ffe_pre_tap_len": "dw",
     "f_b": "fb",
     "Delta_f": "fstep",
@@ -250,10 +251,10 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
             dfe_min = zeros(N_b)
             if "b_max1" in com_params_dict:
                 dfe_max[0] = float(com_params_dict["b_max1"])
-            if "b_min1" in com_params_dict:
-                dfe_min[0] = float(com_params_dict["b_min1"])
-            if N_b > 1 and "b_maxN" in com_params_dict:
-                dfe_max[1:] = dfe_min[1:] = float(com_params_dict["b_maxN"])
+            dfe_min[0] = float(com_params_dict.get("b_min1", -dfe_max[0]))  # As MATLAB COM, defaults to `-b_max`.
+            if N_b > 1 and "b_maxN" in com_params_dict:  # Taps 2..N_b: as MATLAB COM, `b_min` defaults to `-b_max`.
+                dfe_max[1:] = float(com_params_dict["b_maxN"])
+                dfe_min[1:] = float(com_params_dict.get("b_minN", -dfe_max[1]))
 
     rslt = COMParams(
         com_params_dict["fb"],

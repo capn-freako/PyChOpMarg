@@ -39,3 +39,24 @@ def test_xlsx_reads_same_as_xls(tmp_path, params, name):
     for field in dataclasses.fields(params):
         assert np.array_equal(np.asarray(getattr(xlsx_params, field.name), dtype=object),
                               np.asarray(getattr(params, field.name), dtype=object)), field.name
+
+
+@pytest.mark.parametrize("rows, dfe_min, dfe_max", [
+    ({"b_max(2..N_b)": 0.3}, [0.0, -0.3, -0.3], [0.85, 0.3, 0.3]),                         # `b_min` defaults to `-b_max`.
+    ({"b_max(2..N_b)": 0.3, "b_min(2..N_b)": -0.1}, [0.0, -0.1, -0.1], [0.85, 0.3, 0.3]),  # Explicit `b_min`.
+    ({"b_max(2..N_b)": 0.3, "b_min(1)": None}, [-0.85, -0.3, -0.3], [0.85, 0.3, 0.3]),    # No `b_min(1)` row.
+])
+def test_dfe_limits(tmp_path, rows, dfe_min, dfe_max):
+    "Each DFE tap's minimum is the sheet's `b_min` (tap 1: `b_min(1)`; taps 2..N_b: `b_min(2..N_b)`), or else `-b_max`."
+    sheet = pd.read_excel(CFG, header=None)
+    sheet.loc[sheet[0] == "N_b", 1] = 3
+    sheet.loc[sheet[0] == "b_max(2..N_b)", 1] = rows["b_max(2..N_b)"]
+    if "b_min(2..N_b)" in rows:
+        sheet.loc[len(sheet), [0, 1]] = ["b_min(2..N_b)", rows["b_min(2..N_b)"]]
+    if rows.get("b_min(1)", 0.0) is None:  # Omit `b_min(1)`.
+        sheet = sheet[sheet[0] != "b_min(1)"]
+    cfg = tmp_path / "dfe.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    assert list(params.dfe_min) == pytest.approx(dfe_min)
+    assert list(params.dfe_max) == pytest.approx(dfe_max)
