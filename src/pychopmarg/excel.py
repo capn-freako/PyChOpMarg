@@ -11,7 +11,8 @@ Copyright (c) 2025 David Banas; all rights reserved World wide.
 from functools import reduce
 from pathlib import Path
 import re
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
+from collections.abc import Callable
 
 import numpy as np
 from numpy import arange, array, concatenate, ones, zeros
@@ -101,7 +102,7 @@ def alternative(
     """
     try:
         rslt = f(x)
-    except:  # pylint: disable=bare-except
+    except Exception:  # pylint: disable=broad-exception-caught
         rslt = g(x)
     return rslt
 
@@ -131,10 +132,8 @@ def parse_Mfloats(mStr: str) -> NDArray:
 
 def parse_Mlist(mStr: str) -> NDArray:
     "Parse a string containing an M-code list of numbers."
-    tokens = list(map(lambda s: s.strip(","),
-                      mStr.strip("[] ").split()))
-    return concatenate(list(map(lambda s: alternative(parse_Mfloat, parse_Mfloats, s),
-                                tokens)))
+    tokens = [s.strip(",") for s in mStr.strip("[] ").split()]
+    return concatenate([alternative(parse_Mfloat, parse_Mfloats, s) for s in tokens])
 
 
 def parse_Marray(mStr: str) -> NDArray:
@@ -161,7 +160,7 @@ def match_ignored_field_name_prefix(mName: str) -> bool:
 
 def cfg_trans(com_cfg: NDArray) -> dict[str, Any]:
     "Translate/filter the names/values of the given 2D NumPy array."
-    return dict(map(apply2(lambda s: com_fields[s] if s in com_fields else s,  # type: ignore
+    return dict(map(apply2(lambda s: com_fields.get(s, s),  # type: ignore
                            lambda s: parse_Mmatrix(s) if isinstance(s, str) else s),
                     filter(lambda pr: not pd.isna(pr[0]) and not match_ignored_field_name_prefix(pr[0]),
                            com_cfg)))
@@ -182,7 +181,7 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     com_cfg = pd.read_excel(cfg_file)
 
     _com_cfg = com_cfg.to_numpy()
-    com_cfg1 = _com_cfg[:, range(0, 2)]
+    com_cfg1 = _com_cfg[:, range(2)]
     com_cfg2 = _com_cfg[:, range(9, 11)]
 
     com_params_dict = vars(IEEE_8023dj).copy()
@@ -237,11 +236,13 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
             rx_taps_min[:nRxPreTaps - 1] = -com_params_dict["ffe_tapn_max"] * ones(nRxPreTaps - 1)
             rx_taps_min[nRxPreTaps + 2:] = -com_params_dict["ffe_tapn_max"] * ones(nRxTaps - nRxPreTaps - 2)
 
-    # Make sure CTLE d.c. gains are both lists.
-    if not isinstance(com_params_dict["g_DC"], (list, np.ndarray)):
-        com_params_dict["g_DC"] = [com_params_dict["g_DC"]]
-    if not isinstance(com_params_dict["g_DC2"], (list, np.ndarray)):
-        com_params_dict["g_DC2"] = [com_params_dict["g_DC2"]]
+    # Make sure CTLE d.c. gains are both lists, of (non-positive) gains in dB.
+    # By convention, COM configuration spreadsheets enter `g_DC`/`g_DC_HP` as positive attenuations;
+    # `- abs()` (not just negation) also keeps the already-negative defaults used when a sheet omits them.
+    for key in ("g_DC", "g_DC2"):
+        if not isinstance(com_params_dict[key], (list, np.ndarray)):
+            com_params_dict[key] = [com_params_dict[key]]
+        com_params_dict[key] = [0.0 - abs(float(g)) for g in com_params_dict[key]]  # (`0.0 -`: no `-0.0`)
 
     # Set Rx DFE min./max.
     dfe_max = dfe_min = array([])  # Default is an empty array and used if we don't find `N_b` in our parse results.
@@ -254,9 +255,8 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
                 dfe_max[0] = float(com_params_dict["b_max1"])
             if "b_min1" in com_params_dict:
                 dfe_min[0] = float(com_params_dict["b_min1"])
-            if N_b > 1:
-                if "b_maxN" in com_params_dict:
-                    dfe_max[1:] = dfe_min[1:] = float(com_params_dict["b_maxN"])
+            if N_b > 1 and "b_maxN" in com_params_dict:
+                dfe_max[1:] = dfe_min[1:] = float(com_params_dict["b_maxN"])
 
     rslt = COMParams(
         com_params_dict["fb"],
