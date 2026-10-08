@@ -10,7 +10,8 @@ Copyright (c) 2025 David Banas; all rights reserved World wide.
 
 from enum   import Enum
 from random import sample
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from matplotlib         import pyplot as plt  # type: ignore
 from matplotlib.axes    import Axes           # type: ignore
@@ -86,8 +87,7 @@ def plot_group_samps(  # pylint: disable=too-many-arguments,too-many-positional-
     """
     group_names = list(coms[0][2].keys())
     nCols = len(group_names)
-    nRows = min(maxRows, min(list(map(lambda grp: len(list(coms[0][2][grp].keys())),  # pylint: disable=nested-min-max
-                                      group_names))))
+    nRows = min(maxRows, *[len(coms[0][2][grp]) for grp in group_names])
     _, axs = plt.subplots(nRows, nCols, figsize=(dx * nCols, dy * nRows))
     # Handle singleton case gracefully.
     if not isinstance(axs[0][0], Axes):

@@ -283,7 +283,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         2-port network equivalent to package transmission line.
     """
 
-    f_GHz  = f / 1e9  # noqa E221
+    f_GHz  = f / 1e9
     gamma1 = a1 * (1 + 1j)
 
     def gamma2(f: float) -> complex:
@@ -312,7 +312,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             s2p: Two port network for the leg.
         """
         zc, zp = z_pair
-        rho = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
+        rho = (zc - 2 * r0) / (zc + 2 * r0)
         s11 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
         s21 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
         return rf.Network(s=array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)

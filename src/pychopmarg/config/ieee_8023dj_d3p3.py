@@ -36,8 +36,8 @@ TERMINATION = DeviceTermination(Cd=(40e-6, 90e-6, 110e-6), Ls=(0.13, 0.15, 0.14)
 CP = 40e-6  # Single-ended package capacitance at package-to-board interface (nF).
 
 # Device package transmission line parameters, per class: (gamma0, a1, a2, tau).
-_CLASS_A = dict(gamma0=5e-4, a1=8.9e-4, a2=2e-4,    tau=6.141e-3)
-_CLASS_B = dict(gamma0=5e-4, a1=6.5e-4, a2=2.93e-4, tau=6.141e-3)
+_CLASS_A = {"gamma0": 5e-4, "a1": 8.9e-4, "a2": 2e-4,    "tau": 6.141e-3}
+_CLASS_B = {"gamma0": 5e-4, "a1": 6.5e-4, "a2": 2.93e-4, "tau": 6.141e-3}
 
 
 def package_class_a(zp1: float) -> DevicePackage:
@@ -73,7 +73,7 @@ def kr_c2c_device(pkg_class: str, test: int, is_rx: bool) -> DeviceModel:
 
 
 # CR host classes (Table 179-23) and partial host channel transmission line (Table 179-22).
-_CR_HOST_TLINE = dict(zc=92.5, gamma0=0.0, a1=5.95e-4, a2=2.6e-5, tau=5.79e-3)
+_CR_HOST_TLINE = {"zc": 92.5, "gamma0": 0.0, "a1": 5.95e-4, "a2": 2.6e-5, "tau": 5.79e-3}
 CR_HOST_CLASSES: dict[str, tuple[str, float, float]] = {  # class: (package class, zp1 (mm), host PCB zp(h) (mm))
     "HL": ("A", 8.0, 22.0),
     "HN": ("B", 15.0, 83.0),
@@ -104,7 +104,7 @@ def cr_device(host_class: str, include_host: bool = True) -> DeviceModel:
 # C2M host model (Table 176D-6): "class B"-like package with a specific transmission line 1 length, plus a partial
 # host channel. The module C2M component interfaces at TP1d/TP4d, the device-to-package interface.
 C2M_HOST_ZP1 = 45.0
-_C2M_HOST_TLINE = dict(zc=92.5, gamma0=0.0, a1=5.95e-4, a2=2.6e-5, tau=5.79e-3)
+_C2M_HOST_TLINE = {"zc": 92.5, "gamma0": 0.0, "a1": 5.95e-4, "a2": 2.6e-5, "tau": 5.79e-3}
 C2M_HOST_PCB_ZP = 280.0
 
 

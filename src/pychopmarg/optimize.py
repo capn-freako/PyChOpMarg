@@ -315,7 +315,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 A = concatenate((concatenate(( R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),
                                  concatenate((-Hb, Ib,   zeros((Nb, 1))),       axis=1),
                                  concatenate(( h0, zb,   zeros(1))).reshape((1, Nw + Nb + 1))))
-            except ValueError as err:
+            except ValueError:
                 print(f"R.shape: {R.shape}", flush=True)
                 print(f"Hb.shape: {Hb.shape}", flush=True)
                 print(f"Nw: {Nw}", flush=True)

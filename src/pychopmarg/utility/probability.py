@@ -8,7 +8,7 @@ Original date:   March 3, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np  # type: ignore
 from numpy.typing import NDArray
@@ -38,7 +38,7 @@ def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
 def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     h_samps: Rvec, L: int = 4,
     curs_ix: Optional[int] = None, y: Optional[Rvec] = None,
-    dbg_dict: Optional[Dict[str, Any]] = None
+    dbg_dict: Optional[dict[str, Any]] = None
 ) -> tuple[Rvec, Rvec]:
     """
     Calculate the "delta-pmf" for a set of pulse response samples,

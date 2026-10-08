@@ -18,30 +18,30 @@ from scipy.signal           import lfilter
 from pychopmarg.common      import Rvec, Cvec, Rmat
 
 
-class NoiseCalc():  # pylint: disable=too-many-instance-attributes
+class NoiseCalc:  # pylint: disable=too-many-instance-attributes
     "Noise calculator for COM"
 
     # Independent variables, set during instance initialization.
-    L               = int(4)                     # Number of modulation levels.
-    Tb              = float(9.412e-12)           # UI (s)
-    ts_ix           = int(0)                     # Main pulse sampling index
+    L               = 4                          # Number of modulation levels.
+    Tb              = 9.412e-12                  # UI (s)
+    ts_ix           = 0                          # Main pulse sampling index
     t               = array([0], dtype=float)    # System time vector (s)
     vic_pulse_resp  = array([0], dtype=float)    # Victim pulse response (V)
-    agg_pulse_resps: list[Rvec] = []             # Aggressor pulse responses (V)
+    agg_pulse_resps: list[Rvec]                  # Aggressor pulse responses (V)
     f               = array([0], dtype=float)    # System frequency vector (Hz)
     Ht              = array([0], dtype=complex)  # Transfer function of Tx output driver risetime
     H21             = array([0], dtype=complex)  # Transfer function of terminated interconnect
     Hr              = array([0], dtype=complex)  # Transfer function of Rx AFE
     Hctf            = array([0], dtype=complex)  # Transfer function of Rx CTLE
     eta0            = float(0)                   # Noise density at Rx AFE input (V^2/GHz)
-    Av              = float(0.6)                 # Victim drive level (V)
+    Av              = 0.6                        # Victim drive level (V)
     snr_tx          = float(25)                  # Tx signal-to-noise ratio (dB)
     Add             = float(0)                   # Dual-Dirac peak amplitude (V)
     sigma_Rj        = float(0)                   # Dual-Dirac random stdev (V)
 
     # Invariant dependent variables, set during instance initialization.
-    fN       = float(53.125e9)            # Nyquist frequency (Hz)
-    nspui    = int(32)                    # Number of samples per UI
+    fN       = 53.125e9                   # Nyquist frequency (Hz)
+    nspui    = 32                         # Number of samples per UI
     varX     = float(0)                   # Signal power (V^2)
 
     def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
@@ -222,7 +222,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         nUI = int(len(t) / nspui)
         _agg_pulse_resp = agg_pulse_resp[:nUI * nspui]
         sampled_agg_prs: Rmat = array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
-        best_m = argmax(list(map(lambda pr_samps: (pr_samps**2).sum(), sampled_agg_prs)))
+        best_m = argmax([(pr_samps**2).sum() for pr_samps in sampled_agg_prs])
 
         return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
 

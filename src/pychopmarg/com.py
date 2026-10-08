@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-
 # pylint: disable=too-many-lines
 
 """
@@ -21,7 +19,6 @@ ToDo:
     1. Provide type hints for imports.
 """
 
-from functools import cache
 from pathlib import Path
 from typing  import Any, Optional, cast
 
@@ -107,6 +104,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.gDC: float = 0.0           #: Choices are in `com_params.g_DC`.
         self.gDC2: float = 0.0          #: Choices are in `com_params.g_DC2`.
         self.rx_ffe_phase_matrix: Cmat = array([])
+        self._Htx_cache: dict[int, Cvec] = {}  # Tx FFE frequency responses, by `tx_taps_ix` (see `Htx()`).
 
         # Channel data
         self.chnls: list[COMChnl] = []
@@ -147,7 +145,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 else:
                     ntwks.append((sdd_21(rf.Network(str(fname))), chtype))
         else:
-            raise ValueError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
+            raise TypeError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
 
         # Create the system time & frequency vectors.
         fb = com_params.fb * 1e9
@@ -184,9 +182,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         else:
             self._build_legacy_pkg(ntwks)
         if debug:
-            self.chnls_noPkg = list(
-                map(lambda ntwk: (ntwk, calc_H21(f, ntwk[0], self.gamma1_Tx, self.gamma2_Rx)),
-                    [ntwks[0]]))
+            self.chnls_noPkg = [(ntwks[0], calc_H21(f, ntwks[0][0], self.gamma1_Tx, self.gamma2_Rx))]
             self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=[self.chnls_noPkg[0]], apply_eq=False)
             self.pulse_resps_noeq  = self.gen_pulse_resps(chnls=[self.chnls[0]],       apply_eq=False)
 
@@ -410,8 +406,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         Ls = np.atleast_1d(np.array(self.com_params.L_s[ls_ix], dtype=float) / 1e9)
         R0 = [self.com_params.R_0] * len(Cd)  # type: ignore
         rslt = rf.network.cascade_list(
-            list(map(lambda trip: sDieLadderSegment(self.freqs, trip),
-                     zip(R0, Cd, Ls))))  # type: ignore
+            [sDieLadderSegment(self.freqs, trip) for trip in zip(R0, Cd, Ls)])  # type: ignore
         rslt = rslt ** self.sC(self.com_params.C_b[cb_ix] / 1e9)
         if isRx:
             rslt.flip()
@@ -484,7 +479,6 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         """
         return sCshunt(self.freqs, c, self.com_params.R_0)
 
-    @cache  # pylint: disable=method-cache-max-size-none
     def Htx(self, tx_taps_ix: int) -> Cvec:
         """
         Return the complex frequency response of the Tx deemphasis filter.
@@ -497,7 +491,10 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         """
         assert 0 <= tx_taps_ix < self.num_tx_combs, ValueError(
             f"tx_taps_ix ({tx_taps_ix}) must be an integer in: [0, {self.num_tx_combs})!")
-        return calc_Hffe(self.freqs, 1 / self.fb, array(self._tx_combs[tx_taps_ix]), 3)
+        # Cached per instance: `functools.cache` on a method would keep every `COM` alive, via its `self` keys.
+        if tx_taps_ix not in self._Htx_cache:
+            self._Htx_cache[tx_taps_ix] = calc_Hffe(self.freqs, 1 / self.fb, array(self._tx_combs[tx_taps_ix]), 3)
+        return self._Htx_cache[tx_taps_ix]
 
     def Hffe_Rx(self, taps: Optional[Rvec] = None) -> Cvec:
         """
@@ -838,7 +835,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 varJ = rslt["varJ"]
                 varXT = rslt["varXT"]
                 varN = rslt["varN"]
-                self.fom_rslts['mse'] = rslt['mse'] if 'mse' in rslt else None
+                self.fom_rslts['mse'] = rslt.get('mse')
                 self.theNoiseCalc = theNoiseCalc  # pylint: disable=attribute-defined-outside-init
                 self.mmse_rslt = rslt             # pylint: disable=attribute-defined-outside-init
             case _:

@@ -45,9 +45,9 @@ def run_com_matlab(
         cmd_str = ", ".join([
             f"com_ieee8023_93a('{cfg_sheet}'",
             f"{len(ch_set['FEXT'])}, {len(ch_set['NEXT'])}, '{ch_set['THRU'][0]}'",
-            ", ".join(list(map(lambda ch: f"'{str(ch)}'", ch_set['FEXT'] + ch_set['NEXT'])))]) + ");"
+            ", ".join(f"'{ch!s}'" for ch in ch_set['FEXT'] + ch_set['NEXT'])]) + ");"
         print(f"\nCommand:\n{cmd_str}")
-        result = subprocess.run([matlab_exec, "-nodisplay", "-batch", cmd_str], capture_output=True, text=True)
+        result = subprocess.run([matlab_exec, "-nodisplay", "-batch", cmd_str], capture_output=True, text=True, check=False)
         if grp in results:
             results[grp].update({lbl: {"proc_rslt": result}})
         else:

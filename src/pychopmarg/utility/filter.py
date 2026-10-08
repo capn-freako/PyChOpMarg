@@ -144,8 +144,7 @@ def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:
     """
 
     bs = tap_weights.flatten()
-    return 1 / (1 - sum(list(map(lambda n_b: n_b[1] * np.exp(-1j * TWOPI * (n_b[0] + 1) * td * freqs),
-                                 enumerate(bs)))))
+    return 1 / (1 - sum(b * np.exp(-1j * TWOPI * (n + 1) * td * freqs) for n, b in enumerate(bs)))
 
 
 def null_filter(nTaps: int, nPreTaps: int = 0) -> Rvec:

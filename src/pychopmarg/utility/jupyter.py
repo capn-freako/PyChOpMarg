@@ -8,7 +8,6 @@ Original date:   January 23, 2025
 Copyright (c) 2025 David Banas; all rights reserved World wide.
 """
 
-import click                        # type: ignore
 import os
 from   pathlib      import Path
 import subprocess
