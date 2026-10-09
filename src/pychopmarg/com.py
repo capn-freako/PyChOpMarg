@@ -918,6 +918,11 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                             **{k: rslts[k] for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'cursor_ix', 'As',
                                                      'varTx', 'varISI', 'varJ', 'varXT', 'varN', 'vic_pulse_resp')},
                             'mse': rslts.get('mse', 0),
+                            # Everything `calc_fom()` leaves behind for this candidate, overwritten by later ones;
+                            # notably its MMSE noise model, which `calc_noise()` takes the Tx noise from.
+                            'fom_rslts': dict(rslts),
+                            'theNoiseCalc': getattr(self, 'theNoiseCalc', None),
+                            'mmse_rslt': getattr(self, 'mmse_rslt', None),
                         }
 
         # Check for error and save the best results.
@@ -930,6 +935,10 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.tx_ix    = best['tx_ix']
         self.rx_taps  = best['rx_taps'] / best['rx_taps'][self.nRxPreTaps]
         self.dfe_taps = best['dfe_tap_weights']
+        self.fom_rslts = best['fom_rslts']
+        if best['theNoiseCalc'] is not None:
+            self.theNoiseCalc = best['theNoiseCalc']  # pylint: disable=attribute-defined-outside-init
+            self.mmse_rslt = best['mmse_rslt']        # pylint: disable=attribute-defined-outside-init
         self.fom_rslts['FOM']            = fom_max
         self.fom_rslts['mse']            = best['mse']
         self.fom_rslts['pr_samps']       = best['pr_samps']

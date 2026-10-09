@@ -4,6 +4,7 @@ import contextlib
 import io
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from pychopmarg.com import COM
@@ -38,3 +39,21 @@ def test_noise_pmfs_cover_their_support(example2_com):
     rslts = example2_com.com_rslts
     assert rslts["py"].sum() == pytest.approx(1.0)
     assert rslts["py"][:10].sum() < 1e-12 and rslts["py"][-10:].sum() < 1e-12
+
+
+def test_noise_model_is_the_chosen_eqs(example2_com):
+    """COM's Tx noise comes from the noise model of the EQ `opt_eq()` chose, not of the last one it tried (which once
+    made it use the last CTLE setting's response: here, -2 dB, vs. the chosen -12 dB)."""
+    com = example2_com
+    assert com.gDC != com.com_params.g_DC[-1]  # (Else, this test can't tell.)
+    assert np.allclose(com.theNoiseCalc.Hctf, com.calc_Hctf(com.gDC, com.gDC2))
+
+
+def test_tx_noise_variance_per_178a_21(example2_com):
+    """The Tx noise variance is 10^(-SNR_TX/10) * sum(h_tn(n)^2), by (178A-21) and Parseval: no sigma_X^2 factor
+    (unlike crosstalk's (178A-20)), as in MATLAB COM by default."""
+    nc = example2_com.theNoiseCalc
+    var = nc.variance(nc.Stn())
+    htn = nc.Stn_debug["_htn"]
+    # (Within 0.1%: the folded PSD's length rounds; sigma_X^2 would be 44%.)
+    assert var == pytest.approx(10**(-nc.snr_tx / 10) * (htn**2).sum(), rel=1e-3)

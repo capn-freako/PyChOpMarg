@@ -258,7 +258,8 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
                 '_htn': _htn,
             }
 
-        return self.varX * self.Tb * 10**(-self.snr_tx / 10) * abs(_Htn)**2
+        # No `varX` (sigma_X^2) here, unlike `Sxn()`: (178A-21), and MATLAB COM's default (`S_tn_w_AM` = 0).
+        return self.Tb * 10**(-self.snr_tx / 10) * abs(_Htn)**2                       # (178A-21)
 
     @property
     def Sjn(self) -> Rvec:
