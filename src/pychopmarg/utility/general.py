@@ -189,18 +189,59 @@ def get_channel_sets(path: Path, recursive: bool = False) -> dict[ChnlGrpName, l
         thru_pat = "*[tT][hH][rR][uU]*.[sS]4[pP]"  # No global option for case insens. glob().
         thru_chnls = list(chnl_grp.rglob(thru_pat) if recursive else chnl_grp.glob(thru_pat))
         thru_chnls.sort()
+        aggressors: dict[Path, dict[str, list[Path]]] = {}
+        for chnl_dir in sorted({thru.parent for thru in thru_chnls}):
+            aggressors.update(_find_aggressors([thru for thru in thru_chnls if thru.parent == chnl_dir]))
         for thru_chnl in thru_chnls:
-            chnl_dir = thru_chnl.parent
-            nexts = list(chnl_dir.glob(re.sub("thru", "[nN][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
-            nexts.sort()
-            fexts = list(chnl_dir.glob(re.sub("thru", "[fF][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
-            fexts.sort()
             channels[chnl_grp.name].append({  # Here we're constructing a "channel set" dictionary.
                 "THRU": [thru_chnl],
-                "NEXT": nexts,
-                "FEXT": fexts
+                "NEXT": aggressors[thru_chnl]["NEXT"],
+                "FEXT": aggressors[thru_chnl]["FEXT"],
             })
     return channels
+
+
+def _find_aggressors(thru_chnls: list[Path]) -> dict[Path, dict[str, list[Path]]]:
+    """
+    Assign the NEXT/FEXT Touchstone files in a directory to its thru channels.
+
+    Args:
+        thru_chnls: The thru channels, all in the same directory.
+
+    Returns:
+        For each thru channel, its "NEXT" and "FEXT" aggressor files (sorted).
+
+    Notes:
+        1. An aggressor is a "*.s4p" file in the same directory whose name contains "NEXT" or "FEXT" (the last
+        occurrence decides which; any case) but not "thru", and begins with the part of the thru channel's name
+        before "thru" (less any trailing "_", "-", ".", or " "). Contributors name them variously; e.g., for
+        thru ``<stem>_thru<x>.s4p``: ``<stem>_next<n><x>.s4p``, ``<stem><...>_NEXT<n>.s4p``,
+        ``<stem>_xtalk<n>_Next.s4p``, or ``<stem>_NEXT_<different suffix>.s4p``.
+        2. Each aggressor goes to the thru channel(s) whose name prefix it matches the longest of.
+    """
+
+    def prefix(name: str) -> str:
+        return name[:_THRU_RE.search(name).start()].rstrip("_-. ").lower()  # type: ignore
+
+    rslt: dict[Path, dict[str, list[Path]]] = {thru: {"NEXT": [], "FEXT": []} for thru in thru_chnls}
+    if not thru_chnls:
+        return rslt
+    for fname in sorted(thru_chnls[0].parent.iterdir()):
+        kinds = _XTALK_RE.findall(fname.name)
+        if not kinds or _THRU_RE.search(fname.name) or fname.suffix.lower() != ".s4p":
+            continue
+        matches = [thru for thru in thru_chnls if fname.name.lower().startswith(prefix(thru.name))]
+        if not matches:
+            continue
+        longest = max(len(prefix(thru.name)) for thru in matches)
+        for thru in matches:
+            if len(prefix(thru.name)) == longest:
+                rslt[thru][kinds[-1].upper()].append(fname)
+    return rslt
+
+
+_THRU_RE = re.compile("thru", re.IGNORECASE)
+_XTALK_RE = re.compile("next|fext", re.IGNORECASE)
 
 
 def dBm_Hz(x: Rvec) -> Rvec:
