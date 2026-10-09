@@ -66,7 +66,7 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
 
     Raises:
         ValueError: If the given pulse response contains any NaNs.
-        ValueError: If a needed shift exceeds half the result vector length.
+        ValueError: If the samples' combined extent (the PMF's support) exceeds the ``y`` grid's.
 
     Notes:
         1. The input set of pulse response samples is filtered,
@@ -104,13 +104,27 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     sig_step = 2.0 / (L - 1)
     sig_shifts = (np.arange(L) * sig_step - 1) / ystep
 
+    def shifted(p: Rvec, n: int) -> Rvec:
+        "`p` shifted by `n` bins, without wrapping around (unlike `np.roll()`)."
+        out = np.zeros_like(p)
+        if n >= 0:
+            out[n:] = p[:len(p) - n]
+        else:
+            out[:n] = p[-n:]
+        return out
+
     # PMF calculation proper - a more efficient form of convolution, given our apriori knowledge of the input.
     rslt = delta
+    max_shift = 0
     for hn in h_samps_filt:
         # Filter out zeros, as per MATLAB code:
         shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn).astype(int)))  # (93A-39)
         if shifts:
-            _rslt: NDArray = sum(np.roll(rslt, shift) for shift in shifts)  # type: ignore
+            max_shift += max(abs(shift) for shift in shifts)
+            if max_shift > zero_ix:  # The PMF's support would exceed the `y` grid.
+                raise ValueError(
+                    f"The samples' combined extent ({max_shift * ystep:.3g}) exceeds the y grid's ({zero_ix * ystep:.3g}).")
+            _rslt: NDArray = sum(shifted(rslt, shift) for shift in shifts)  # type: ignore
             rslt  = _rslt / _rslt.sum()  # Enforce a PMF.
 
     return y, rslt

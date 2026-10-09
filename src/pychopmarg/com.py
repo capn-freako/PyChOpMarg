@@ -25,6 +25,7 @@ from typing  import Any, Optional, cast
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
 from numpy             import array, arange
+from scipy.signal       import fftconvolve  # type: ignore
 
 from pychopmarg.common import (
     PI, TWOPI, Cvec, Rvec, Cmat, OptMode,
@@ -36,6 +37,16 @@ from pychopmarg.optimize import NormMode, mmse, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
     delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs)
+
+
+def _conv_pmfs(p1: Rvec, p2: Rvec) -> Rvec:
+    """
+    Convolve two PMFs on the same, zero-centered voltage grid, returning a PMF on that grid.
+
+    (Via FFT, since COM's grids can be long; any FFT round-off below zero is clipped.)
+    """
+    p = np.maximum(fftconvolve(p1, p2, mode='same'), 0.0)
+    return p / p.sum()
 
 
 class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-methods
@@ -983,12 +994,6 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         vic_curs_val = vic_pulse_resp[cursor_ix]
         # Missing `2*` is also missing from `Ani` definition; so, they cancel in COM calc.
         As = RLM * vic_curs_val / (L - 1)
-        ymax = 1.1 * As
-        npts = 2 * min(int(ymax / 0.00001), 1_000) + 1  # Note 1 of 93A.1.7.1; MUST BE ODD!
-        y = np.linspace(-ymax, ymax, npts)
-        ystep = 2 * ymax / (npts - 1)
-        pDelta = np.zeros(npts)
-        pDelta[npts // 2] = 1.0
 
         # Sec. 93A.1.7.2
         varX = (L**2 - 1) / (3 * (L - 1)**2)                                        # (93A-29)
@@ -1005,12 +1010,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             Stx = self.theNoiseCalc.Stn(Hrx=Hrx)
             varTx = self.theNoiseCalc.variance(Stx)                                 # (178A-17)
         hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
-        _, pJ = delta_pmf(filt_pr_samps(self.com_params.A_DD * hJ, ymax), L=L, y=y)  # (93A-40)
+        hDD = filt_pr_samps(self.com_params.A_DD * hJ, As)
         varJ = self.com_params.sigma_Rj**2 * varX * (hJ**2).sum()                   # (93A-31)
         varG = varTx + varJ + varN                                                  # (93A-41)
-        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep             # (93A-42), but converted to PMF.
-        pN = np.convolve(pG, pJ, mode='same')                                       # (93A-43)
-        pN /= pN.sum()  # Enforce a PMF.
 
         # Sec. 93A.1.7.3
         self.set_status("Sec. 93A.1.7.3")
@@ -1030,20 +1032,36 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 (hISI[dfe_slice] / vic_curs_val)))
         hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val                                       # (93A-27)
         varISI = varX * (hISI**2).sum()                                                         # (93A-31)
-        _, pISI = delta_pmf(filt_pr_samps(hISI, ymax), L=L, y=y)                                # (93A-40)
-
-        # - Crosstalk
-        pXT = pDelta
+        hISI_filt = filt_pr_samps(hISI, As)
+        # - Crosstalk: each aggressor's samples at its own worst phase.
+        hXTs = []
         for pulse_resp in pulse_resps[1:]:                                                      # (93A-44)
             i = np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)])                      # (93A-33)
-            samps = pulse_resp[i::M]  # [isi_select_slice]
-            _, pk = delta_pmf(filt_pr_samps(samps, ymax), L=L, y=y)  # , dbg_dict=dbg_dict)
-            pXT = np.convolve(pXT, pk, mode='same')
-        pXT /= pXT.sum()  # Enforce a PMF.
+            hXTs.append(filt_pr_samps(pulse_resp[i::M], As))
+
+        # Voltage grid, as MATLAB COM: bin size As/1000, but no larger than 10 uV (its default "PDF bin size"),
+        # spanning the full support of every distribution below (a sum of |samples| for each delta-PMF, plus
+        # Gaussian tails), so none is clipped and, so, `Ani` isn't capped (e.g. at 1.1 * As, i.e. COM >= -0.83 dB).
+        ystep = min(As / 1000, 1e-5)
+        support = abs(hISI_filt).sum() + sum(abs(h).sum() for h in hXTs) + abs(hDD).sum()
+        ymax = max(1.1 * As, support + 10 * np.sqrt(varG) + 2 * ystep)
+        npts = 2 * int(np.ceil(ymax / ystep)) + 1  # MUST BE ODD!
+        y = (np.arange(npts) - npts // 2) * ystep
+        pDelta = np.zeros(npts)
+        pDelta[npts // 2] = 1.0
+
+        _, pJ = delta_pmf(hDD, L=L, y=y)                                                       # (93A-40)
+        pG = np.exp(-y**2 / (2 * varG)) / np.sqrt(TWOPI * varG) * ystep             # (93A-42), but converted to PMF.
+        pN = _conv_pmfs(pG, pJ)                                                     # (93A-43)
+        _, pISI = delta_pmf(hISI_filt, L=L, y=y)                                                # (93A-40)
+        pXT = pDelta
+        for hXT in hXTs:
+            _, pk = delta_pmf(hXT, L=L, y=y)
+            pXT = _conv_pmfs(pXT, pk)
         varXT = sum(_y**2 * p for (_y, p) in zip(y, pXT))
 
         # Final calculation
-        py = np.convolve(np.convolve(pISI, pN, mode='same'), pXT, mode='same')                  # (93A-45)
+        py = _conv_pmfs(_conv_pmfs(pISI, pN), pXT)                                                # (93A-45)
         Py = np.cumsum(py)
         Py /= Py[-1]  # Enforce cumulative probability distribution.
         Ani = -y[np.where(Py >= self.com_params.DER_0)[0][0]]

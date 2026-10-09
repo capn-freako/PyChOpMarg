@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pychopmarg.utility import loc_curs
+from pychopmarg.utility import delta_pmf, loc_curs
 
 NSPUI = 32
 NO_DFE = (np.zeros(1), np.zeros(1))
@@ -47,3 +47,26 @@ class TestLocCurs:
         "No positive candidate anywhere near the peak: raise, rather than return a meaningless cursor."
         with pytest.raises(ValueError):
             loc_curs(-_pulse(400), NSPUI, *NO_DFE)
+
+
+class TestDeltaPmf:
+    Y = np.arange(-50, 51) * 0.01  # A 101-bin grid, +/-0.5 V.
+
+    def test_support_and_probabilities(self):
+        "One NRZ sample of 0.2 V: half the probability at each of +/-0.2 V."
+        _, p = delta_pmf(np.array([0.2]), L=2, y=self.Y)
+        assert p[np.isclose(self.Y, 0.2)] == pytest.approx(0.5)
+        assert p[np.isclose(self.Y, -0.2)] == pytest.approx(0.5)
+
+    def test_support_reaching_grid_edge(self):
+        "A PMF whose support reaches exactly to the grid's edges keeps all of its probability there."
+        _, p = delta_pmf(np.array([0.3, 0.2]), L=2, y=self.Y)
+        assert p[np.isclose(self.Y, 0.5)] == pytest.approx(0.25)
+        assert p[np.isclose(self.Y, -0.5)] == pytest.approx(0.25)
+        assert p.sum() == pytest.approx(1.0)
+
+    def test_support_beyond_grid_raises(self):
+        """Support beyond the grid is an error. (`np.roll()` once silently wrapped that probability around to the
+        grid's opposite edge, corrupting COM's interference PMFs whenever they outgrew it.)"""
+        with pytest.raises(ValueError, match="exceeds the y grid"):
+            delta_pmf(np.array([0.3, 0.3]), L=2, y=self.Y)
