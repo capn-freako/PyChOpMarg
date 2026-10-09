@@ -17,11 +17,20 @@ def params():
     return get_com_params(CFG)
 
 
-def test_ctle_gains_are_attenuations(params):
-    """The sheet enters `g_DC` ([2:1:12]) and `g_DC_HP` ([0:0.5:3]) as positive attenuations, by convention;
-    they're parsed as non-positive gains (dB)."""
-    assert params.g_DC == [-float(n) for n in range(2, 13)]
-    assert params.g_DC2 == [-0.5 * n for n in range(7)]
+def test_ctle_gains_used_as_written(params):
+    "`g_DC` ([-12:1:-2]) and `g_DC_HP` ([-3:0.5:0]) are used as written, as MATLAB COM does."
+    assert params.g_DC == [-float(n) for n in range(12, 1, -1)]
+    assert params.g_DC2 == [-0.5 * n for n in range(6, -1, -1)]
+
+
+def test_positive_ctle_gains_warn_and_fail_validation(tmp_path):
+    "Positive CTLE gains (likely missing minus signs) get a warning, then fail `COMParams` validation."
+    sheet = pd.read_excel(CFG, header=None)
+    sheet.loc[sheet[0] == "g_DC", 1] = "[2:1:12]"
+    cfg = tmp_path / "positive_gdc.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    with pytest.warns(UserWarning, match="g_DC.*Missing minus signs"), pytest.raises(ValueError, match=r"`g_DC\[0\]`"):
+        get_com_params(cfg)
 
 
 def test_validates(params):

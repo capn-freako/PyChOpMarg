@@ -11,6 +11,7 @@ Copyright (c) 2025 David Banas; all rights reserved World wide.
 from functools import reduce
 from pathlib import Path
 import re
+import warnings
 from typing import Any, TypeVar
 from collections.abc import Callable
 
@@ -234,13 +235,16 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
             rx_taps_min[:nRxPreTaps - 1] = -com_params_dict["ffe_tapn_max"] * ones(nRxPreTaps - 1)
             rx_taps_min[nRxPreTaps + 2:] = -com_params_dict["ffe_tapn_max"] * ones(nRxTaps - nRxPreTaps - 2)
 
-    # Make sure CTLE d.c. gains are both lists, of (non-positive) gains in dB.
-    # By convention, COM configuration spreadsheets enter `g_DC`/`g_DC_HP` as positive attenuations;
-    # `- abs()` (not just negation) also keeps the already-negative defaults used when a sheet omits them.
-    for key in ("g_DC", "g_DC2"):
+    # Make sure CTLE d.c. gains are both lists. They're used as written (dB), as MATLAB COM does, so must be <= 0;
+    # a positive one is probably an attenuation entered without its sign (and fails `COMParams` validation).
+    for key, sheet_name in (("g_DC", "g_DC"), ("g_DC2", "g_DC_HP")):
         if not isinstance(com_params_dict[key], (list, np.ndarray)):
             com_params_dict[key] = [com_params_dict[key]]
-        com_params_dict[key] = [0.0 - abs(float(g)) for g in com_params_dict[key]]  # (`0.0 -`: no `-0.0`)
+        com_params_dict[key] = [float(g) for g in com_params_dict[key]]
+        if any(g > 0 for g in com_params_dict[key]):
+            warnings.warn(f"`{sheet_name}` in '{cfg_file}' has positive values ({com_params_dict[key]}); CTLE d.c. "
+                          "gains are <= 0 dB, and MATLAB COM uses them as written. Missing minus signs?",
+                          stacklevel=2)
 
     # Set Rx DFE min./max.
     dfe_max = dfe_min = array([])  # Default is an empty array and used if we don't find `N_b` in our parse results.
