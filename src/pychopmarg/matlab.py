@@ -42,7 +42,7 @@ def start_matlab(com_file: Path, work_dir: Optional[Path] = None) -> Any:
     Start a MATLAB session ready to run COM.
 
     Args:
-        com_file: The MATLAB COM code (e.g. ``com_ieee8023_480.m``); its folder is added to the MATLAB path.
+        com_file: The MATLAB COM code (e.g. ``com_ieee8023_4p17p0.m``); its folder is added to the MATLAB path.
 
     Keyword Args:
         work_dir: MATLAB's working folder, against which COM resolves relative paths (e.g. its ``RESULT_DIR``).
@@ -81,7 +81,7 @@ def run_com_matlab(
             - ch_sets: List of channel sets to run.
 
         cfg_sheet: Path to MS Excel configuration spreadsheet.
-        com_file: Path to the MATLAB COM code (e.g. ``com_ieee8023_480.m``); its name is the COM function's.
+        com_file: Path to the MATLAB COM code (e.g. ``com_ieee8023_4p17p0.m``); its name is the COM function's.
 
     Keyword Args:
         eng: A MATLAB engine from ``start_matlab()``, to reuse across calls.
