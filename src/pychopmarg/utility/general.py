@@ -159,7 +159,7 @@ def reflectivity(pr: Rvec) -> float:
     return sum(dn * y**2 for dn, y in enumerate(pr[pk_loc:]))
 
 
-def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
+def get_channel_sets(path: Path, recursive: bool = False) -> dict[ChnlGrpName, list[ChnlSet]]:
     """
     Return all available groups of channel sets in the given path.
 
@@ -167,6 +167,11 @@ def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
         path: The folder in which to begin searching.
             (Assumed to contain some number of sub-directories,
             in which the actual channel sets are contained.)
+
+    Keyword Args:
+        recursive: Search each group's sub-directories, too, when True.
+            (Each thru channel's aggressors are found in its own directory.)
+            Default: False
 
     Returns:
         Dictionary of channel groups, each containing a list of channel sets.
@@ -181,12 +186,14 @@ def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
     channels: dict[ChnlGrpName, list[ChnlSet]] = {}
     for chnl_grp in chnl_groups:
         channels[chnl_grp.name] = []
-        thru_chnls = list(chnl_grp.glob("*[tT][hH][rR][uU]*.[sS]4[pP]"))  # No global option for case insens. glob().
+        thru_pat = "*[tT][hH][rR][uU]*.[sS]4[pP]"  # No global option for case insens. glob().
+        thru_chnls = list(chnl_grp.rglob(thru_pat) if recursive else chnl_grp.glob(thru_pat))
         thru_chnls.sort()
         for thru_chnl in thru_chnls:
-            nexts = list(chnl_grp.glob(re.sub("thru", "[nN][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
+            chnl_dir = thru_chnl.parent
+            nexts = list(chnl_dir.glob(re.sub("thru", "[nN][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
             nexts.sort()
-            fexts = list(chnl_grp.glob(re.sub("thru", "[fF][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
+            fexts = list(chnl_dir.glob(re.sub("thru", "[fF][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
             fexts.sort()
             channels[chnl_grp.name].append({  # Here we're constructing a "channel set" dictionary.
                 "THRU": [thru_chnl],

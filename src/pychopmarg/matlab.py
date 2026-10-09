@@ -70,6 +70,7 @@ def run_com_matlab(
     cfg_sheet: Path,
     com_file: Path,
     eng: Optional[Any] = None,
+    pulse_resps: bool = False,
 ) -> dict[ChnlGrpName, dict[ChnlSetName, COM_MATLAB_RESULTS]]:
     """
     Run COM on a list of grouped channel sets, using the MATLAB code.
@@ -86,6 +87,9 @@ def run_com_matlab(
     Keyword Args:
         eng: A MATLAB engine from ``start_matlab()``, to reuse across calls.
             Default: None (i.e. - Start one for this call, and quit it afterwards.)
+        pulse_resps: Also return the victim's pulse responses: "vic_t" (s), "vic_uneq_pulse_response" and
+            "vic_eq_pulse_response" (V), in each test case's results. (COM runs with its ``BREAD_CRUMBS`` option.)
+            Default: False
 
     Returns:
         Dictionary, indexed by channel group name, containing dictionaries, indexed by channel set name, of:
@@ -114,7 +118,7 @@ def run_com_matlab(
                 testcases = eng.pychopmarg_com(
                     Path(com_file).stem, str(Path(cfg_sheet).resolve()), str(Path(ch_set['THRU'][0]).resolve()),
                     [str(Path(f).resolve()) for f in ch_set['FEXT']], [str(Path(f).resolve()) for f in ch_set['NEXT']],
-                    nargout=1, stdout=out, stderr=err)
+                    pulse_resps, nargout=1, stdout=out, stderr=err)
                 rslt["results"] = [{k: _to_python(v) for k, v in tc.items()} for tc in testcases]
             except engine.MatlabExecutionError as exc:  # COM failed on this channel set; carry on with the rest.
                 rslt["error"] = str(exc)

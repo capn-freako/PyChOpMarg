@@ -67,12 +67,13 @@ def test_runs_each_channel_set_through_the_wrapper(engine, tmp_path):
     assert str(MFILES_DIR) in engine.paths
     assert engine.quit_called
     # The call: COM's function name, then absolute paths; aggressor lists stay lists (MATLAB cell arrays).
-    (com_func, cfg, thru, fexts, nexts), = engine.calls
+    (com_func, cfg, thru, fexts, nexts, pulse_resps), = engine.calls
     assert com_func == "com_ieee8023_480"
     assert Path(cfg).is_absolute() and Path(cfg).name == "cfg.xls"
     assert Path(thru).name == "thru.s4p"
     assert [Path(f).name for f in fexts] == ["fext1.s4p", "fext2.s4p"]
     assert [Path(f).name for f in nexts] == ["next1.s4p"]
+    assert pulse_resps is False
     # The results: structured data, not console text.
     rslt = rslts["grp"]["thru"]
     assert rslt["error"] is None
@@ -106,3 +107,8 @@ def test_missing_engine_explains_how_to_install(monkeypatch):
 
 def test_wrapper_ships_with_the_package():
     assert (MFILES_DIR / "pychopmarg_com.m").is_file()
+
+
+def test_pulse_resps_requested(engine):
+    run_com_matlab([("g", chnl_set("t.s4p"))], Path("cfg.xls"), Path("com_ieee8023_4p17p0.m"), pulse_resps=True)
+    assert engine.calls[0][5] is True
