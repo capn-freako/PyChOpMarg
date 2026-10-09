@@ -55,6 +55,9 @@ pychopmarg = "pychopmarg.cli:cli"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+pychopmarg = ["mfiles/*.m"]  # MATLAB code run via the MATLAB Engine API (see `pychopmarg.matlab`).
+
 [tool.black]
 line-length = 119
 
