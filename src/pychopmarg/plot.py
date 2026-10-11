@@ -14,7 +14,6 @@ from typing import Any, Optional
 from collections.abc import Callable
 
 from matplotlib         import pyplot as plt  # type: ignore
-from matplotlib.axes    import Axes           # type: ignore
 import numpy as np
 
 from pychopmarg.com     import COM
@@ -88,10 +87,8 @@ def plot_group_samps(  # pylint: disable=too-many-arguments,too-many-positional-
     group_names = list(coms[0][2].keys())
     nCols = len(group_names)
     nRows = min(maxRows, *[len(coms[0][2][grp]) for grp in group_names])
-    _, axs = plt.subplots(nRows, nCols, figsize=(dx * nCols, dy * nRows))
-    # Handle singleton case gracefully.
-    if not isinstance(axs[0][0], Axes):
-        axs = [[axs,],]
+    # `squeeze=False` keeps `axs` 2-D, even when `nRows` and/or `nCols` is 1.
+    _, axs = plt.subplots(nRows, nCols, figsize=(dx * nCols, dy * nRows), squeeze=False)
     n = 0
     print("     ", end="")
     chnls_used: dict[str, list[str]] = {}
