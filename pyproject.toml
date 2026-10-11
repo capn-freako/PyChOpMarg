@@ -106,7 +106,10 @@ ignore_missing_imports = true
 
 [dependency-groups]
 dev = [
+    "jupyter>=1.1.1",
     "m2r2>=0.3.4",
+    "matlabengine>=25,<26",
+    "matplotlib>=3.10.9",
     "mcp>=2.0.0",
     "mypy>=1.19.1",
     "pandas-stubs>=2.3.3.260113",
