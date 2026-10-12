@@ -11,7 +11,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 # pylint: disable=redefined-builtin
 from typing                 import Optional
 
-from numpy                  import argmax, array, concatenate, diff, mean, ones, reshape, sum
+from numpy                  import arange, argmax, array, diff, ones, pad, sum
 from numpy.fft              import irfft, rfft
 from scipy.signal           import lfilter
 
@@ -275,13 +275,13 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         varX           = self.varX
         vic_pulse_resp = self.vic_pulse_resp
 
-        dV: Rvec = diff(vic_pulse_resp)
-        # Truncate at # of whole UIs in `dV`, to avoid +/-1 length variation, due to sampling phase.
-        nUI = int(len(dV) / nspui)
-        hJ = mean(reshape(concatenate((dV[(ts_ix - 1) % nspui::nspui][:nUI],
-                                       dV[ts_ix % nspui::nspui][:nUI])),
-                          (2, nUI)),
-                  axis=0) / t[1]
+        # Central difference around each sample, `ts_ix % nspui + n * nspui`, as per (178A-23).
+        # (Zero padding keeps the first sample valid at sampling phase zero, and
+        # a whole number of UIs avoids +/-1 length variation, due to sampling phase.)
+        nUI = len(vic_pulse_resp) // nspui
+        ixs = ts_ix % nspui + nspui * arange(nUI)
+        _vic_pulse_resp = pad(vic_pulse_resp, 1)
+        hJ = (_vic_pulse_resp[ixs + 2] - _vic_pulse_resp[ixs]) / (2 * t[1])
 
         return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
 

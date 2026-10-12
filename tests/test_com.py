@@ -1,6 +1,7 @@
 """Tests for ``pychopmarg.com``."""
 
 import contextlib
+import copy
 import io
 from pathlib import Path
 
@@ -57,3 +58,18 @@ def test_tx_noise_variance_per_178a_21(example2_com):
     htn = nc.Stn_debug["_htn"]
     # (Within 0.1%: the folded PSD's length rounds; sigma_X^2 would be 44%.)
     assert var == pytest.approx(10**(-nc.snr_tx / 10) * (htn**2).sum(), rel=1e-3)
+
+
+@pytest.mark.parametrize("phase", [0, 1, 17])
+def test_jitter_noise_variance_per_178a_23(example2_com, phase):
+    """The jitter noise variance is sigma_X^2 * (A_DD^2 + sigma_Rj^2) * sum(h_J(n)^2), by (178A-23/24) and Parseval,
+    with h_J(n) the pulse response's slope (V/UI) at each sample of the cursor's phase. Phase zero (cursor on a
+    whole-UI sample index) once paired the slopes of adjacent UIs, roughly halving this variance there."""
+    nc = copy.copy(example2_com.theNoiseCalc)
+    nspui = nc.nspui
+    nc.ts_ix = (example2_com.fom_rslts['cursor_ix'] // nspui) * nspui + phase
+    pr = nc.vic_pulse_resp
+    ixs = np.arange(nc.ts_ix % nspui, len(pr), nspui)
+    ixs = ixs[(ixs >= 1) & (ixs < len(pr) - 1)]
+    hJ = (pr[ixs + 1] - pr[ixs - 1]) / 2 * nspui
+    assert nc.variance(nc.Sjn) == pytest.approx(nc.varX * (nc.Add**2 + nc.sigma_Rj**2) * (hJ**2).sum(), rel=1e-3)
