@@ -9,7 +9,8 @@ import pytest
 
 from pychopmarg.excel import get_com_params
 
-CFG = Path(__file__).parent.parent / "config" / "config_com_ieee8023dj_PyChOpMarg_vs_MATLAB.xls"
+# The tests' own copy of the COM configuration, independent of `config/`'s comparison sheet.
+CFG = Path(__file__).parent / "data" / "config_com_ieee8023dj_test.xls"
 
 
 @pytest.fixture(scope="module")

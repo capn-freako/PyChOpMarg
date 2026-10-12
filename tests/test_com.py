@@ -13,6 +13,8 @@ from pychopmarg.excel import get_com_params
 
 ROOT = Path(__file__).parent.parent
 CHNL = ROOT / "chnl_data"
+# The tests' own copy of the COM configuration (Tx FFE off, for speed), independent of `config/`'s comparison sheet.
+CFG = Path(__file__).parent / "data" / "config_com_ieee8023dj_test.xls"
 
 
 @pytest.fixture(scope="module")
@@ -22,7 +24,7 @@ def example2_com():
               "FEXT": [CHNL / f"example2_FEXT{n}.s4p" for n in (1, 2)],
               "NEXT": [CHNL / f"example2_NEXT{n}.s4p" for n in (1, 2, 3)]}
     with contextlib.redirect_stdout(io.StringIO()):
-        com = COM(get_com_params(ROOT / "config" / "config_com_ieee8023dj_PyChOpMarg_vs_MATLAB.xls"), ch_set)
+        com = COM(get_com_params(CFG), ch_set)
         com()
     return com
 
