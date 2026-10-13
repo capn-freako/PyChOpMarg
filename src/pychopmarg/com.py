@@ -451,9 +451,13 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         # Pre-interpolate channel model to system frequency vector, to prevent noisy non-causal artifacts.
         freqs = self.freqs
         sChnl = ntwk[0]
+        sChnlDC = sChnl.extrapolate_to_dc()
+        # T parameters need 1/S21, so fall back to S parameters if S21 vanishes anywhere. (Weakly coupled aggressors'
+        # S21 can, when written with too few decimal places: e.g., -240 dB near 100 GHz, to 1e-12, cancels to zero.)
+        basis = 't' if np.all(sChnlDC.s[:, 1, 0]) else 's'
         # (`interpolate()` is typed `Network | ndarray`; it returns the latter only when given `return_array=True`.)
-        sChnlInterp = cast(rf.Network, sChnl.extrapolate_to_dc().interpolate(
-            freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis='t', assume_sorted=True))
+        sChnlInterp = cast(rf.Network, sChnlDC.interpolate(
+            freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis=basis, assume_sorted=True))
         new_s = sChnlInterp.s.tolist()  # I couldn't make NumPy array padding work correctly here.
         pad_len = len(freqs) - len(sChnlInterp.f)
         last_s = [[sChnlInterp.s11.s[-1, 0, 0], sChnlInterp.s12.s[-1, 0, 0]],

@@ -9,10 +9,12 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import skrf as rf
 
 import pychopmarg.optimize as optimize
 from pychopmarg.com import COM
 from pychopmarg.excel import get_com_params
+from pychopmarg.utility import sdd_21
 
 ROOT = Path(__file__).parent.parent
 CHNL = ROOT / "chnl_data"
@@ -172,3 +174,14 @@ def test_middle_timing_search_follows_matlab(example2_com, monkeypatch, center):
     assert [ofst for ofst, _ in tried] == expected
     assert rslt["n_ts_evals"] == len(expected) < 32
     assert rslt["cursor_ix"] - peak == max(expected, key=lambda k: (fom_at[k], -expected.index(k)))
+
+
+def test_add_pkg_survives_a_zero_s21(example2_com):
+    """A channel whose S21 is exactly zero somewhere (e.g., a weakly coupled aggressor, written with too few decimal
+    places) can't be interpolated as T parameters, which need 1/S21. `add_pkg()` falls back to S parameters there."""
+    fext = sdd_21(rf.Network(str(CHNL / "example2_FEXT1.s4p")))
+    fext.s[-4, 1, 0] = fext.s[-4, 0, 1] = 0  # (As in the CR group's HN_3in_DAC_Z_1p5m_HL_2in_FEXT_TP0_Tx8_to_TP5_Rx7.)
+    with pytest.raises(np.linalg.LinAlgError):
+        _ = fext.t
+    _, H21 = example2_com.add_pkg((fext, "FEXT"))
+    assert np.all(np.isfinite(H21))
