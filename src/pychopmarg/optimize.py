@@ -225,10 +225,11 @@ def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     return wn, bn, h[dh - nPreTaps: dh - nPreTaps + nTaps]
 
 
-def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
+def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,too-many-branches
     theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
-    ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj
+    ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj,
+    ts_window: int = 0, ts_center: int = 0
 ) -> dict[str, Any]:
     """
     Optimize Rx FFE tap weights, via *Minimum Mean Squared Error* (MMSE).
@@ -250,6 +251,10 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Default: 0.5 (i.e. - ``ts`` within [-UI/2, +UI/2] of peak location)
         norm_mode: The tap weight normalization mode to use.
             Default: ``P8023dj``
+        ts_window: Cursor timing search window (vector samples); 0 = full search. (See Note 2.)
+            Default: 0
+        ts_center: Cursor timing search starting point, relative to the peak (vector samples). (See Note 2.)
+            Default: 0
 
     Returns:
         A dictionary containing
@@ -269,6 +274,13 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             IEEE P802.3dj Task Force, Jan. 2024
 
             [2] D1.2 of P802.3dj, IEEE P802.3dj Task Force, Aug. 2024
+
+        2. With ``ts_window`` > 0, the cursor timing search works outward from ``ts_center``,
+        as MATLAB COM's "middle" search (``TS_SRCH_MODE``) does from the peak, with ``LOCAL_SEARCH`` = ``ts_window``:
+        offsets are tried in order of their distance from ``ts_center``, and one that's ``ts_window``
+        or more samples beyond the best so far on its side of ``ts_center`` is skipped.
+        Otherwise, every offset in the search radius is tried.
+        The number of offsets tried is returned in the "n_ts_evals" key.
     """
 
     assert Nw == 0 or Nw > dw, ValueError(
@@ -277,7 +289,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     # Initialize certain things, from the given `NoiseCalc` instance.
     nspui       = theNoiseCalc.nspui
     vic_pr      = theNoiseCalc.vic_pulse_resp
-    curs_ix     = argmax(vic_pr)
+    curs_ix     = int(argmax(vic_pr))
     ts_sweep_ix = int(ts_sweep * nspui)
 
     # Confirm sufficient room for `ts` sweeping.
@@ -291,7 +303,19 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     rslt = {}
     varX = theNoiseCalc.varX
     if Nw:
-        for ts_ix in range(curs_ix - ts_sweep_ix, curs_ix + ts_sweep_ix):
+        ts_ofsts = list(range(-ts_sweep_ix, ts_sweep_ix))
+        if ts_window:  # Work outward from `ts_center` (a stable sort, like MATLAB's).
+            ts_center = min(max(ts_center, ts_ofsts[0]), ts_ofsts[-1])
+            ts_ofsts.sort(key=lambda k: abs(k - ts_center))
+        side_best: dict[int, tuple[float, int]] = {}  # best (FOM, offset) on each side of `ts_center`
+        n_ts_evals = 0
+        for ts_ofst in ts_ofsts:
+            if ts_window:
+                sides = [side for side in (-1, 1) if (ts_ofst - ts_center) * side >= 0]
+                if any(side in side_best and abs(side_best[side][1] - ts_ofst) >= ts_window for side in sides):
+                    continue
+            n_ts_evals += 1
+            ts_ix = curs_ix + ts_ofst
             theNoiseCalc.ts_ix = ts_ix
             dh, first_samp = divmod(ts_ix, nspui)
             _h = vic_pr[first_samp::nspui]
@@ -362,6 +386,10 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
 
             mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
             fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
+            if ts_window:
+                for side in sides:
+                    if side not in side_best or fom > side_best[side][0]:
+                        side_best[side] = (fom, ts_ofst)
             if fom > max_fom:
                 max_fom = fom
                 rslt["fom"] = fom
@@ -391,6 +419,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["theNoiseCalc"] = theNoiseCalc
                 rslt["varX"] = varX
                 rslt["Rn"] = Rn
+        rslt["n_ts_evals"] = n_ts_evals
         # Apply desired normalization to tap weights.
         w = rslt["rx_taps"]
         match norm_mode:

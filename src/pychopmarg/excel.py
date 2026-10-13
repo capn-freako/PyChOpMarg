@@ -187,9 +187,21 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     com_params_dict.update(cfg_trans(com_cfg1))
     com_params_dict.update(cfg_trans(com_cfg2))
 
-    # Set the Tx tap ranges/steps.
-    N_TX_TAPS    = 6  # not including the cursor
-    N_TX_TAPS_2  = N_TX_TAPS // 2
+    # EQ search control, from the "I/O control" columns (MATLAB COM's settings of the same names).
+    io_ctl: dict[str, Any] = {}
+    if _com_cfg.shape[1] > 6:
+        io_ctl = {name.strip(): val for name, val in _com_cfg[:, range(5, 7)]
+                  if isinstance(name, str) and not pd.isna(val)}
+    search_ctl: dict[str, Any] = {}
+    if "Local Search" in io_ctl:
+        search_ctl["local_search"] = float(io_ctl["Local Search"])
+    if "TS_SRCH_MODE" in io_ctl:
+        search_ctl["ts_srch_mode"] = str(io_ctl["TS_SRCH_MODE"]).strip().lower()
+
+    # Set the Tx tap ranges/steps: c(-4), ..., c(-1), c(1), ..., c(3), as MATLAB COM (cursor excluded).
+    N_TX_PRE     = 4
+    N_TX_POST    = 3
+    N_TX_TAPS    = N_TX_PRE + N_TX_POST
     tx_taps_min  = [0.] * N_TX_TAPS
     tx_taps_max  = [0.] * N_TX_TAPS
     tx_taps_step = [0.] * N_TX_TAPS
@@ -204,13 +216,14 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
             tx_taps_max[ix] = weights
             tx_taps_step[ix] = 0
 
-    for n in range(N_TX_TAPS_2):
+    for n in range(N_TX_PRE):
         mKey = f"c(-{n + 1})"
-        pKey = f"c({n + 1})"
         if mKey in com_params_dict:
-            set_tap(N_TX_TAPS_2 - (n + 1), com_params_dict[mKey])
+            set_tap(N_TX_PRE - (n + 1), com_params_dict[mKey])
+    for n in range(N_TX_POST):
+        pKey = f"c({n + 1})"
         if pKey in com_params_dict:
-            set_tap(N_TX_TAPS_2 + n, com_params_dict[pKey])
+            set_tap(N_TX_PRE + n, com_params_dict[pKey])
 
     # Set Rx FFE config.
     if "dw" in com_params_dict:
@@ -303,6 +316,7 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
         com_params_dict["a1"],
         com_params_dict["a2"],
         com_params_dict["tau"],
+        **search_ctl,
     )
     if "z_pB" in com_params_dict:
         rslt.z_pB = com_params_dict["z_pB"]

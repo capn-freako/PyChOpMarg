@@ -2,12 +2,15 @@
 
 import contextlib
 import copy
+import dataclasses
 import io
+import itertools
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+import pychopmarg.optimize as optimize
 from pychopmarg.com import COM
 from pychopmarg.excel import get_com_params
 
@@ -75,3 +78,97 @@ def test_jitter_noise_variance_per_178a_23(example2_com, phase):
     ixs = ixs[(ixs >= 1) & (ixs < len(pr) - 1)]
     hJ = (pr[ixs + 1] - pr[ixs - 1]) / 2 * nspui
     assert nc.variance(nc.Sjn) == pytest.approx(nc.varX * (nc.Add**2 + nc.sigma_Rj**2) * (hJ**2).sum(), rel=1e-3)
+
+
+def test_local_search_follows_matlab(monkeypatch):
+    """With `local_search` > 0, `opt_eq()` visits exactly the (g_DC, g_DC_HP, Tx FFE) candidates that MATLAB COM's
+    `optimize_fom()` loop does, under its `OptFom_Local_Search()` rule, and picks the same one, for a synthetic FOM."""
+    cp = dataclasses.replace(get_com_params(CFG), c0_min=0.54, local_search=2)
+    com = COM(cp, {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []})
+    target = np.array([0.1, -0.1, 0.2, -0.3, -0.2, 0., 0.])
+
+    def fom(gDC, gDC2, taps):  # A bowl, roughened so that the best so far wanders.
+        return (-((gDC + 6) / 3)**2 - (gDC2 + 1)**2 - (((taps - target) / 0.15)**2).sum()
+                + 0.3 * np.sin(1e3 * (7.3 * gDC + 3.1 * gDC2 + taps @ [1.1, 2.3, 3.7, 5.9, 7.1, 0, 0])))
+
+    visited = []
+
+    def fake_calc_fom(tx_ix, Hctf, **_):
+        taps = com._tx_combs[tx_ix]  # pylint: disable=protected-access
+        visited.append((*Hctf, *np.round(taps, 6)))
+        com.fom_rslts = {k: np.ones(com.nRxTaps) for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'vic_pulse_resp')}
+        com.fom_rslts.update({k: 0 for k in ('cursor_ix', 'vic_peak_loc', 'As', 'varTx', 'varISI', 'varJ', 'varXT', 'varN')})
+        return fom(*Hctf, taps)
+
+    monkeypatch.setattr(com, "calc_Hctf", lambda gDC, gDC2: (gDC, gDC2))
+    monkeypatch.setattr(com, "calc_fom", fake_calc_fom)
+    assert com.opt_eq()
+
+    # MATLAB COM's loops and `OptFom_Local_Search()`, transliterated (1-based indices, as there).
+    tap_vals = [np.linspace(lo, hi, int(round((hi - lo) / step)) + 1) if step else np.zeros(1)
+                for lo, hi, step in zip(cp.tx_taps_min, cp.tx_taps_max, cp.tx_taps_step)]
+    lens = [len(v) for v in tap_vals]
+    sweep = sorted([k + 1 for k, n in enumerate(lens) if n > 1], key=lambda kv: -lens[kv - 1])
+    grid = [ix for ix in itertools.product(*[range(1, n + 1) for n in lens])
+            if 1 - sum(abs(tap_vals[k][i - 1]) for k, i in enumerate(ix)) >= cp.c0_min]
+    expected, best = [], None
+    for ctle_index, gDC in enumerate(cp.g_DC, start=1):
+        for g_LP_index, gDC2 in enumerate(cp.g_DC2, start=1):
+            for tx_index in grid:
+                if best is not None:
+                    skip_it = False
+                    for kv in sweep:
+                        previous_loop_val = g_LP_index if kv == 1 else tx_index[kv - 2]
+                        if previous_loop_val > 1 and abs(tx_index[kv - 1] - best["txffe_index"][kv - 1]) > 2:
+                            skip_it = True
+                            break
+                    if not skip_it and ctle_index > 1 and abs(g_LP_index - best["G_high_pass"]) > 2:
+                        skip_it = True
+                    if skip_it:
+                        continue
+                taps = np.array([tap_vals[k][i - 1] for k, i in enumerate(tx_index)])
+                expected.append((gDC, gDC2, *np.round(taps, 6)))
+                this_fom = fom(gDC, gDC2, taps)
+                if best is None or this_fom > best["FOM"]:
+                    best = {"FOM": this_fom, "txffe_index": tx_index, "G_high_pass": g_LP_index,
+                            "gDC": gDC, "gDC2": gDC2, "taps": taps}
+
+    assert visited == expected
+    assert len(visited) < len(cp.g_DC) * len(cp.g_DC2) * len(grid)  # (It did skip some.)
+    assert (com.gDC, com.gDC2) == (best["gDC"], best["gDC2"])
+    assert np.allclose(com._tx_combs[com.tx_ix], best["taps"])  # pylint: disable=protected-access
+
+
+@pytest.mark.parametrize("center", [0, 5, -3])
+def test_middle_timing_search_follows_matlab(example2_com, monkeypatch, center):
+    """With `ts_window` > 0, `mmse()` tries exactly the cursor offsets that MATLAB COM's "middle" search
+    (`OptFom_Itick_LocalSearch()`, with `LOCAL_SEARCH` = `ts_window`) would, working outward from `ts_center`."""
+    nc = copy.copy(example2_com.theNoiseCalc)
+    cp = example2_com.com_params
+    args = (nc, example2_com.nRxTaps, example2_com.nRxPreTaps, len(cp.dfe_min), cp.RLM, cp.L,
+            cp.dfe_min, cp.dfe_max, cp.rx_taps_min, cp.rx_taps_max)
+    peak = int(np.argmax(nc.vic_pulse_resp))
+    tried: list[tuple[int, float]] = []
+    log10 = optimize.log10
+    monkeypatch.setattr(optimize, "log10", lambda x: (tried.append((nc.ts_ix - peak, 20 * log10(x))), log10(x))[1])
+    full = optimize.mmse(*args)
+    fom_at = dict(tried)
+    assert sorted(fom_at) == list(range(-16, 16)) and full["n_ts_evals"] == 32
+    tried.clear()
+    rslt = optimize.mmse(*args, ts_window=2, ts_center=center)
+
+    # MATLAB COM's "middle" itick loop, transliterated (about `center`, rather than 0).
+    expected, pos, neg = [], None, None
+    for itick in sorted(range(-16, 16), key=lambda k: abs(k - center)):
+        if ((itick >= center and pos is not None and abs(pos[1] - itick) >= 2)
+                or (itick <= center and neg is not None and abs(neg[1] - itick) >= 2)):
+            continue
+        expected.append(itick)
+        if itick >= center and (pos is None or fom_at[itick] > pos[0]):
+            pos = (fom_at[itick], itick)
+        if itick <= center and (neg is None or fom_at[itick] > neg[0]):
+            neg = (fom_at[itick], itick)
+
+    assert [ofst for ofst, _ in tried] == expected
+    assert rslt["n_ts_evals"] == len(expected) < 32
+    assert rslt["cursor_ix"] - peak == max(expected, key=lambda k: (fom_at[k], -expected.index(k)))

@@ -96,6 +96,10 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     tau: float                  # (ns/mm)
     # New as of 802.3dj
     z_pB: float = 1.8           # (mm)
+    # EQ search control (MATLAB COM's "I/O control" settings of the same names)
+    local_search: int = 0           # "Local Search": EQ grid search radius (grid steps); 0 = full search.
+    ts_srch_mode: str = "full-sweep"  # "TS_SRCH_MODE": cursor timing search, "full-sweep" or "middle".
+    ts_track: bool = False          # (PyChOpMarg only) Centre each "middle" timing search on the best so far.
 
     def __post_init__(self):  # pylint: disable=too-many-statements
         "Validate incoming COM parameters."
@@ -183,3 +187,8 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("a1", self.a1, 1e-7, 1e-3)
         check_range("a2", self.a2, 1e-7, 1e-3)
         check_range("tau", self.tau, 1e-7, 1e-2)
+        assert int(self.local_search) == self.local_search >= 0, ValueError(
+            f"`local_search` ({self.local_search}) must be a non-negative integer!")
+        self.local_search = int(self.local_search)
+        assert self.ts_srch_mode in ("full-sweep", "middle"), ValueError(
+            f"`ts_srch_mode` ('{self.ts_srch_mode}') must be either 'full-sweep' or 'middle'!")

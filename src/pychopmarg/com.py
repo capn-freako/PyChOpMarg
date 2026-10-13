@@ -197,15 +197,19 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=[self.chnls_noPkg[0]], apply_eq=False)
             self.pulse_resps_noeq  = self.gen_pulse_resps(chnls=[self.chnls[0]],       apply_eq=False)
 
-        # Generate all possible combinations of Tx FFE tap weights.
+        # Generate all possible combinations of Tx FFE tap weights, in grid order (first tap varying slowest),
+        # along with each one's per-tap grid indices (used by the local search in ``opt_eq()``).
         c0_min = com_params.c0_min
         trips = list(zip(com_params.tx_taps_min,
                          com_params.tx_taps_max,
                          com_params.tx_taps_step))
-        _tx_combs: list[Rvec] = list(filter(
-            lambda v: (1 - abs(v).sum()) >= c0_min,
-            mk_combs(trips)))
-        self._tx_combs = [np.zeros(len(com_params.tx_taps_min)), *_tx_combs]
+        tx_grid_lens = [len(mk_combs([trip])) for trip in trips]
+        _tx_grid = [(comb, ixs) for comb, ixs in zip(mk_combs(trips), np.ndindex(*tx_grid_lens))
+                    if (1 - abs(comb).sum()) >= c0_min]
+        # (Index 0 is always "no Tx EQ", which NEXT aggressors use.)
+        self._tx_combs = [np.zeros(len(com_params.tx_taps_min)), *[comb for comb, _ in _tx_grid]]
+        self._tx_grid_ixs: list[Optional[tuple[int, ...]]] = [None, *[ixs for _, ixs in _tx_grid]]
+        self._tx_grid_lens = tx_grid_lens
         self._num_tx_combs = len(self._tx_combs)
 
         # Set Rx FFE quantities.
@@ -697,7 +701,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         opt_mode: Optional[OptMode] = None,
         norm_mode: Optional[NormMode] = None,
         unit_amp: Optional[bool] = None,
-        n_pre: Optional[int] = None
+        n_pre: Optional[int] = None,
+        ts_window: int = 0,
+        ts_center: int = 0
     ) -> float:
         """
         Calculate the **figure of merit** (FOM), given the existing linear EQ settings.
@@ -719,6 +725,10 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 Default: None (i.e. - Use ``self.unit_amp``.)
             n_pre: Number of pre-cursor taps to use in calculating ISI.
                 Default: None (i.e. - Use ``self.nRxPreTaps``.)
+            ts_window: MMSE cursor timing search window (vector samples); 0 = full search. (See ``optimize.mmse()``.)
+                Default: 0
+            ts_center: MMSE cursor timing search starting point, relative to the pulse peak (vector samples).
+                Default: 0
 
         Returns:
             The resultant figure of merit.
@@ -830,7 +840,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                     self.com_params.A_DD, self.com_params.sigma_Rj)
                 rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, len(self.com_params.dfe_min), self.com_params.RLM,
                             self.com_params.L, bmin, bmax, rx_taps_min, rx_taps_max,
-                            norm_mode=norm_mode)
+                            norm_mode=norm_mode, ts_window=ts_window, ts_center=ts_center)
                 fom = rslt["fom"]
                 rx_taps = rslt["rx_taps"]
                 dfe_tap_weights = rslt["dfe_tap_weights"]
@@ -867,7 +877,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
         return fom
 
-    def opt_eq(  # pylint: disable=too-many-locals
+    def opt_eq(  # pylint: disable=too-many-locals,too-many-branches
         self,
         opt_mode: Optional[OptMode] = None,
         norm_mode: Optional[NormMode] = None,
@@ -892,6 +902,20 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
         Notes:
             1. The found optimum equalization values are set for the instance.
+
+            2. The search visits candidates in MATLAB COM's order: ``gDC`` (outermost), ``gDC2``,
+            then the Tx FFE grid (first tap varying slowest).
+
+            3. With ``com_params.local_search`` (MATLAB COM's "Local Search") > 0, candidates
+            too far from the best so far are skipped, by MATLAB COM's ``OptFom_Local_Search()`` rule:
+            a swept Tx tap whose grid index is more than ``local_search`` steps from the best's,
+            once the loop just outside it (the preceding tap, or ``gDC2`` for the first) is past its first value;
+            and a ``gDC2`` more than ``local_search`` steps from the best's, once ``gDC`` is past its first value.
+            This is a speed-up heuristic, which can miss the global optimum.
+
+            4. With ``com_params.ts_srch_mode`` == "middle", each candidate's cursor timing search
+            works outward from the pulse peak, as MATLAB COM's (see ``optimize.mmse()``);
+            with ``com_params.ts_track`` also, from the best cursor offset so far, after a full search for the first.
         """
 
         # Honor any mode overrides.
@@ -900,21 +924,60 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         if unit_amp is None:  # Don't try the more Pythonic syntax above; it doesn't work for Boolean values.
             unit_amp = self.unit_amp
 
+        cp = self.com_params
+        local_search = cp.local_search
+        middle = cp.ts_srch_mode == "middle"
+
+        # Tx FFE candidates, in grid order. Index 0 ("no Tx EQ") is tried on its own only if it's not in the grid.
+        tx_ixs = list(range(1, self.num_tx_combs))
+        if not any(np.allclose(self._tx_combs[ix], 0) for ix in tx_ixs):
+            tx_ixs.insert(0, 0)
+        # Swept taps, longest grid first (the order in which MATLAB checks them; it doesn't change the outcome).
+        swept_taps = sorted((k for k, n in enumerate(self._tx_grid_lens) if n > 1),
+                            key=lambda k: -self._tx_grid_lens[k])
+
+        def skip(i_gDC: int, i_gDC2: int, tx_ix: int, best: Optional[dict[str, Any]]) -> bool:
+            "MATLAB COM's ``OptFom_Local_Search()`` rule."
+            if not local_search or best is None:
+                return False
+            ixs, best_ixs = self._tx_grid_ixs[tx_ix], best['tx_grid_ixs']
+            if ixs is not None and best_ixs is not None:
+                for k in swept_taps:
+                    outer_ix = i_gDC2 if k == 0 else ixs[k - 1]  # index of the loop just outside tap `k`'s
+                    if outer_ix > 0 and abs(ixs[k] - best_ixs[k]) > local_search:
+                        return True
+            return i_gDC > 0 and abs(i_gDC2 - best['i_gDC2']) > local_search
+
         # Run the nested optimization loops, keeping the best candidate's results.
         fom_max = -1000.0
         best: Optional[dict[str, Any]] = None
-        for _gDC2 in self.com_params.g_DC2:
-            for _gDC in self.com_params.g_DC:
-                _Hctle = self.calc_Hctf(_gDC, _gDC2)
-                for _tx_ix in range(self.num_tx_combs):
+        self.n_fom_evals = 0  # pylint: disable=attribute-defined-outside-init
+        for i_gDC, _gDC in enumerate(cp.g_DC):
+            for i_gDC2, _gDC2 in enumerate(cp.g_DC2):
+                _Hctle: Optional[Cvec] = None
+                for _tx_ix in tx_ixs:
+                    if skip(i_gDC, i_gDC2, _tx_ix, best):
+                        continue
+                    if _Hctle is None:
+                        _Hctle = self.calc_Hctf(_gDC, _gDC2)
+                    ts_window = local_search if middle else 0
+                    ts_center = 0
+                    if middle and cp.ts_track:
+                        if best is None:
+                            ts_window = 0
+                        else:
+                            ts_center = int(best['fom_rslts']['cursor_ix'] - best['fom_rslts']['vic_peak_loc'])
                     fom = self.calc_fom(
                         _tx_ix, _Hctle,
-                        opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
+                        opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp,
+                        ts_window=ts_window, ts_center=ts_center)
+                    self.n_fom_evals += 1
                     if fom > fom_max:
                         fom_max = fom
                         rslts = self.fom_rslts
                         best = {
                             'gDC2': _gDC2, 'gDC': _gDC, 'tx_ix': _tx_ix,
+                            'i_gDC2': i_gDC2, 'tx_grid_ixs': self._tx_grid_ixs[_tx_ix],
                             **{k: rslts[k] for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'cursor_ix', 'As',
                                                      'varTx', 'varISI', 'varJ', 'varXT', 'varN', 'vic_pulse_resp')},
                             'mse': rslts.get('mse', 0),
