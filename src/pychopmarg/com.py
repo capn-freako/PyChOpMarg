@@ -446,7 +446,16 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
     # Package modeling
     def add_pkg(self, ntwk: COMNtwk) -> COMChnl:
-        """Add package response to raw channel and pre-calculate H21."""
+        """
+        Add package response to raw channel and pre-calculate H21.
+
+        ToDo:
+            1. (Important) Eliminate the S->T translation, i.e. - interpolate as S parameters always.
+            Its 1/S21 fails wherever S21 vanishes (hence the fallback below), and it's needlessly
+            ill-conditioned for weakly coupled aggressors. But first, comprehensively compare the
+            results of the two bases (pulse responses, FOM, COM, chosen EQ), across all channel groups,
+            and against MATLAB COM, before committing to that path.
+        """
 
         # Pre-interpolate channel model to system frequency vector, to prevent noisy non-causal artifacts.
         freqs = self.freqs
