@@ -176,6 +176,8 @@ COM_MATLAB/
 *.xlsx
 test_results_*/
 *.m
+# ...except PyChOpMarg's own MATLAB code (see `pychopmarg.matlab`).
+!src/pychopmarg/mfiles/*.m
 *results.csv
 *.orig
 *.bak

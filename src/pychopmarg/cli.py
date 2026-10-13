@@ -20,7 +20,8 @@ from pychopmarg.utility.jupyter import execute_notebook, convert_notebook_to_htm
 
 # ToDo: Activate when new `PyChOpMargUI` package is ready.
 # @click.group(invoke_without_command=True, context_settings=dict(help_option_names=["-h", "--help"]))
-@click.group(invoke_without_command=False, context_settings=dict(help_option_names=["-h", "--help"]))
+# @click.group(invoke_without_command=False, context_settings=dict(help_option_names=["-h", "--help"]))
+@click.group(invoke_without_command=False, context_settings={"help_option_names": ["-h", "--help"]})
 @click.pass_context
 @click.version_option(version=__version__)
 def cli(ctx):
@@ -55,7 +56,8 @@ def cli(ctx):
 #     theCOM.save_results(results)
 
 
-@cli.command(context_settings=dict(help_option_names=["-h", "--help"]))
+# @cli.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@cli.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("notebook-file", type=click.Path(exists=True))
 def run_notebook(notebook_file: Path):
     """
@@ -63,7 +65,9 @@ def run_notebook(notebook_file: Path):
     """
     execute_notebook(notebook_file)
 
-@cli.command(context_settings=dict(help_option_names=["-h", "--help"]))
+
+# @cli.command(context_settings=dict(help_option_names=["-h", "--help"]))
+@cli.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("notebook-file", type=click.Path(exists=True))
 @click.option("--out-file", "-o", type=click.Path(), help="Override the output filename.")
 def convert_notebook(notebook_file: Path, out_file: Optional[Path] = None):
@@ -71,4 +75,3 @@ def convert_notebook(notebook_file: Path, out_file: Optional[Path] = None):
     Convert a Jupyter notebook to an HTML report, omitting all code.
     """
     convert_notebook_to_html(Path(notebook_file), results_path=out_file)
-    

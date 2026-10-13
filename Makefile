@@ -5,37 +5,45 @@
 #
 # Copyright (c) 2024 David Banas; all rights reserved World wide.
 
-.PHONY: dflt help check tox format lint flake8 type-check docs build upload test clean etags conda-build conda-skeleton chaco enable pyibis-ami pyibis-ami-dev pybert pybert-dev etags reports
+.PHONY: dflt help check format lint lint-fix type-check docs build upload upload_test test clean distclean
 
-PROJ_NAME := PyChOpMarg
-PROJ_FILE := pyproject.toml
-PROJ_INFO := src/PyChOpMarg.egg-info/PKG-INFO
-VER_FILE := .proj_ver
-VER_GETTER := ./get_proj_ver.py
-SHELL_EXEC := bash
-PYTHON_EXEC := python -I
-TOX_EXEC := tox
-TOX_SKIP_ENV := format
-PYVERS := 310 311 312 313
-PLATFORMS := lin mac win
-NOTEBOOK_DIR := notebook
-NOTEBOOKS := PyChOpMarg_vs_MATLAB
-NOTEBOOK_EXT := .ipynb
-REPORT_EXT := .html
-PYTHON_SRCS := $(wildcard src/pychopmarg/*.py src/pychopmarg/*/*.py)
+# PROJ_NAME := PyChOpMarg
+# PROJ_FILE := pyproject.toml
+# PROJ_INFO := src/PyChOpMarg.egg-info/PKG-INFO
+# VER_FILE := .proj_ver
+# VER_GETTER := ./get_proj_ver.py
+# SHELL_EXEC := bash
+# PYTHON_EXEC := python -I
+# TOX_EXEC := tox
+# TOX_SKIP_ENV := format
+# PYVERS := 310 311 312 313
+# PLATFORMS := lin mac win
+# NOTEBOOK_DIR := notebook
+# NOTEBOOKS := PyChOpMarg_vs_MATLAB
+# NOTEBOOK_EXT := .ipynb
+# REPORT_EXT := .html
+# PYTHON_SRCS := $(wildcard src/pychopmarg/*.py src/pychopmarg/*/*.py)
+
+SRC_DIR := src/pychopmarg
+DOCS_DIR := docs
+UV_EXEC := uv
+UVX_EXEC := uvx
+PYVERS := 3.10 3.11 3.12 3.13
+PROJ_VER := $(shell ${UV_EXEC} version | cut -f 2 -d ' ') 
+TEST_EXP ?= tests
 
 # Put it first so that "make" without arguments is like "make help".
 dflt: help
 
-check:
-	${TOX_EXEC} run -e check
+# Prevent implicit rule searching for makefiles.
+$(MAKEFILE_LIST): ;
 
-${VER_FILE}: ${PROJ_INFO}
-	${PYTHON_EXEC} ${VER_GETTER} ${PROJ_NAME} $@
+# ${VER_FILE}: ${PROJ_INFO}
+# 	${PYTHON_EXEC} ${VER_GETTER} ${PROJ_NAME} $@
 
-${PROJ_INFO}: ${PROJ_FILE}
-	${PYTHON_EXEC} -m build
-	${PYTHON_EXEC} -m pip install -e .
+# ${PROJ_INFO}: ${PROJ_FILE}
+# 	${PYTHON_EXEC} -m build
+# 	${PYTHON_EXEC} -m pip install -e .
 
 reports: ${NOTEBOOK_DIR}/$(addsuffix ${REPORT_EXT},${NOTEBOOKS})
 
@@ -45,39 +53,51 @@ reports: ${NOTEBOOK_DIR}/$(addsuffix ${REPORT_EXT},${NOTEBOOKS})
 %${NOTEBOOK_EXT}: ${PYTHON_SRCS}
 	${TOX_EXEC} run -e notebook -- $@
 
-tox:
-	TOX_SKIP_ENV="${TOX_SKIP_ENV}" ${TOX_EXEC} -m test
+# tox:
+# 	TOX_SKIP_ENV="${TOX_SKIP_ENV}" ${TOX_EXEC} -m test
+
+check:
+	${UVX_EXEC} -w packaging>=24.2 validate-pyproject pyproject.toml
 
 format:
-	${TOX_EXEC} run -e format
+	${UVX_EXEC} isort src/ tests/
+	${UVX_EXEC} black src/ tests/
 
 lint:
-	${TOX_EXEC} run -e lint
+	${UVX_EXEC} ruff check ${SRC_DIR}
+	${UVX_EXEC} flake8 --ignore=E501,E272,E241,E222,E221,F401,F403 ${SRC_DIR}
 
-flake8:
-	${TOX_EXEC} run -e flake8
+lint-fix:
+	${UVX_EXEC} ruff check --fix ${SRC_DIR}
+	${UVX_EXEC} flake8 --ignore=E501,E272,E241,E222,E221 ${SRC_DIR}
 
 type-check:
-	${TOX_EXEC} run -e type-check
+	${UV_EXEC} run mypy --follow-untyped-imports ${SRC_DIR}
 
-docs: ${VER_FILE}
-	${SHELL_EXEC} -c "source $<" && ${TOX_EXEC} run -e docs
+docs:
+	pushd ${DOCS_DIR}; PROJ_VER=${PROJ_VER} ${UV_EXEC} run sphinx-build -j auto -b html source/ build/; popd
 
-build: ${VER_FILE}
-	${TOX_EXEC} run -e build
+build:
+	${UV_EXEC} build --clear --no-create-gitignore
 
-upload: ${VER_FILE}
-	${SHELL_EXEC} -c "source $<" && ${TOX_EXEC} run -e upload
+upload: build
+	${UVX_EXEC} uv-publish --repo pypi dist/*
+
+upload_test: build
+	${UVX_EXEC} uv-publish --repo testpypi dist/*
 
 test:
-	@for V in ${PYVERS}; do \
-		for P in ${PLATFORMS}; do \
-			${TOX_EXEC} run -e "py$$V-$$P"; \
-		done; \
-	done
+	@for VERSION in $(PYVERS); do \
+        $(UV_EXEC) run --python $$VERSION pytest -vv \
+            --cov=pyibisami --cov-report=html \
+            --cov-report=term-missing $(TEST_EXP); \
+    done
 
 clean:
-	rm -rf .tox build/ dist/ docs/_build/ .mypy_cache .pytest_cache .venv
+	rm -rf .tox build/ docs/build/ .mypy_cache .pytest_cache .venv src/*.egg-info
+
+distclean: clean
+	rm -rf dist/
 
 help:
 	@echo "Available targets:"

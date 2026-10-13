@@ -10,10 +10,10 @@ Copyright (c) 2025 David Banas; all rights reserved World wide.
 
 from enum   import Enum
 from random import sample
-from typing import Any, Callable, Optional
+from typing import Any, Optional
+from collections.abc import Callable
 
 from matplotlib         import pyplot as plt  # type: ignore
-from matplotlib.axes    import Axes           # type: ignore
 import numpy as np
 
 from pychopmarg.com     import COM
@@ -30,7 +30,7 @@ class ZoomMode(Enum):
     RELATIVE = 5    # x-axis min. & max. specified by caller, relative to pulse peak location.
 
 
-def plot_group_samps(  # noqa=501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
+def plot_group_samps(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-branches,too-many-statements
     plot_func: Callable[[COM, str, str, str, dict[str, str], Any, Any], None],
     x_lbl: str, y_lbls: tuple[str, str],
     coms: list[tuple[str, dict[str, str], dict[str, dict[str, COM]]]],
@@ -86,17 +86,14 @@ def plot_group_samps(  # noqa=501 pylint: disable=too-many-arguments,too-many-po
     """
     group_names = list(coms[0][2].keys())
     nCols = len(group_names)
-    nRows = min(maxRows, min(list(map(lambda grp: len(list(coms[0][2][grp].keys())),  # pylint: disable=nested-min-max
-                                      group_names))))
-    _, axs = plt.subplots(nRows, nCols, figsize=(dx * nCols, dy * nRows))
-    # Handle singleton case gracefully.
-    if not isinstance(axs[0][0], Axes):
-        axs = [[axs,],]
+    nRows = min(maxRows, *[len(coms[0][2][grp]) for grp in group_names])
+    # `squeeze=False` keeps `axs` 2-D, even when `nRows` and/or `nCols` is 1.
+    _, axs = plt.subplots(nRows, nCols, figsize=(dx * nCols, dy * nRows), squeeze=False)
     n = 0
     print("     ", end="")
     chnls_used: dict[str, list[str]] = {}
     for grp in group_names:  # pylint: disable=too-many-nested-blocks
-        print(f"{grp : ^45s}", end="")
+        print(f"{grp:^45s}", end="")
         chnls_used.update({grp: []})
         if chnls_by_grp:
             chnls = chnls_by_grp[grp]
@@ -179,7 +176,7 @@ def plot_pulse_resps_gen(  # pylint: disable=too-many-statements
         1. Add a fourth pulse response option: pre-FFE.
     """
 
-    def plot_pulse_resps(  # noqa=501 pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,unused-argument
+    def plot_pulse_resps(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,unused-argument
         com: COM, grp: str, lbl: str, nm: str, opts: dict[str, str], ax1: Any, ax2: Any
     ) -> None:
         """

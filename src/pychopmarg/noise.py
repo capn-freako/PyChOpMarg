@@ -11,37 +11,37 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 # pylint: disable=redefined-builtin
 from typing                 import Optional
 
-from numpy                  import argmax, array, concatenate, diff, mean, ones, reshape, sum
+from numpy                  import arange, argmax, array, diff, ones, pad, sum
 from numpy.fft              import irfft, rfft
 from scipy.signal           import lfilter
 
 from pychopmarg.common      import Rvec, Cvec, Rmat
 
 
-class NoiseCalc():  # pylint: disable=too-many-instance-attributes
+class NoiseCalc:  # pylint: disable=too-many-instance-attributes
     "Noise calculator for COM"
 
     # Independent variables, set during instance initialization.
-    L               = int(4)                     # Number of modulation levels.
-    Tb              = float(9.412e-12)           # UI (s)
-    ts_ix           = int(0)                     # Main pulse sampling index
+    L               = 4                          # Number of modulation levels.
+    Tb              = 9.412e-12                  # UI (s)
+    ts_ix           = 0                          # Main pulse sampling index
     t               = array([0], dtype=float)    # System time vector (s)
     vic_pulse_resp  = array([0], dtype=float)    # Victim pulse response (V)
-    agg_pulse_resps: list[Rvec] = []             # Aggressor pulse responses (V)
+    agg_pulse_resps: list[Rvec]                  # Aggressor pulse responses (V)
     f               = array([0], dtype=float)    # System frequency vector (Hz)
     Ht              = array([0], dtype=complex)  # Transfer function of Tx output driver risetime
     H21             = array([0], dtype=complex)  # Transfer function of terminated interconnect
     Hr              = array([0], dtype=complex)  # Transfer function of Rx AFE
     Hctf            = array([0], dtype=complex)  # Transfer function of Rx CTLE
     eta0            = float(0)                   # Noise density at Rx AFE input (V^2/GHz)
-    Av              = float(0.6)                 # Victim drive level (V)
+    Av              = 0.6                        # Victim drive level (V)
     snr_tx          = float(25)                  # Tx signal-to-noise ratio (dB)
     Add             = float(0)                   # Dual-Dirac peak amplitude (V)
     sigma_Rj        = float(0)                   # Dual-Dirac random stdev (V)
 
     # Invariant dependent variables, set during instance initialization.
-    fN       = float(53.125e9)            # Nyquist frequency (Hz)
-    nspui    = int(32)                    # Number of samples per UI
+    fN       = 53.125e9                   # Nyquist frequency (Hz)
+    nspui    = 32                         # Number of samples per UI
     varX     = float(0)                   # Signal power (V^2)
 
     def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
@@ -222,7 +222,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         nUI = int(len(t) / nspui)
         _agg_pulse_resp = agg_pulse_resp[:nUI * nspui]
         sampled_agg_prs: Rmat = array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
-        best_m = argmax(list(map(lambda pr_samps: (pr_samps**2).sum(), sampled_agg_prs)))
+        best_m = argmax([(pr_samps**2).sum() for pr_samps in sampled_agg_prs])
 
         return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
 
@@ -245,7 +245,7 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
 
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx * self.Av  # "* Av" is for consistency w/ MATLAB code.
         htn  = irfft(Htn)                               # impulse response of complete signal path, except Tx FFE
-        htn_ave_xM = lfilter(ones(self.nspui), 1, htn)  # combination averaging and pre-normalization filter
+        htn_ave_xM = lfilter(ones(self.nspui), ones(1), htn)  # combination averaging and pre-normalization filter
         _htn = self.baud_rate_sample(htn_ave_xM)        # decimated by `nspui`
         _Htn = rfft(_htn)
 
@@ -258,7 +258,8 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
                 '_htn': _htn,
             }
 
-        return self.varX * self.Tb * 10**(-self.snr_tx / 10) * abs(_Htn)**2
+        # No `varX` (sigma_X^2) here, unlike `Sxn()`: (178A-21), and MATLAB COM's default (`S_tn_w_AM` = 0).
+        return self.Tb * 10**(-self.snr_tx / 10) * abs(_Htn)**2                       # (178A-21)
 
     @property
     def Sjn(self) -> Rvec:
@@ -274,13 +275,13 @@ class NoiseCalc():  # pylint: disable=too-many-instance-attributes
         varX           = self.varX
         vic_pulse_resp = self.vic_pulse_resp
 
-        dV: Rvec = diff(vic_pulse_resp)
-        # Truncate at # of whole UIs in `dV`, to avoid +/-1 length variation, due to sampling phase.
-        nUI = int(len(dV) / nspui)
-        hJ = mean(reshape(concatenate((dV[(ts_ix - 1) % nspui::nspui][:nUI],
-                                       dV[(ts_ix    ) % nspui::nspui][:nUI])),  # noqa=E202
-                          (2, nUI)),
-                  axis=0) / t[1]
+        # Central difference around each sample, `ts_ix % nspui + n * nspui`, as per (178A-23).
+        # (Zero padding keeps the first sample valid at sampling phase zero, and
+        # a whole number of UIs avoids +/-1 length variation, due to sampling phase.)
+        nUI = len(vic_pulse_resp) // nspui
+        ixs = ts_ix % nspui + nspui * arange(nUI)
+        _vic_pulse_resp = pad(vic_pulse_resp, 1)
+        hJ = (_vic_pulse_resp[ixs + 2] - _vic_pulse_resp[ixs]) / (2 * t[1])
 
         return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
 

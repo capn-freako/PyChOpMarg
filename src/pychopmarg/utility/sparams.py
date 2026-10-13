@@ -144,7 +144,7 @@ def import_s32p(  # pylint: disable=too-many-locals
     """
 
     # Import and sanity check the Touchstone file.
-    ntwk = rf.Network(filename)
+    ntwk = rf.Network(str(filename))
     (_, rs, cs) = ntwk.s.shape
     assert rs == cs, "Non-square Touchstone file S-matrix!"
     assert rs == 32, f"Touchstone file must have 32 ports!\n\t{ntwk}"
@@ -167,8 +167,9 @@ def import_s32p(  # pylint: disable=too-many-locals
         return [left0 * 4, right0 * 4 + 1, left0 * 4 + 2, right0 * 4 + 3]
 
     vic_ports = ports_from_chnls(vic_chnl, vic_chnl)
-    vic = sdd_21(rf.subnetwork(ntwk, vic_ports))
-    vic = (vic, 'THRU')
+    # vic = sdd_21(rf.subnetwork(ntwk, vic_ports))
+    # vic = (vic, 'THRU')
+    vic = (sdd_21(ntwk.subnetwork(vic_ports)), 'THRU')
     if vic_chnl % 2:  # odd?
         vic_rx_ports = [vic_ports[n] for n in [0, 2]]
     else:
@@ -183,12 +184,8 @@ def import_s32p(  # pylint: disable=too-many-locals
         else:
             agg_tx_ports = [agg_ports[n] for n in [0, 2]]
         sub_ports = np.concatenate(list(zip(agg_tx_ports, vic_rx_ports)))
-        subntwk = sdd_21(ntwk.subnetwork(sub_ports))
-        if (vic_chnl + agg_chnl) % 2:
-            subntwk = (subntwk, 'NEXT')
-        else:
-            subntwk = (subntwk, 'FEXT')
-        aggs.append(subntwk)
+        label = 'NEXT' if (vic_chnl + agg_chnl) % 2 else 'FEXT'
+        aggs.append((sdd_21(ntwk.subnetwork(list(sub_ports))), label))
     return [vic] + aggs
 
 
@@ -286,7 +283,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         2-port network equivalent to package transmission line.
     """
 
-    f_GHz  = f / 1e9  # noqa E221
+    f_GHz  = f / 1e9
     gamma1 = a1 * (1 + 1j)
 
     def gamma2(f: float) -> complex:
@@ -315,7 +312,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             s2p: Two port network for the leg.
         """
         zc, zp = z_pair
-        rho = (zc - 2 * r0) / (zc + 2 * r0)  # noqa E221
+        rho = (zc - 2 * r0) / (zc + 2 * r0)
         s11 = rho * (1 - np.exp(-g * 2 * zp)) / (1 - rho**2 * np.exp(-g * 2 * zp))
         s21 = (1 - rho**2) * np.exp(-g * zp)  / (1 - rho**2 * np.exp(-g * 2 * zp))
         return rf.Network(s=array(list(zip(zip(s11, s21), zip(s21, s11)))), f=f, z0=r0)

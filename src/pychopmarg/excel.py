@@ -11,7 +11,9 @@ Copyright (c) 2025 David Banas; all rights reserved World wide.
 from functools import reduce
 from pathlib import Path
 import re
-from typing import Any, Callable, TypeVar
+import warnings
+from typing import Any, TypeVar
+from collections.abc import Callable
 
 import numpy as np
 from numpy import arange, array, concatenate, ones, zeros
@@ -41,6 +43,7 @@ com_fields: dict[str, str] = {
     "b_max(1)": "b_max1",
     "b_min(1)": "b_min1",
     "b_max(2..N_b)": "b_maxN",
+    "b_min(2..N_b)": "b_minN",
     "ffe_pre_tap_len": "dw",
     "f_b": "fb",
     "Delta_f": "fstep",
@@ -101,7 +104,7 @@ def alternative(
     """
     try:
         rslt = f(x)
-    except:  # noqa=E722 pylint: disable=bare-except
+    except Exception:  # pylint: disable=broad-exception-caught
         rslt = g(x)
     return rslt
 
@@ -131,10 +134,8 @@ def parse_Mfloats(mStr: str) -> NDArray:
 
 def parse_Mlist(mStr: str) -> NDArray:
     "Parse a string containing an M-code list of numbers."
-    tokens = list(map(lambda s: s.strip(","),
-                      mStr.strip("[] ").split()))
-    return concatenate(list(map(lambda s: alternative(parse_Mfloat, parse_Mfloats, s),
-                                tokens)))
+    tokens = [s.strip(",") for s in mStr.strip("[] ").split()]
+    return concatenate([alternative(parse_Mfloat, parse_Mfloats, s) for s in tokens])
 
 
 def parse_Marray(mStr: str) -> NDArray:
@@ -161,37 +162,46 @@ def match_ignored_field_name_prefix(mName: str) -> bool:
 
 def cfg_trans(com_cfg: NDArray) -> dict[str, Any]:
     "Translate/filter the names/values of the given 2D NumPy array."
-    return dict(map(apply2(lambda s: com_fields[s] if s in com_fields else s,  # type: ignore
+    return dict(map(apply2(lambda s: com_fields.get(s, s),  # type: ignore
                            lambda s: parse_Mmatrix(s) if isinstance(s, str) else s),
                     filter(lambda pr: not pd.isna(pr[0]) and not match_ignored_field_name_prefix(pr[0]),
                            com_cfg)))
 
 
 # Kept global, so I can inspect it later while debugging:
-com_params_dict = {}  # pylint: disable=global-statement
+com_params_dict: dict[Any, Any] = {}  # pylint: disable=global-statement
 
 
-def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=too-many-locals,too-many-branches,too-many-statements
-    "Read a COM configuration XLS file and return an equivalent ``COMParams`` instance."
+def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    "Read a COM configuration spreadsheet (*.xls or *.xlsx) and return an equivalent ``COMParams`` instance."
 
     global com_params_dict  # pylint: disable=global-statement
 
-    if cfg_file.suffix == "xlsx":  # You'll need to manually export to `*.xls` from within Excel.
-        raise RuntimeError("Currently, *.XLSX files must first be manually converted to *.XLS.")
-        # com_cfg = pd.read_excel(cfg_file, engine_kwargs={"read_only": True})  # Doesn't work, currently.
-    com_cfg = pd.read_excel(cfg_file)
+    com_cfg = pd.read_excel(cfg_file)  # (Engine chosen by extension: `xlrd` for *.xls, `openpyxl` for *.xlsx.)
 
     _com_cfg = com_cfg.to_numpy()
-    com_cfg1 = _com_cfg[:, range(0, 2)]
+    com_cfg1 = _com_cfg[:, range(2)]
     com_cfg2 = _com_cfg[:, range(9, 11)]
 
     com_params_dict = vars(IEEE_8023dj).copy()
     com_params_dict.update(cfg_trans(com_cfg1))
     com_params_dict.update(cfg_trans(com_cfg2))
 
-    # Set the Tx tap ranges/steps.
-    N_TX_TAPS    = 6  # not including the cursor
-    N_TX_TAPS_2  = N_TX_TAPS // 2
+    # EQ search control, from the "I/O control" columns (MATLAB COM's settings of the same names).
+    io_ctl: dict[str, Any] = {}
+    if _com_cfg.shape[1] > 6:
+        io_ctl = {name.strip(): val for name, val in _com_cfg[:, range(5, 7)]
+                  if isinstance(name, str) and not pd.isna(val)}
+    search_ctl: dict[str, Any] = {}
+    if "Local Search" in io_ctl:
+        search_ctl["local_search"] = float(io_ctl["Local Search"])
+    if "TS_SRCH_MODE" in io_ctl:
+        search_ctl["ts_srch_mode"] = str(io_ctl["TS_SRCH_MODE"]).strip().lower()
+
+    # Set the Tx tap ranges/steps: c(-4), ..., c(-1), c(1), ..., c(3), as MATLAB COM (cursor excluded).
+    N_TX_PRE     = 4
+    N_TX_POST    = 3
+    N_TX_TAPS    = N_TX_PRE + N_TX_POST
     tx_taps_min  = [0.] * N_TX_TAPS
     tx_taps_max  = [0.] * N_TX_TAPS
     tx_taps_step = [0.] * N_TX_TAPS
@@ -206,18 +216,19 @@ def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=to
             tx_taps_max[ix] = weights
             tx_taps_step[ix] = 0
 
-    for n in range(N_TX_TAPS_2):
+    for n in range(N_TX_PRE):
         mKey = f"c(-{n + 1})"
-        pKey = f"c({n + 1})"
         if mKey in com_params_dict:
-            set_tap(N_TX_TAPS_2 - (n + 1), com_params_dict[mKey])
+            set_tap(N_TX_PRE - (n + 1), com_params_dict[mKey])
+    for n in range(N_TX_POST):
+        pKey = f"c({n + 1})"
         if pKey in com_params_dict:
-            set_tap(N_TX_TAPS_2 + n, com_params_dict[pKey])
+            set_tap(N_TX_PRE + n, com_params_dict[pKey])
 
     # Set Rx FFE config.
     if "dw" in com_params_dict:
         assert "ffe_post_tap_len" in com_params_dict, ValueError(
-            "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")  # noqa=E501
+            "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")
         nRxPreTaps = com_params_dict["dw"]
         nRxPostTaps = com_params_dict["ffe_post_tap_len"]
         nRxTaps = nRxPreTaps + 1 + nRxPostTaps  # Includes cursor tap.
@@ -237,11 +248,16 @@ def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=to
             rx_taps_min[:nRxPreTaps - 1] = -com_params_dict["ffe_tapn_max"] * ones(nRxPreTaps - 1)
             rx_taps_min[nRxPreTaps + 2:] = -com_params_dict["ffe_tapn_max"] * ones(nRxTaps - nRxPreTaps - 2)
 
-    # Make sure CTLE d.c. gains are both lists.
-    if not isinstance(com_params_dict["g_DC"], (list, np.ndarray)):
-        com_params_dict["g_DC"] = [com_params_dict["g_DC"]]
-    if not isinstance(com_params_dict["g_DC2"], (list, np.ndarray)):
-        com_params_dict["g_DC2"] = [com_params_dict["g_DC2"]]
+    # Make sure CTLE d.c. gains are both lists. They're used as written (dB), as MATLAB COM does, so must be <= 0;
+    # a positive one is probably an attenuation entered without its sign (and fails `COMParams` validation).
+    for key, sheet_name in (("g_DC", "g_DC"), ("g_DC2", "g_DC_HP")):
+        if not isinstance(com_params_dict[key], (list, np.ndarray)):
+            com_params_dict[key] = [com_params_dict[key]]
+        com_params_dict[key] = [float(g) for g in com_params_dict[key]]
+        if any(g > 0 for g in com_params_dict[key]):
+            warnings.warn(f"`{sheet_name}` in '{cfg_file}' has positive values ({com_params_dict[key]}); CTLE d.c. "
+                          "gains are <= 0 dB, and MATLAB COM uses them as written. Missing minus signs?",
+                          stacklevel=2)
 
     # Set Rx DFE min./max.
     dfe_max = dfe_min = array([])  # Default is an empty array and used if we don't find `N_b` in our parse results.
@@ -252,11 +268,10 @@ def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=to
             dfe_min = zeros(N_b)
             if "b_max1" in com_params_dict:
                 dfe_max[0] = float(com_params_dict["b_max1"])
-            if "b_min1" in com_params_dict:
-                dfe_min[0] = float(com_params_dict["b_min1"])
-            if N_b > 1:
-                if "b_maxN" in com_params_dict:
-                    dfe_max[1:] = dfe_min[1:] = float(com_params_dict["b_maxN"])
+            dfe_min[0] = float(com_params_dict.get("b_min1", -dfe_max[0]))  # As MATLAB COM, defaults to `-b_max`.
+            if N_b > 1:  # Taps 2..N_b, as MATLAB COM: `b_max` defaults to 0.2, `b_min` to `-b_max`; each may be per tap.
+                dfe_max[1:] = np.asarray(com_params_dict.get("b_maxN", 0.2), dtype=float).ravel()
+                dfe_min[1:] = np.asarray(com_params_dict.get("b_minN", -dfe_max[1:]), dtype=float).ravel()
 
     rslt = COMParams(
         com_params_dict["fb"],
@@ -301,6 +316,7 @@ def get_com_params(cfg_file: Path) -> COMParams:  # noqa=E501 pylint: disable=to
         com_params_dict["a1"],
         com_params_dict["a2"],
         com_params_dict["tau"],
+        **search_ctl,
     )
     if "z_pB" in com_params_dict:
         rslt.z_pB = com_params_dict["z_pB"]

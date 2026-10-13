@@ -50,7 +50,9 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[Rvec]:
     ranges = []
     for trip in trips:
         if trip[2]:  # non-zero step?
-            ranges.append(list(np.arange(trip[0], trip[1] + trip[2], trip[2])))
+            # (Not `arange(min, max + step, step)`, which rounding can extend past `max`: [0:0.1:0.2] => 0, ..., 0.3.)
+            n_vals = int(round((trip[1] - trip[0]) / trip[2])) + 1
+            ranges.append(list(trip[0] + trip[2] * np.arange(n_vals)))
         else:
             ranges.append([0.0])  # type: ignore
     return list(map(np.array, all_combs(ranges)))
@@ -159,7 +161,7 @@ def reflectivity(pr: Rvec) -> float:
     return sum(dn * y**2 for dn, y in enumerate(pr[pk_loc:]))
 
 
-def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
+def get_channel_sets(path: Path, recursive: bool = False) -> dict[ChnlGrpName, list[ChnlSet]]:
     """
     Return all available groups of channel sets in the given path.
 
@@ -167,6 +169,11 @@ def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
         path: The folder in which to begin searching.
             (Assumed to contain some number of sub-directories,
             in which the actual channel sets are contained.)
+
+    Keyword Args:
+        recursive: Search each group's sub-directories, too, when True.
+            (Each thru channel's aggressors are found in its own directory.)
+            Default: False
 
     Returns:
         Dictionary of channel groups, each containing a list of channel sets.
@@ -181,19 +188,62 @@ def get_channel_sets(path: Path) -> dict[ChnlGrpName, list[ChnlSet]]:
     channels: dict[ChnlGrpName, list[ChnlSet]] = {}
     for chnl_grp in chnl_groups:
         channels[chnl_grp.name] = []
-        thru_chnls = list(chnl_grp.glob("*[tT][hH][rR][uU]*.[sS]4[pP]"))  # No global option for case insens. glob().
+        thru_pat = "*[tT][hH][rR][uU]*.[sS]4[pP]"  # No global option for case insens. glob().
+        thru_chnls = list(chnl_grp.rglob(thru_pat) if recursive else chnl_grp.glob(thru_pat))
         thru_chnls.sort()
+        aggressors: dict[Path, dict[str, list[Path]]] = {}
+        for chnl_dir in sorted({thru.parent for thru in thru_chnls}):
+            aggressors.update(_find_aggressors([thru for thru in thru_chnls if thru.parent == chnl_dir]))
         for thru_chnl in thru_chnls:
-            nexts = list(chnl_grp.glob(re.sub("thru", "[nN][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
-            nexts.sort()
-            fexts = list(chnl_grp.glob(re.sub("thru", "[fF][eE][xX][tT][0-9]", thru_chnl.name, flags=re.IGNORECASE)))
-            fexts.sort()
             channels[chnl_grp.name].append({  # Here we're constructing a "channel set" dictionary.
                 "THRU": [thru_chnl],
-                "NEXT": nexts,
-                "FEXT": fexts
+                "NEXT": aggressors[thru_chnl]["NEXT"],
+                "FEXT": aggressors[thru_chnl]["FEXT"],
             })
     return channels
+
+
+def _find_aggressors(thru_chnls: list[Path]) -> dict[Path, dict[str, list[Path]]]:
+    """
+    Assign the NEXT/FEXT Touchstone files in a directory to its thru channels.
+
+    Args:
+        thru_chnls: The thru channels, all in the same directory.
+
+    Returns:
+        For each thru channel, its "NEXT" and "FEXT" aggressor files (sorted).
+
+    Notes:
+        1. An aggressor is a "*.s4p" file in the same directory whose name contains "NEXT" or "FEXT" (the last
+        occurrence decides which; any case) but not "thru", and begins with the part of the thru channel's name
+        before "thru" (less any trailing "_", "-", ".", or " "). Contributors name them variously; e.g., for
+        thru ``<stem>_thru<x>.s4p``: ``<stem>_next<n><x>.s4p``, ``<stem><...>_NEXT<n>.s4p``,
+        ``<stem>_xtalk<n>_Next.s4p``, or ``<stem>_NEXT_<different suffix>.s4p``.
+        2. Each aggressor goes to the thru channel(s) whose name prefix it matches the longest of.
+    """
+
+    def prefix(name: str) -> str:
+        return name[:_THRU_RE.search(name).start()].rstrip("_-. ").lower()  # type: ignore
+
+    rslt: dict[Path, dict[str, list[Path]]] = {thru: {"NEXT": [], "FEXT": []} for thru in thru_chnls}
+    if not thru_chnls:
+        return rslt
+    for fname in sorted(thru_chnls[0].parent.iterdir()):
+        kinds = _XTALK_RE.findall(fname.name)
+        if not kinds or _THRU_RE.search(fname.name) or fname.suffix.lower() != ".s4p":
+            continue
+        matches = [thru for thru in thru_chnls if fname.name.lower().startswith(prefix(thru.name))]
+        if not matches:
+            continue
+        longest = max(len(prefix(thru.name)) for thru in matches)
+        for thru in matches:
+            if len(prefix(thru.name)) == longest:
+                rslt[thru][kinds[-1].upper()].append(fname)
+    return rslt
+
+
+_THRU_RE = re.compile("thru", re.IGNORECASE)
+_XTALK_RE = re.compile("next|fext", re.IGNORECASE)
 
 
 def dBm_Hz(x: Rvec) -> Rvec:

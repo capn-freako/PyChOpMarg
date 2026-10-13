@@ -8,7 +8,7 @@ Original date:   March 3, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import numpy as np  # type: ignore
 from numpy.typing import NDArray
@@ -38,7 +38,7 @@ def filt_pr_samps(pr_samps: Rvec, As: float, rel_thresh: float = 0.001) -> Rvec:
 def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     h_samps: Rvec, L: int = 4,
     curs_ix: Optional[int] = None, y: Optional[Rvec] = None,
-    dbg_dict: Optional[Dict[str, Any]] = None
+    dbg_dict: Optional[dict[str, Any]] = None
 ) -> tuple[Rvec, Rvec]:
     """
     Calculate the "delta-pmf" for a set of pulse response samples,
@@ -66,7 +66,7 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
 
     Raises:
         ValueError: If the given pulse response contains any NaNs.
-        ValueError: If a needed shift exceeds half the result vector length.
+        ValueError: If the samples' combined extent (the PMF's support) exceeds the ``y`` grid's.
 
     Notes:
         1. The input set of pulse response samples is filtered,
@@ -104,13 +104,27 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     sig_step = 2.0 / (L - 1)
     sig_shifts = (np.arange(L) * sig_step - 1) / ystep
 
+    def shifted(p: Rvec, n: int) -> Rvec:
+        "`p` shifted by `n` bins, without wrapping around (unlike `np.roll()`)."
+        out = np.zeros_like(p)
+        if n >= 0:
+            out[n:] = p[:len(p) - n]
+        else:
+            out[:n] = p[-n:]
+        return out
+
     # PMF calculation proper - a more efficient form of convolution, given our apriori knowledge of the input.
     rslt = delta
+    max_shift = 0
     for hn in h_samps_filt:
         # Filter out zeros, as per MATLAB code:
         shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn).astype(int)))  # (93A-39)
         if shifts:
-            _rslt: NDArray = sum(np.roll(rslt, shift) for shift in shifts)  # type: ignore
+            max_shift += max(abs(shift) for shift in shifts)
+            if max_shift > zero_ix:  # The PMF's support would exceed the `y` grid.
+                raise ValueError(
+                    f"The samples' combined extent ({max_shift * ystep:.3g}) exceeds the y grid's ({zero_ix * ystep:.3g}).")
+            _rslt: NDArray = sum(shifted(rslt, shift) for shift in shifts)  # type: ignore
             rslt  = _rslt / _rslt.sum()  # Enforce a PMF.
 
     return y, rslt
@@ -165,6 +179,10 @@ def loc_curs(  # pylint: disable=too-many-arguments,too-many-positional-argument
     Returns:
         The index in the given pulse response vector of the cursor.
 
+    Raises:
+        ValueError: If no candidate within `max_range` of the peak has a positive value and a full UI on
+            either side of it in the pulse response (i.e. - a degenerate pulse response).
+
     Notes:
         1. As per v3.70 of the COM MATLAB code, we only minimize the
         residual of (93A-25); we don't require solving it exactly.
@@ -174,11 +192,15 @@ def loc_curs(  # pylint: disable=too-many-arguments,too-many-positional-argument
     # Minimize Muller-Mueller criterion, within `max_range` of peak,
     # giving priority to exact solutions, as per the spec.
     peak_loc = int(np.argmax(pulse_resp))
-    ix_best = peak_loc  # To assuage `pylint` only; does not affect code logic.
+    ix_best: Optional[int] = None
     res_min = 1e6
     zero_res_ixs = []
-    for ix in range(max(0, peak_loc - nspui * max_range),
-                    min(len(pulse_resp), peak_loc + nspui * max_range)):
+    # Each candidate needs a full UI on either side (a negative index would silently wrap around to the
+    # far end of the pulse response), and a positive value: it's the cursor, and the divisor of (93A-26).
+    for ix in range(max(nspui, peak_loc - nspui * max_range),
+                    min(len(pulse_resp) - nspui, peak_loc + nspui * max_range)):
+        if pulse_resp[ix] <= 0:
+            continue
         # Anticipate the DFE first tap value, observing its limits:
         b_1 = min(dfe_max[0],
                   max(dfe_min[0],
@@ -195,4 +217,7 @@ def loc_curs(  # pylint: disable=too-many-arguments,too-many-positional-argument
         if pre_peak_ixs:
             return pre_peak_ixs[-1]  # Standard says to use first one prior to peak in event of multiple solutions.
         return zero_res_ixs[0]       # They're all post-peak; so, return first (i.e. - closest to peak).
+    if ix_best is None:
+        raise ValueError(f"No valid cursor candidate within {max_range} UI of the pulse response's peak "
+                         f"(sample {peak_loc} of {len(pulse_resp)}, value {pulse_resp[peak_loc]:.3g}).")
     return ix_best                   # No exact solutions; so, return that which yields minimum error.

@@ -8,6 +8,7 @@ Original date:   March 3, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
+import math
 from enum       import Enum
 from pathlib    import Path
 from typing     import TypeVar, TypeAlias
@@ -27,8 +28,7 @@ COMFiles: TypeAlias = str | list[str]
 COMNtwk: TypeAlias = tuple[rf.Network, str]
 COMChnl: TypeAlias = tuple[COMNtwk, Cvec]
 
-# PI    = np.pi  # Making autodoc barf.
-PI    = 3.14159     #: Value of Pi
+PI    = math.pi     #: Value of Pi (`math.pi`, a plain float; `np.pi` made autodoc barf)
 TWOPI = 2.0 * PI    #: 2 * Pi
 
 ChnlGrpName: TypeAlias = str  # channel group name

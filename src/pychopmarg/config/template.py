@@ -15,7 +15,7 @@ from pychopmarg.common import Rvec
 
 # @dataclass(frozen=True)  # We take COM parameters to be immutable.
 @dataclass()
-class COMParams():  # pylint: disable=too-many-instance-attributes
+class COMParams:  # pylint: disable=too-many-instance-attributes
     """
     Template definition for COM parameters.
 
@@ -96,17 +96,21 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
     tau: float                  # (ns/mm)
     # New as of 802.3dj
     z_pB: float = 1.8           # (mm)
+    # EQ search control (MATLAB COM's "I/O control" settings of the same names)
+    local_search: int = 0           # "Local Search": EQ grid search radius (grid steps); 0 = full search.
+    ts_srch_mode: str = "full-sweep"  # "TS_SRCH_MODE": cursor timing search, "full-sweep" or "middle".
+    ts_track: bool = False          # (PyChOpMarg only) Centre each "middle" timing search on the best so far.
 
     def __post_init__(self):  # pylint: disable=too-many-statements
         "Validate incoming COM parameters."
 
         def check_range(
             x_name: str,
-            x_val: int | float,
-            x_min: int | float,
-            x_max: int | float
+            x_val: float,
+            x_min: float,
+            x_max: float
         ) -> None:
-            "Check range of scalar of list of values."
+            "Check range of a scalar, or of every value in a (possibly nested) list."
 
             _x_min = float(x_min)
             _x_max = float(x_max)
@@ -122,10 +126,14 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
                             f"Error converting `{nm}` ({val}):",
                             str(err)])) from err
 
-            if isinstance(x_val, (list, np.ndarray)):
-                map(lambda n_x: chk_rng(f"{x_name}[{n_x[0]}]", n_x[1]), enumerate(x_val))
-            else:
-                chk_rng(x_name, x_val)
+            def chk_all(nm, val):  # Lists may nest (e.g. one row of `C_d` per device).
+                if isinstance(val, (list, tuple, np.ndarray)):
+                    for n, x in enumerate(val):
+                        chk_all(f"{nm}[{n}]", x)
+                else:
+                    chk_rng(nm, val)
+
+            chk_all(x_name, x_val)
 
         check_range("fb", self.fb, 10, 300)
         check_range("fstep", self.fstep, 0.001, 1)
@@ -135,8 +143,8 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
         check_range("T_r", self.T_r, 0.001, 0.050)
         check_range("RLM", self.RLM, 0.7, 1.0)
         check_range("A_v", self.A_v, 0.2, 1.0)
-        check_range("A_fe", self.A_v, 0.1, 0.8)
-        check_range("A_ne", self.A_v, 0.1, 0.8)
+        check_range("A_fe", self.A_fe, 0.1, 0.8)
+        check_range("A_ne", self.A_ne, 0.1, 0.8)
         check_range("R_0", self.R_0, 25, 100)
         check_range("A_DD", self.A_DD, 0.0, 1.0)
         check_range("SNR_TX", self.SNR_TX, 25, 35)
@@ -150,7 +158,7 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
         check_range("g_DC2", self.g_DC2, -20, 0)
         check_range("tx_taps_min", self.tx_taps_min, -1, 1)
         check_range("tx_taps_max", self.tx_taps_max, -1, 1)
-        check_range("tx_taps_step", self.tx_taps_step, 0.005, 0.025)
+        check_range("tx_taps_step", self.tx_taps_step, 0., 0.25)  # 0 for a tap that isn't swept.
         assert len(self.tx_taps_min) == len(self.tx_taps_max) == len(self.tx_taps_step), ValueError(
             ", ".join([f"Lengths of Tx tap weight mins ({len(self.tx_taps_min)})",
                        f"maxs ({len(self.tx_taps_max)})",
@@ -169,9 +177,9 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
                       f"and maxs ({len(self.rx_taps_max)}) must be equal!"]))
         check_range("dw", self.dw, 0, len(self.rx_taps_max))
         check_range("R_d", self.R_d, 25, 100)
-        check_range("C_d", self.C_d, 0.01, 10.)
-        check_range("C_b", self.C_b, 0., 10.)
-        check_range("C_p", self.C_p, 0.01, 10.)
+        check_range("C_d", self.C_d, 1e-6, 1e-2)  # (nF)
+        check_range("C_b", self.C_b, 0., 1e-2)    # (nF)
+        check_range("C_p", self.C_p, 1e-6, 1e-2)  # (nF)
         check_range("L_s", self.L_s, 0.01, 10.)
         check_range("z_c", self.z_c, 25, 100)
         check_range("z_p", self.z_p, 0.001, 100.)
@@ -179,3 +187,8 @@ class COMParams():  # pylint: disable=too-many-instance-attributes
         check_range("a1", self.a1, 1e-7, 1e-3)
         check_range("a2", self.a2, 1e-7, 1e-3)
         check_range("tau", self.tau, 1e-7, 1e-2)
+        assert int(self.local_search) == self.local_search >= 0, ValueError(
+            f"`local_search` ({self.local_search}) must be a non-negative integer!")
+        self.local_search = int(self.local_search)
+        assert self.ts_srch_mode in ("full-sweep", "middle"), ValueError(
+            f"`ts_srch_mode` ('{self.ts_srch_mode}') must be either 'full-sweep' or 'middle'!")
