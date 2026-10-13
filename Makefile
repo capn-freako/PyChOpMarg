@@ -77,8 +77,11 @@ type-check:
 docs:
 	pushd ${DOCS_DIR}; PROJ_VER=${PROJ_VER} ${UV_EXEC} run sphinx-build -j auto -b html source/ build/; popd
 
-build:
-	${UV_EXEC} build --clear --no-create-gitignore
+requirements.txt:
+	${UV_EXEC} export --package pychopmarg --no-dev --no-hashes --no-emit-project -o requirements.txt
+
+build: requirements.txt
+	${UV_EXEC} build --clear --no-create-gitignore --out-dir dist
 
 upload: build
 	${UVX_EXEC} uv-publish --repo pypi dist/*
