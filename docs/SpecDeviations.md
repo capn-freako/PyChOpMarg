@@ -319,7 +319,14 @@ a common gain that largely cancels in COM.
 - The notebook plots `com_rslts['sigma_Tx']`, which is correct.
 - **Fix:** Pass `hasCurs=True`.
 
-### [ ] D2. `theNoiseCalc.ts_ix` left at the last offset tried
+### [x] D2. `theNoiseCalc.ts_ix` left at the last offset tried
+
+- **Resolved (2026-10-15):** `mmse()` now leaves `theNoiseCalc.ts_ix` at the chosen cursor (`rslt["cursor_ix"]`).
+  On `example2`, it had been left 30 samples away. Test: `test_noise_calc_left_at_chosen_sampling_time`.
+- **Measured effect** (reference set, vs. after A7): negligible. COM changed −0.016 … +0.013 dB (mean −0.001), and
+  no CTLE choice changed. COM − MATLAB's COM: −0.172 ± 0.095 dB.
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/optimize.py:319`
 - The timing sweep leaves `ts_ix` at the last offset tried, not the best one, and `calc_noise()`'s `Stn` uses it.

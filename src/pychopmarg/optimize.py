@@ -415,6 +415,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["varX"] = varX
                 rslt["Rn"] = Rn
         rslt["n_ts_evals"] = n_ts_evals
+        theNoiseCalc.ts_ix = rslt["cursor_ix"]  # Leave the noise calculator at the chosen sampling time.
         # Apply desired normalization to tap weights.
         w = rslt["rx_taps"]
         match norm_mode:

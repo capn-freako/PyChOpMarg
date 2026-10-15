@@ -115,6 +115,13 @@ def test_tx_noise_variance_per_178a_21(example2_com):
     assert var == pytest.approx(10**(-nc.snr_tx / 10) * (htn**2).sum(), rel=1e-3)
 
 
+def test_noise_calc_left_at_chosen_sampling_time(example2_com):
+    """After the MMSE timing search, the noise calculator samples at the chosen cursor, which COM's final Tx noise
+    (`calc_noise()`, via `Stn()`) relies on. (It was once left at the last offset tried.)"""
+    com = example2_com
+    assert com.theNoiseCalc.ts_ix == com.fom_rslts["cursor_ix"]
+
+
 def test_tx_noise_pulse_has_the_signals_phase(example2_com):
     """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.
     (It was once formed w/ a causal moving sum, which delayed it ~half a UI.) Here, w/ no Tx FFE, it's the victim's
