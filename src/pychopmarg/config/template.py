@@ -107,6 +107,9 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     local_search: int = 0           # "Local Search": EQ grid search radius (grid steps); 0 = full search.
     ts_srch_mode: str = "full-sweep"  # "TS_SRCH_MODE": cursor timing search, "full-sweep" or "middle".
     ts_track: bool = False          # (PyChOpMarg only) Centre each "middle" timing search on the best so far.
+    # Quantization noise (178A.1.7.6), as MATLAB COM's "N_qb" and "P_qc"
+    N_qb: int = 0                   # noise-equivalent quantization bits; 0 = no quantization noise
+    P_qc: float = 1e-7              # quantization clipping probability
 
     def __post_init__(self):  # pylint: disable=too-many-statements
         "Validate incoming COM parameters."
@@ -157,6 +160,8 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("SNR_TX", self.SNR_TX, 25, 35)
         check_range("eta_0", self.eta_0, 1e-10, 1e-6)
         check_range("sigma_Rj", self.sigma_Rj, 0.0, 1.0)
+        check_range("N_qb", self.N_qb, 0, 16)
+        check_range("P_qc", self.P_qc, 1e-15, 0.1)
         check_range("f_z", self.f_z, 1.0, 1000)
         check_range("f_p1", self.f_p1, 1.0, 1000)
         check_range("f_p2", self.f_p2, 1.0, 1000)

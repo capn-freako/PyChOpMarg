@@ -34,6 +34,19 @@ def example2_com():
     return com
 
 
+@pytest.fixture(scope="module")
+def example2_com_quant():
+    "As ``example2_com``, but with D3.3's quantization noise (178A.1.7.6): N_qb = 6, P_qc = 1e-7."
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"],
+              "FEXT": [CHNL / f"example2_FEXT{n}.s4p" for n in (1, 2)],
+              "NEXT": [CHNL / f"example2_NEXT{n}.s4p" for n in (1, 2, 3)]}
+    params = dataclasses.replace(get_com_params(CFG), N_qb=6, P_qc=1e-7)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(params, ch_set)
+        com()
+    return com
+
+
 def test_com_not_floored(example2_com):
     """Interference far above the signal gives a COM far below 0 dB. The noise PMFs' voltage grid once spanned only
     +/-1.1 * As, capping `Ani` there, i.e. flooring COM at -0.83 dB. (MATLAB COM 4.80 gives -16.85 dB here.)"""
@@ -289,3 +302,44 @@ def test_add_pkg_survives_a_zero_s21(example2_com, monkeypatch, chnl_interp):
     monkeypatch.setattr(example2_com, "chnl_interp", chnl_interp)
     _, H21 = example2_com.add_pkg((fext, "FEXT"))
     assert np.all(np.isfinite(H21))
+
+
+def test_quantization_noise_off_by_default(example2_com):
+    "Without `N_qb`, there's no quantization noise, in FOM or COM."
+    com = example2_com
+    assert com.com_params.N_qb == 0
+    assert com.mmse_rslt["quant_step"] == 0 and com.com_rslts["sigma_Q"] == 0
+
+
+def test_quantization_noise_psd_per_178a_28(example2_com):
+    "The quantization noise PSD at the Rx FFE input, Delta^2 / 12 / fb (178A-28), is white, of variance Delta^2 / 12."
+    nc = example2_com.theNoiseCalc
+    delta = 1e-3
+    assert nc.variance(nc.Sqn(delta)) == pytest.approx(delta**2 / 12)
+
+
+def test_quantization_step_per_178a_29(example2_com):
+    """With a noiseless signal of one sample, A, every level has probability 1/L (> P_qc / 2); so, the clipping
+    amplitude is A, and Delta = 2 * A / (2^N_qb - 1) (178A-29)."""
+    nc = copy.copy(example2_com.theNoiseCalc)
+    nc.Nqb, nc.Pqc = 6, 1e-7
+    A = 0.1
+    pulse = np.zeros(len(nc.vic_pulse_resp))
+    pulse[nc.ts_ix] = A
+    nc.vic_pulse_resp = pulse
+    assert nc.quant_step(0.0) == pytest.approx(2 * A / 63, rel=1e-3)
+    # Noise only widens the noisy signal's distribution, so the clipping amplitude grows.
+    assert nc.quant_step(1e-4) > nc.quant_step(0.0)
+
+
+def test_quantization_noise_in_fom_and_com(example2_com, example2_com_quant):
+    """Quantization noise lowers the FOM (it's added to every candidate's noise), and enters COM as Delta's uniform PMF
+    (178A-43) through each Rx FFE tap (178A-46): its variance is Delta^2 / 12 * sum(w(n)^2)."""
+    com = example2_com_quant
+    rslts = com.com_rslts
+    assert com.mmse_rslt["quant_step"] > 0 and rslts["quant_step"] > 0
+    assert com.fom_rslts["FOM"] < example2_com.fom_rslts["FOM"]
+    y, pQ = rslts["y"], rslts["pQ"]
+    assert pQ.sum() == pytest.approx(1.0)
+    assert np.sqrt((y**2 * pQ).sum()) == pytest.approx(rslts["sigma_Q"], rel=0.02)
+    assert rslts["sigma_Q"] == pytest.approx(np.sqrt((com.rx_taps**2).sum() / 12) * rslts["quant_step"])

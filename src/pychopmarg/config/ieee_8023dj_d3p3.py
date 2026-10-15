@@ -125,7 +125,7 @@ def c2m_module_device() -> DeviceModel:
 
 # COM parameter values (Tables 178-15, 179-24, 176C-10, 176D-7), as far as `COMParams` can express them.
 # Not modeled by PyChOpMarg (so COM here is approximate, e.g. for ranking channels and package cases):
-# the Rx FFE's floating tap groups (Nwg, Nwf, Nmax), quantization noise (Nqb, Pqc), and MLSD (KR, CR).
+# the Rx FFE's floating tap groups (Nwg, Nwf, Nmax), and MLSD (KR, CR).
 def com_params(group: str, direction: str = "") -> COMParams:
     """
     COM parameters for channel group ``group`` ("KR", "CR", "C2C", or "C2M").
@@ -142,7 +142,7 @@ def com_params(group: str, direction: str = "") -> COMParams:
     return replace(
         IEEE_8023dj,
         fb=FB, L=4, M=32, DER_0=der0, T_r=t_r, RLM=0.95, A_v=0.385, A_fe=0.385, A_ne=0.481, R_0=R0,
-        A_DD=0.02, SNR_TX=33.5, eta_0=7.5e-9, sigma_Rj=0.01,
+        A_DD=0.02, SNR_TX=33.5, eta_0=7.5e-9, sigma_Rj=0.01, N_qb=6, P_qc=1e-7,
         f_z=FB / 2.5, f_p1=FB / 2.5, f_p2=FB, f_LF=FB / 80,          # f_z1, f_p1, f_p2, and f_z2 = f_p3
         g_DC=[-float(n) for n in range(21)], g_DC2=[-float(n) for n in range(7)],
         tx_taps_min=[0.0, 0.0, -0.34, -0.2, 0.0, 0.0],             # c(-3), c(-2), c(-1), c(1), c(2), c(3)

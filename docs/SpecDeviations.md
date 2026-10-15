@@ -233,6 +233,18 @@ a common gain that largely cancels in COM.
 - **Observation:** three CR channels land on the −16 edge in PyChOpMarg. Two are at or near it in MATLAB too
   (`sma_1.0mm_12dB_1500mm`: −16 / −16; `sma_1.85mm_12dB_1500mm`: −16 / −15), so their optimum lies outside the
   ±½ UI search in both tools (see C1). On `li_dj_CR_Design_C_Rev1`, the tools disagree: −16 vs. MATLAB's −2.
+- **`li_dj_CR_Design_C_Rev1_THRU` is a sensitivity outlier, not a modeling bug** (investigated 2026-10-15):
+  - The difference isn't in the search path. At MATLAB's chosen EQ (CTLE −3/−2.5, offset −2), PyChOpMarg's FOM is
+    10.7 dB against MATLAB's 12.24 dB.
+  - The channel is extreme. The first pre-FFE pre-cursor is 70% of the peak, and Rx FFE pre-cursor tap 1 is
+    clipped at −1.0 in both tools. FOM is a small difference of large terms: PyChOpMarg's swings from 2.6 dB at
+    offset 0 to 10.2 dB at −4.
+  - `mmse()` matches MATLAB's `MMSE_FOM`: the linear solve, DFE-limit re-solve, tap clipping relative to the
+    cursor tap, renormalization and MSE formula.
+  - The unequalized pulses agree to within 1% of peak (rms 0.2%; divide MATLAB's `vic_uneq_pulse_response` by
+    `A_v` first). The residual sits on the rising edge (−3 UI: 7.16 vs. 6.64 mV; −2 UI: 33.5 vs. 32.3 mV), about
+    the size of the difference between MATLAB's causal pulse forming (`filter(ones(M))`) and PyChOpMarg's
+    zero-phase sinc. On this channel that plausibly explains the 1.5 dB FOM gap. Not tested.
 
 **Original finding:**
 
@@ -267,12 +279,49 @@ a common gain that largely cancels in COM.
 
 ## B. Missing D3.3 features (no effect on today's comparison, because the sheet doesn't use them)
 
-### [ ] B1. Quantization noise
+### [x] B1. Quantization noise
 
 - D3.3 178A-28 (`Sqn`) and 178A-43/46 (`pΔ`, `pqn`). All four D3.3 group tables set `Nqb` = 6 and `Pqc` = 1e-7.
 - MATLAB implements it when `N_qb` ≠ 0 (`get_PSDs`, `adjust_Rx_noise_for_quantization`).
-- PyChOpMarg has no such term, so its COM is **optimistic** against D3.3.
+- PyChOpMarg had no such term, so its COM was **optimistic** against D3.3.
 - The comparison sheet doesn't set `N_qb`, so MATLAB skips it there too.
+- **Resolved (2026-10-15), as D3.3:**
+  - New `COMParams` fields `N_qb` (default 0, i.e. off) and `P_qc`. The sheet's `N_qb` and `P_qc` rows are read; as in
+    MATLAB, `P_qc` defaults to 2 · DER_0 when the sheet sets only `N_qb`. The D3.3 presets
+    (`config/ieee_8023dj_d3p3.py`) now set `N_qb` = 6 and `P_qc` = 1e-7.
+  - **FOM (MMSE):** `NoiseCalc.Rn()` adds the white `Sqn` = Δ²/12/fb (178A-28) at the Rx FFE input. Δ comes from
+    `NoiseCalc.quant_step()` (178A-29/30): the clipping amplitude `Vqc` satisfies Psn(−Vqc) = Pqc/2. Psn is the
+    noiseless victim signal at the current sampling time (every UI), convolved with a Gaussian whose variance (178A-31)
+    is that of every other noise term, with only the random part of the jitter (`Sjn_rj`), as MATLAB's `get_PSDs()`.
+    It's recomputed at every sampling time and EQ setting tried, on a 2001-point voltage grid (Δ within about 0.2%).
+  - **COM:** `calc_noise()` recomputes Δ as in 178A.1.9: crosstalk (at each aggressor's phase) and dual-Dirac jitter
+    as delta-PMFs at the Rx FFE input, plus a Gaussian with σgn² from `Srn`, `Stn` and `Sjn_rj` (178A-44), on an
+    8001-point grid. It then convolves the uniform PMF of width |w(n)|·Δ for every Rx FFE tap (178A-43/46) into the
+    final PMF. `com_rslts` gains `quant_step`, `sigma_Q` and `pQ`; `mmse()`'s result gains `quant_step`.
+  - PRZF mode (Clause 93A) has no quantization noise.
+  - Tests: `test_quantization_noise_*`, `test_quantization_step_per_178a_29` (`tests/test_com.py`), and
+    `test_quantization_noise_params` (`tests/test_excel.py`).
+- **Measured effect:** none on the comparison, since the sheet doesn't set `N_qb`; with it off, the reference set
+  matches the A8 results exactly. With `N_qb` = 6 and `P_qc` = 1e-7 (D3.3) on the reference set, COM − COM(off):
+
+  | Group | COM (dB), mean [range] | FOM (dB), mean | σ_Q / As | CTLE changed |
+  |---|---|---|---|---|
+  | C2C | −1.12 [−2.05 … −0.66] | −1.13 | 0.08 | 9/10 |
+  | C2M | −1.21 [−1.78 … −0.68] | −1.23 | 0.08 | 10/10 |
+  | CR | −1.90 [−2.50 … −0.57] | −2.00 | 0.20 | 8/10 |
+  | KR | −1.53 [−2.05 … −0.63] | −1.56 | 0.13 | 10/10 |
+  | All | −1.44 [−2.50 … −0.57] | −1.48 | 0.12 | 37/40 |
+
+  Δ from the FOM search and from COM agree to 0.1% on average. Run time rose 11% (247 s vs. 222 s).
+- **Where MATLAB departs from D3.3 here** (not followed; matters only with `N_qb` ≠ 0):
+  - Clipping probability: MATLAB solves Psn(−Vqc) = Pqc (`CDF_inv_ev(P_qc, …)`), not Pqc/2. That clips at
+    twice the probability, giving a slightly smaller Δ.
+  - COM's Δ: `adjust_Rx_noise_for_quantization()` takes Vqc from the CTLE-output signal convolved with the final
+    (post-Rx-FFE) ISI, crosstalk and noise PDF, rather than from D3.3's pre-Rx-FFE noise, pn(y).
+  - COM's `pqn`: MATLAB skips the Rx FFE's cursor tap (`if irxffe ~= cursor_tap`). 178A-46 runs over every
+    coefficient. The cursor tap is the largest, so MATLAB's quantization noise in COM is smaller. MATLAB
+    also drops zero-valued taps before indexing the cursor tap, which would shift that index if a pre-cursor tap were 0.
+  - MATLAB's "Fast" `Clip Method` (Vqc = Σ|h|) isn't implemented; its default, "Slow", is the D3.3 method.
 
 ### [ ] B2. Only the first package test case is evaluated
 

@@ -949,7 +949,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                     L, tb, 0, times, pulse_resps_preFFE[0], pulse_resps_preFFE[1:],
                     freqs, self.Ht, self.chnls[0][1], self.Hr, Hctf,
                     self.com_params.eta_0, self.com_params.A_v, self.com_params.SNR_TX,
-                    self.com_params.A_DD, self.com_params.sigma_Rj)
+                    self.com_params.A_DD, self.com_params.sigma_Rj,
+                    Nqb=self.com_params.N_qb, Pqc=self.com_params.P_qc)
                 rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, len(self.com_params.dfe_min), self.com_params.RLM,
                             self.com_params.L, bmin, bmax, rx_taps_min, rx_taps_max,
                             norm_mode=norm_mode, ts_window=ts_window, ts_center=ts_center)
@@ -1227,11 +1228,24 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             xt_phases.append(int(i))
             hXTs.append(filt_pr_samps(pulse_resp[i::M], As))
 
+        # - Quantization (178A.1.9): the step size, Delta, from the noisy signal at the quantizer (Rx FFE input),
+        #   with crosstalk and dual-Dirac jitter as delta-PMFs and the rest Gaussian (178A-44).
+        quant_step = 0.0
+        rx_taps = self.rx_taps if nRxTaps else np.ones(1)
+        if self.com_params.N_qb and self.opt_mode == OptMode.MMSE:
+            nc = self.theNoiseCalc
+            hXTs_pre = [nc.sampled_agg_pr(pr) for pr in nc.agg_pulse_resps]
+            hDD_pre = self.com_params.A_DD * calc_hJ(nc.vic_pulse_resp, nc.ts_ix, M)
+            varGn = nc.variance(nc.Srn) + nc.variance(nc.Stn()) + nc.variance(nc.Sjn_rj)       # (178A-44)
+            quant_step = nc.quant_step(varGn, noise_samps=hXTs_pre + [hDD_pre], npts=8001)      # (178A-29)
+        varQ = (rx_taps**2).sum() * quant_step**2 / 12
+
         # Voltage grid, as MATLAB COM: bin size As/1000, but no larger than 10 uV (its default "PDF bin size"),
         # spanning the full support of every distribution below (a sum of |samples| for each delta-PMF, plus
         # Gaussian tails), so none is clipped and, so, `Ani` isn't capped (e.g. at 1.1 * As, i.e. COM >= -0.83 dB).
         ystep = min(As / 1000, 1e-5)
         support = abs(hISI_filt).sum() + sum(abs(h).sum() for h in hXTs) + abs(hDD).sum()
+        support += abs(rx_taps).sum() * quant_step / 2
         ymax = max(1.1 * As, support + 10 * np.sqrt(varG) + 2 * ystep)
         npts = 2 * int(np.ceil(ymax / ystep)) + 1  # MUST BE ODD!
         y = (np.arange(npts) - npts // 2) * ystep
@@ -1247,9 +1261,17 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             _, pk = delta_pmf(hXT, L=L, y=y)
             pXT = _conv_pmfs(pXT, pk)
         varXT = sum(_y**2 * p for (_y, p) in zip(y, pXT))
+        # - Quantization noise at the detector: Delta's uniform PMF (178A-43), through each Rx FFE tap (178A-46).
+        pQ = pDelta
+        if quant_step:
+            for w in rx_taps:
+                n = int(round(abs(w) * quant_step / 2 / ystep))
+                pw = np.zeros(npts)
+                pw[npts // 2 - n: npts // 2 + n + 1] = 1 / (2 * n + 1)
+                pQ = _conv_pmfs(pQ, pw)
 
         # Final calculation
-        py = _conv_pmfs(_conv_pmfs(pISI, pN), pXT)                                                # (93A-45)
+        py = _conv_pmfs(_conv_pmfs(_conv_pmfs(pISI, pN), pXT), pQ)                                # (93A-45)
         Py = np.cumsum(py)
         Py /= Py[-1]  # Enforce cumulative probability distribution.
         Ani = -y[np.where(Py >= self.com_params.DER_0)[0][0]]
@@ -1277,6 +1299,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.com_rslts['y']           = y
         self.com_rslts['dfe_taps']    = dfe_tap_weights
         self.com_rslts['xt_phases']   = xt_phases
+        self.com_rslts['quant_step']  = quant_step
+        self.com_rslts['sigma_Q']     = np.sqrt(varQ)
+        self.com_rslts['pQ']          = pQ
 
         return (As, Ani, cursor_ix)
 

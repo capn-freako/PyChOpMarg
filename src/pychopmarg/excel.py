@@ -183,9 +183,10 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     com_cfg1 = _com_cfg[:, range(2)]
     com_cfg2 = _com_cfg[:, range(9, 11)]
 
+    sheet_params = cfg_trans(com_cfg1)
+    sheet_params.update(cfg_trans(com_cfg2))
     com_params_dict = vars(IEEE_8023dj).copy()
-    com_params_dict.update(cfg_trans(com_cfg1))
-    com_params_dict.update(cfg_trans(com_cfg2))
+    com_params_dict.update(sheet_params)
 
     # EQ search control, from the "I/O control" columns (MATLAB COM's settings of the same names).
     io_ctl: dict[str, Any] = {}
@@ -320,6 +321,10 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     )
     if "z_pB" in com_params_dict:
         rslt.z_pB = com_params_dict["z_pB"]
+
+    # Quantization noise: off unless the sheet sets `N_qb`, and `P_qc` defaults to 2 * DER_0, as in MATLAB COM.
+    rslt.N_qb = int(sheet_params.get("N_qb", 0))
+    rslt.P_qc = float(sheet_params.get("P_qc", 2 * rslt.DER_0))
 
     # Per-end package lengths: MATLAB COM's "z_p (TX)", etc. have one row per package segment and one column per
     # test case; "z_p select" (1-based) picks the case. (Only one case is evaluated; see `SpecDeviations.md`, B2.)

@@ -100,3 +100,21 @@ def test_zp_select_picks_test_case(tmp_path, zp_tx, zp_sel, expected):
     sheet.to_excel(cfg, header=False, index=False)
     params = get_com_params(cfg)
     assert params.zp_tx == params.zp_rx == params.zp_next == params.zp_fext == expected
+
+
+@pytest.mark.parametrize("rows, N_qb, P_qc", [
+    ([], 0, None),                              # Off, by default.
+    ([("N_qb", 6)], 6, None),                   # `P_qc` defaults to 2 * DER_0, as in MATLAB COM.
+    ([("N_qb", 6), ("P_qc", 1e-7)], 6, 1e-7),
+])
+def test_quantization_noise_params(tmp_path, rows, N_qb, P_qc):
+    "`N_qb` and `P_qc` are read from the sheet; without them, quantization noise is off, as in MATLAB COM."
+    sheet = pd.read_excel(CFG, header=None)
+    for name, val in rows:
+        new_row = pd.DataFrame([[name, val] + [np.nan] * (sheet.shape[1] - 2)], columns=sheet.columns)
+        sheet = pd.concat([sheet, new_row], ignore_index=True)
+    cfg = tmp_path / "quant.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    assert params.N_qb == N_qb
+    assert params.P_qc == pytest.approx(P_qc if P_qc is not None else 2 * params.DER_0)

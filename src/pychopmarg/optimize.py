@@ -401,6 +401,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
                 rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
                 rslt["varN"] = theNoiseCalc.variance(theNoiseCalc.Srn)
+                rslt["quant_step"] = theNoiseCalc.quant_step_size  # From `Rn()`, above.
                 # DEBUGGING:
                 rslt["h"] = h
                 rslt["h0"] = h0
@@ -459,5 +460,6 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
         rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
         rslt["varN"] = theNoiseCalc.variance(theNoiseCalc.Srn)
+        rslt["quant_step"] = theNoiseCalc.quant_step_size  # From `Rn()`, above.
 
     return rslt
