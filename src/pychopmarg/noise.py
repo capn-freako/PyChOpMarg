@@ -11,9 +11,8 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 # pylint: disable=redefined-builtin
 from typing                 import Optional
 
-from numpy                  import arange, argmax, array, diff, ones, pad, sum
+from numpy                  import arange, argmax, array, diff, ones, pad, sinc, sum
 from numpy.fft              import irfft, rfft
-from scipy.signal           import lfilter
 
 from pychopmarg.common      import Rvec, Cvec, Rmat
 
@@ -259,7 +258,9 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
 
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx * self.Av  # "* Av" is for consistency w/ MATLAB code.
         htn  = irfft(Htn)                               # impulse response of complete signal path, except Tx FFE
-        htn_ave_xM = lfilter(ones(self.nspui), ones(1), htn)  # combination averaging and pre-normalization filter
+        # Pulse response (178A-22), formed as the signal's is (`COM.pulse_resp()`): w/ a zero-phase, 1 UI wide
+        # rectangle (`nspui * sinc(f * Tb)`), so that sampling at `ts_ix` takes it at the signal's phase.
+        htn_ave_xM = irfft(self.nspui * sinc(f * self.Tb) * Htn)
         _htn = self.baud_rate_sample(htn_ave_xM)        # decimated by `nspui`
         _Htn = rfft(_htn)
 
@@ -268,6 +269,7 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
             self.Stn_debug = {  # pylint: disable=attribute-defined-outside-init
                 'Htn':  Htn,
                 'htn':  htn,
+                'htn_pulse': htn_ave_xM,
                 '_Htn': _Htn,
                 '_htn': _htn,
             }

@@ -115,6 +115,18 @@ def test_tx_noise_variance_per_178a_21(example2_com):
     assert var == pytest.approx(10**(-nc.snr_tx / 10) * (htn**2).sum(), rel=1e-3)
 
 
+def test_tx_noise_pulse_has_the_signals_phase(example2_com):
+    """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.
+    (It was once formed w/ a causal moving sum, which delayed it ~half a UI.) Here, w/ no Tx FFE, it's the victim's
+    pre-Rx-FFE pulse response, scaled and shifted by whole UIs (the FFE frames' fixed delays), which don't matter."""
+    nc = copy.deepcopy(example2_com.theNoiseCalc)
+    nc.Stn()
+    pulse, vic = nc.Stn_debug["htn_pulse"][:len(nc.vic_pulse_resp)], nc.vic_pulse_resp
+    shift = int(np.argmax(vic) - np.argmax(pulse))
+    assert shift % nc.nspui == 0
+    assert np.allclose(np.roll(pulse, shift) / pulse.max(), vic / vic.max(), atol=1e-6)
+
+
 @pytest.mark.parametrize("phase", [0, 1, 17])
 def test_jitter_noise_variance_per_178a_23(example2_com, phase):
     """The jitter noise variance is sigma_X^2 * (A_DD^2 + sigma_Rj^2) * sum(h_J(n)^2), by (178A-23/24) and Parseval,

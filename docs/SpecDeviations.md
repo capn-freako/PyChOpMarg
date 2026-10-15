@@ -196,7 +196,26 @@ a common gain that largely cancels in COM.
 - **Note:** Tied to the S→T elimination ToDo in `add_pkg()`'s docstring. Before switching bases, compare S vs. T
   across all channel groups (pulse responses, FOM, COM, chosen EQ, agreement with MATLAB).
 
-### [ ] A7. Tx-noise pulse phase
+### [x] A7. Tx-noise pulse phase
+
+- **Resolved (2026-10-15):** `Stn()` now forms the Tx-noise pulse as the signal's is (`COM.pulse_resp()`):
+  `irfft(nspui · sinc(f·Tb) · Htn)`, a zero-phase, 1 UI wide rectangle. Its sampling phase now matches the
+  signal's. (On `example2`, the old pulse sat 16 samples, half a UI, off; the new one is off by whole UIs only,
+  the FFE frames' fixed delays, which don't affect the PSD.) Test: `test_tx_noise_pulse_has_the_signals_phase`.
+- **Measured effect** (reference set, vs. after A6):
+
+  | PyChOpMarg − MATLAB | After A6 | After A7 |
+  |---|---|---|
+  | COM (dB) | −0.150 ± 0.091 | −0.171 ± 0.094 |
+  | Cursor offset (samples) | mean +0.30, rms 3.42 | **mean +0.07**, rms 3.32 |
+  | σ_Tx (ratio) | 0.994 | 1.013 |
+  | Same CTLE as MATLAB | 14/40 | 15/40 |
+
+  COM changed −0.149 … +0.012 dB (mean −0.022), and the CTLE choice changed on 9 channels: the Tx noise feeds
+  the MMSE solve, so its phase error had been nudging the timing search. The cursor-timing bias is now gone in the
+  mean, but the per-channel scatter (rms 3.3 samples) remains.
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/noise.py:247-249` (`NoiseCalc.Stn()`)
 - **PyChOpMarg:** Builds the Tx-noise pulse with a causal moving sum (`lfilter(ones(nspui))`), but the signal
