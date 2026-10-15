@@ -617,7 +617,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         Hr   = self.Hr
         if Hctf is None:
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
-        rslt = Htx * H21 * Hr * Hctf
+        rslt = Htx * self.Ht * H21 * Hr * Hctf  # (178A-14): includes Ht, the Tx rise time filter (93A-46).
         nRxTaps = len(rx_taps)
         if nRxTaps:
             Hrx = self.Hffe_Rx(rx_taps)

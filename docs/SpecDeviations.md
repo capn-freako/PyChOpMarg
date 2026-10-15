@@ -184,6 +184,30 @@ a common gain that largely cancels in COM.
 - **Where:** `src/pychopmarg/optimize.py:306` (`range(-ts_sweep_ix, ts_sweep_ix)` → −16…+15)
 - **MATLAB:** `sample_adjustment` = [-16 16], which includes +16.
 
+### [x] A9. Signal path omits the Tx rise time filter, Ht
+
+*(Found 2026-10-15, while working on A6; missed by the original audit.)*
+
+- **Where:** `src/pychopmarg/com.py` (`COM.H()`), which computed `Htx * H21 * Hr * Hctf`.
+  `Ht` (93A-46) was used only for the Tx noise (`NoiseCalc.Stn()`).
+- **MATLAB / D3.3:** D3.3 (178A-14) has H⁽ᵏ⁾(f) = H_txffe · **Ht** · H21⁽ᵏ⁾ · Hr · Hctf. MATLAB, with the sheet's
+  `FORCE_TR` = 1 (set since 2024), puts `exp(−2(πf·T_r/1.6832)²)` (plus a pure 3·T_r delay) into every channel's
+  `sdd21`, in `s21_pkg()`. With T_r = 4 ps, Ht ≈ 0.73 (−2.7 dB) at Nyquist.
+- **Resolved (2026-10-15):** `H()` now includes `self.Ht`, for victim and aggressors alike. Test:
+  `test_signal_path_includes_tx_rise_time_filter`.
+- **Measured effect** (reference set, vs. after A5): this was the common gain noted in the baseline.
+
+  | PyChOpMarg − MATLAB | After A5 | After A9 |
+  |---|---|---|
+  | COM (dB) | +0.33 ± 0.24 | **−0.16 ± 0.09** (−0.31 … +0.18) |
+  | FOM (dB) | +0.31 ± 0.24 | −0.16 ± 0.08 |
+  | As, Ani (ratio) | 1.145, 1.102 | **0.994, 1.012** |
+  | σ ISI, σ_rjit, σ_Tx, σ_XT (ratio) | 1.16, 1.15, 1.08, 1.12 | 1.05, 1.02, 0.99, 0.93 |
+  | Cursor offset (samples) | +1.18, rms 4.29, exact 1/40 | +0.30, rms 3.41, exact 8/40 |
+  | Same CTLE as MATLAB | 13/40 | 14/40 |
+
+  COM fell 0.15–1.07 dB per channel (mean 0.48 dB), and the CTLE choice changed on 14 channels.
+
 ---
 
 ## B. Missing D3.3 features (no effect on today's comparison, because the sheet doesn't use them)

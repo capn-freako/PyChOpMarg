@@ -25,6 +25,7 @@ extensions = [
     'sphinx.ext.todo', 
     'sphinx.ext.autosummary', 
     'sphinx.ext.viewcode', 
+    'myst_parser',  # Markdown sources (e.g., SpecDeviations.md)
 ]
 auto_doc_default_options = {
    'undoc-members': True,

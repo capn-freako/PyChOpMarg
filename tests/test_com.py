@@ -95,6 +95,16 @@ def test_crosstalk_phase_chosen_at_rx_ffe_input(example2_com):
     assert com.com_rslts["xt_phases"] == shifted
 
 
+def test_signal_path_includes_tx_rise_time_filter(example2_com):
+    """The signal path's transfer function is H_txffe * Ht * H21 * Hr * Hctf (* H_rxffe), as per (178A-14) and MATLAB
+    COM (w/ `FORCE_TR`): it includes the Tx rise time filter, Ht (93A-46). (It once didn't, inflating As ~15%.)"""
+    com = example2_com
+    H21 = com.chnls[0][1]
+    Hctf = com.calc_Hctf(com.gDC, com.gDC2)
+    expected = com.Htx(com.tx_ix) * com.Ht * H21 * com.Hr * Hctf * com.Hffe_Rx(com.rx_taps)
+    assert np.allclose(com.H(H21, com.tx_ix, Hctf=Hctf, rx_taps=com.rx_taps), expected)
+
+
 def test_tx_noise_variance_per_178a_21(example2_com):
     """The Tx noise variance is 10^(-SNR_TX/10) * sum(h_tn(n)^2), by (178A-21) and Parseval: no sigma_X^2 factor
     (unlike crosstalk's (178A-20)), as in MATLAB COM by default."""

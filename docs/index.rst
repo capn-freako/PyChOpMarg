@@ -16,6 +16,7 @@ The *PyChOpMarg* package provides a Python implementation of COM, as per IEEE 80
    develop
    pychopmarg
    todo
+   SpecDeviations
 
 Indices and tables
 ==================
