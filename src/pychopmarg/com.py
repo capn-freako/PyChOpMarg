@@ -128,6 +128,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.zp_sel: int = 0            #: Package length selector.
         self._sPkgTx: list[rf.Network] = []
         self._sPkgRx: list[rf.Network] = []
+        self._sPkgNext: list[rf.Network] = []
+        self._sPkgFext: list[rf.Network] = []
 
         if not do_init:
             return
@@ -189,6 +191,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             self._sPkgTx = [s_tx_model(self.freqs, tx_device, R0)]
             self._sPkgRx = [s_rx_model(self.freqs, rx_device, R0)]
             self._sPkgNext = [s_tx_model(self.freqs, next_device or tx_device, R0)]
+            self._sPkgFext = self._sPkgTx
             self.chnls = list(map(self.add_pkg, ntwks))
         else:
             self._build_legacy_pkg(ntwks)
@@ -280,20 +283,29 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
     def _build_legacy_pkg(self, ntwks: list[COMNtwk]) -> None:
         "Build the (pre-178A) package model from `com_params`, and add it to the channels."
         com_params = self.com_params
-        z_pairs = list(zip(com_params.z_c, [com_params.z_p[self.zp_sel], com_params.z_pB]))
-        sPkgTx_SE = rf.network.cascade_list([
-            self.sDie(False),
-            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-                      self.com_params.tau, self.com_params.gamma0, z_pairs),
-            self.sC(self.com_params.C_p[0] / 1e9)])
-        self._sPkgTx = [sdd_21(rf.network.concat_ports([sPkgTx_SE, sPkgTx_SE], port_order='first'))]
+
+        def tline(z_p: Optional[list[float]]) -> rf.Network:
+            "Package transmission line, w/ the given segment lengths (default: ``[z_p[zp_sel], z_pB]``)."
+            if z_p is None:
+                z_p = [com_params.z_p[self.zp_sel], com_params.z_pB]
+            return sPkgTline(self.freqs, com_params.R_0, com_params.a1, com_params.a2,
+                             com_params.tau, com_params.gamma0, list(zip(com_params.z_c, z_p)))
+
+        def diff(sPkg_SE: rf.Network) -> rf.Network:
+            "Differential version of the given single-ended package model."
+            return sdd_21(rf.network.concat_ports([sPkg_SE, sPkg_SE], port_order='first'))
+
+        def tx_pkg(z_p: Optional[list[float]]) -> rf.Network:
+            "Transmitter-end package model."
+            return diff(rf.network.cascade_list([
+                self.sDie(False), tline(z_p), self.sC(com_params.C_p[0] / 1e9)]))
+
         cp_rx_ix = min(1, len(com_params.C_p) - 1)
-        sPkgRx_SE = rf.network.cascade_list([
-            self.sC(self.com_params.C_p[cp_rx_ix] / 1e9),
-            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-                      self.com_params.tau, self.com_params.gamma0, z_pairs),
-            self.sDie(True)])
-        self._sPkgRx = [sdd_21(rf.network.concat_ports([sPkgRx_SE, sPkgRx_SE], port_order='first'))]
+        self._sPkgTx   = [tx_pkg(com_params.zp_tx)]
+        self._sPkgNext = [tx_pkg(com_params.zp_next)]
+        self._sPkgFext = [tx_pkg(com_params.zp_fext)]
+        self._sPkgRx   = [diff(rf.network.cascade_list([
+            self.sC(com_params.C_p[cp_rx_ix] / 1e9), tline(com_params.zp_rx), self.sDie(True)]))]
 
         self.chnls = list(map(self.add_pkg, ntwks))
 
@@ -440,9 +452,12 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
     @property
     def sPkgNEXT(self) -> rf.Network:
         "NEXT package response."
-        if self.use_devices:
-            return self._sPkgNext[0]
-        return self._sPkgTx[0]
+        return self._sPkgNext[0]
+
+    @property
+    def sPkgFEXT(self) -> rf.Network:
+        "FEXT package response."
+        return self._sPkgFext[0]
 
     # Package modeling
     def add_pkg(self, ntwk: COMNtwk) -> COMChnl:
@@ -480,6 +495,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         ntype = ntwk[1]
         if ntype == 'NEXT':
             _ntwk = self.sPkgNEXT ** sChnlInterp ** self.sPkgRx
+        elif ntype == 'FEXT':
+            _ntwk = self.sPkgFEXT ** sChnlInterp ** self.sPkgRx
         else:
             _ntwk = self.sPkgTx   ** sChnlInterp ** self.sPkgRx
         return ((_ntwk, ntype), calc_H21(self.freqs, _ntwk, self.gamma1_Tx, self.gamma2_Rx))

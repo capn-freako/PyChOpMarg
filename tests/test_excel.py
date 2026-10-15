@@ -76,3 +76,27 @@ def test_dfe_limits(tmp_path, rows, dfe_min, dfe_max):
     params = get_com_params(cfg)
     assert list(params.dfe_min) == pytest.approx(dfe_min)
     assert list(params.dfe_max) == pytest.approx(dfe_max)
+
+
+def test_per_end_package_lengths(params):
+    "The sheet's `z_p (TX)`/`(RX)`/`(NEXT)`/`(FEXT)` rows set each end's package segment lengths (mm), as in MATLAB."
+    assert params.zp_tx == params.zp_next == params.zp_fext == [34.0, 1.8]
+    assert params.zp_rx == [32.0, 1.8]
+
+
+@pytest.mark.parametrize("zp_tx, zp_sel, expected", [
+    ("[12 30 ; 1.8 1.8]", 2, [30.0, 1.8]),  # One row per segment, one column per test case.
+    ("[12 30 ; 1.8 1.8]", 1, [12.0, 1.8]),
+    ("[12 30]", 2, [30.0]),                 # A single segment.
+])
+def test_zp_select_picks_test_case(tmp_path, zp_tx, zp_sel, expected):
+    "`z_p select` (1-based) picks the test case (column) of each `z_p (...)` row."
+    sheet = pd.read_excel(CFG, header=None)
+    for col in (0, 9):
+        for end in ("TX", "RX", "NEXT", "FEXT"):  # (Every row must have the same number of test cases.)
+            sheet.loc[sheet[col] == f"z_p ({end})", col + 1] = zp_tx
+        sheet.loc[sheet[col] == "z_p select", col + 1] = zp_sel
+    cfg = tmp_path / "zp.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    assert params.zp_tx == params.zp_rx == params.zp_next == params.zp_fext == expected

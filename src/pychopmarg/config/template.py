@@ -9,6 +9,7 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 from dataclasses import dataclass
+from typing import Optional
 import numpy as np
 from pychopmarg.common import Rvec
 
@@ -96,6 +97,12 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     tau: float                  # (ns/mm)
     # New as of 802.3dj
     z_pB: float = 1.8           # (mm)
+    # Per-end package segment lengths (mm), for the selected test case (MATLAB COM's "z_p (TX)", etc.):
+    # one per package transmission line segment; `None` means ``[z_p[zp_sel], z_pB]``.
+    zp_tx: Optional[list[float]] = None
+    zp_rx: Optional[list[float]] = None
+    zp_next: Optional[list[float]] = None
+    zp_fext: Optional[list[float]] = None
     # EQ search control (MATLAB COM's "I/O control" settings of the same names)
     local_search: int = 0           # "Local Search": EQ grid search radius (grid steps); 0 = full search.
     ts_srch_mode: str = "full-sweep"  # "TS_SRCH_MODE": cursor timing search, "full-sweep" or "middle".
@@ -183,6 +190,9 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("L_s", self.L_s, 0.01, 10.)
         check_range("z_c", self.z_c, 25, 100)
         check_range("z_p", self.z_p, 0.001, 100.)
+        for nm in ("zp_tx", "zp_rx", "zp_next", "zp_fext"):
+            if getattr(self, nm) is not None:
+                check_range(nm, getattr(self, nm), 0.001, 100.)
         check_range("gamma0", self.gamma0, 1e-7, 1e-3)
         check_range("a1", self.a1, 1e-7, 1e-3)
         check_range("a2", self.a2, 1e-7, 1e-3)

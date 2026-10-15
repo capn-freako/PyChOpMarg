@@ -320,4 +320,17 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     )
     if "z_pB" in com_params_dict:
         rslt.z_pB = com_params_dict["z_pB"]
+
+    # Per-end package lengths: MATLAB COM's "z_p (TX)", etc. have one row per package segment and one column per
+    # test case; "z_p select" (1-based) picks the case. (Only one case is evaluated; see `SpecDeviations.md`, B2.)
+    zp_sel = np.atleast_1d(com_params_dict.get("zp_sel", 1)).astype(int)
+    if len(zp_sel) > 1:
+        warnings.warn(f"'{cfg_file}' selects {len(zp_sel)} package test cases (`z_p select` = {list(zp_sel)}); "
+                      f"only the first ({zp_sel[0]}) is evaluated.", stacklevel=2)
+    for key in ("zp_tx", "zp_rx", "zp_next", "zp_fext"):
+        if key in com_params_dict:
+            zp = np.asarray(com_params_dict[key], dtype=float)
+            if zp.ndim < 2:  # One segment, possibly several cases.
+                zp = zp.reshape(1, -1)
+            setattr(rslt, key, zp[:, zp_sel[0] - 1].tolist())
     return rslt

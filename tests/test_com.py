@@ -199,6 +199,20 @@ def test_middle_timing_search_follows_matlab(example2_com, monkeypatch, center):
     assert rslt["cursor_ix"] - peak == max(expected, key=lambda k: (fom_at[k], -expected.index(k)))
 
 
+def test_fext_uses_its_own_package():
+    "Each channel type gets its own end's package lengths, as in MATLAB COM: changing `zp_fext` changes only FEXT."
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"],
+              "FEXT": [CHNL / "example2_FEXT1.s4p"],
+              "NEXT": [CHNL / "example2_NEXT1.s4p"]}
+    cp = get_com_params(CFG)
+    with contextlib.redirect_stdout(io.StringIO()):
+        base = {ntype: H for (_, ntype), H in COM(cp, ch_set).chnls}
+        alt = {ntype: H for (_, ntype), H in COM(dataclasses.replace(cp, zp_fext=[10.0, 1.8]), ch_set).chnls}
+    assert np.array_equal(alt["THRU"], base["THRU"])
+    assert np.array_equal(alt["NEXT"], base["NEXT"])
+    assert not np.allclose(alt["FEXT"], base["FEXT"])
+
+
 def test_add_pkg_survives_a_zero_s21(example2_com):
     """A channel whose S21 is exactly zero somewhere (e.g., a weakly coupled aggressor, written with too few decimal
     places) can't be interpolated as T parameters, which need 1/S21. `add_pkg()` falls back to S parameters there."""

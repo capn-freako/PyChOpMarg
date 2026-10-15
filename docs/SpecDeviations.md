@@ -88,7 +88,29 @@ PyChOpMarg-vs-MATLAB comparison (`notebook/PyChOpMarg_vs_MATLAB.ipynb`).
   pre-cursors included, with no magnitude filter.
 - **Affects:** `pJ` (DD jitter, `hDD`) and `varJ` (Rj) in `calc_noise()`, and the jitter PSD in the FOM search.
 
-### [ ] A4. Sheet `z_p (TX/RX/NEXT/FEXT)` rows are ignored
+### [x] A4. Sheet `z_p (TX/RX/NEXT/FEXT)` rows are ignored
+
+- **Resolved (2026-10-15):** `COMParams` has new `zp_tx`, `zp_rx`, `zp_next` and `zp_fext` fields: per-segment
+  package lengths (mm) for the selected test case. `None` falls back to `[z_p[zp_sel], z_pB]`. `get_com_params()`
+  fills them from the sheet's `z_p (…)` rows (one row per segment, one column per test case), at the column
+  `z_p select` picks. It warns if more than one case is selected (see B2). `_build_legacy_pkg()` builds a separate
+  package for each end, and FEXT aggressors now get the FEXT package. (Before, they got the Tx package.)
+  Tests: `test_per_end_package_lengths`, `test_zp_select_picks_test_case`, `test_fext_uses_its_own_package`.
+- **Measured effect** (same 40 channels and MATLAB results as A2/A3; sheet: Tx/NEXT/FEXT 34 mm, Rx 32 mm):
+  - COM rose 0.33 dB on average (−0.36 to +0.64 dB), and the CTLE choice changed on 11 of 40 channels.
+  - COM − MATLAB's COM went from −0.06 ± 0.26 to **+0.28 ± 0.16 dB**: tighter scatter, but now a clear
+    optimistic offset.
+- **Why so large:** Whether the two packages are the same length matters, not the 1 mm shift. On CR
+  `1mOSFPDAC_TP0TP5_25p9dB_PCBHost_4p9dB_THRU`:
+
+  | Tx / Rx (mm) | 33 / 33 | 34 / 34 | 32 / 32 | 34 / 32 | 32 / 34 |
+  |---|---|---|---|---|---|
+  | COM (dB) | 2.16 | 2.25 | 2.59 | 2.79 | 2.79 |
+
+  Identical packages at the two ends make their reflections add coherently. A 2 mm mismatch breaks that up.
+  (33 / 33 reproduces the old code's result exactly.)
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/excel.py:31-50, 186`
 - **PyChOpMarg:** The sheet's `z_p (TX)`, `z_p (RX)`, `z_p (NEXT)`, `z_p (FEXT)` and `z_p select` rows are parsed but
