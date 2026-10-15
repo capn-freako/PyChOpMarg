@@ -238,12 +238,27 @@ def test_fext_uses_its_own_package():
     assert not np.allclose(alt["FEXT"], base["FEXT"])
 
 
-def test_add_pkg_survives_a_zero_s21(example2_com):
+def test_channel_impulse_response_truncated_as_matlab(example2_com):
+    """With `chnl_interp` = "vtf" (default), as MATLAB COM: each channel's end-to-end impulse response (of Ht * H21 * Hr)
+    is zero after its last sample above 1e-3 of its peak."""
+    com = example2_com
+    assert com.chnl_interp == "vtf"
+    for (_, ntype), H21 in com.chnls:
+        h = np.fft.irfft(com.Ht * H21 * com.Hr)
+        last = np.nonzero(abs(h) > 1e-3 * abs(h).max())[0][-1]
+        assert last < len(h) - 1, ntype
+        assert np.allclose(h[last + 1:], 0, atol=1e-9 * abs(h).max()), ntype
+
+
+@pytest.mark.parametrize("chnl_interp", ["vtf", "t"])
+def test_add_pkg_survives_a_zero_s21(example2_com, monkeypatch, chnl_interp):
     """A channel whose S21 is exactly zero somewhere (e.g., a weakly coupled aggressor, written with too few decimal
-    places) can't be interpolated as T parameters, which need 1/S21. `add_pkg()` falls back to S parameters there."""
+    places) can't be interpolated as T parameters, which need 1/S21. The legacy "t" mode of `add_pkg()` falls back
+    to S parameters there; the default, "vtf", never needs T parameters."""
     fext = sdd_21(rf.Network(str(CHNL / "example2_FEXT1.s4p")))
     fext.s[-4, 1, 0] = fext.s[-4, 0, 1] = 0  # (As in the CR group's HN_3in_DAC_Z_1p5m_HL_2in_FEXT_TP0_Tx8_to_TP5_Rx7.)
     with pytest.raises(np.linalg.LinAlgError):
         _ = fext.t
+    monkeypatch.setattr(example2_com, "chnl_interp", chnl_interp)
     _, H21 = example2_com.add_pkg((fext, "FEXT"))
     assert np.all(np.isfinite(H21))

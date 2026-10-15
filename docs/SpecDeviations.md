@@ -156,7 +156,34 @@ a common gain that largely cancels in COM.
 - **MATLAB / D3.3:** Pick it from the pulse *before* the Rx FFE (MATLAB's `iphase` from `get_PSDs`; D3.3's `ts(k)`
   per 178A-20).
 
-### [ ] A6. Channel interpolation and extrapolation
+### [x] A6. Channel interpolation and extrapolation
+
+- **Resolved (2026-10-15):** New default, `COM.chnl_interp` = `"vtf"`, as MATLAB (`s21_pkg()`,
+  `s21_to_impulse_DC()`):
+  1. The packages (`_pkg_models()`, now buildable at any frequencies) are cascaded with the raw channel, and the
+     voltage transfer function (93A-18) formed (`calc_vtf()`), at the channel file's own frequencies.
+  2. Ht · VTF · Hr is interpolated onto the system grid by `interp_vtf()`, a port of MATLAB's `interp_Sparam()`
+     with its default policies, `linear_trend_to_DC` and `extrap_cubic_to_dc_linear_to_inf`.
+  3. Its impulse response is truncated after its last sample above `COM.ir_trunc_thresh` (1e-3) of its peak.
+  4. Ht · Hr are divided back out (`H()` and `NoiseCalc` restore them).
+
+  The legacy modes, `"t"` (T basis, falling back to S where S21 vanishes) and `"s"`, remain selectable. The
+  unequalized pulse responses (`gen_pulse_resps(apply_eq=False)`) now include Ht and Hr, as MATLAB's
+  `uneq_pulse_response` does. Tests: `tests/test_filter.py`, `test_channel_impulse_response_truncated_as_matlab`,
+  `test_add_pkg_survives_a_zero_s21` (both modes).
+- **Measured effect** (reference set, all three modes, after A9):
+
+  | vs. `"t"` | Max \|ΔCOM\| | Max \|ΔFOM\| | As ratio | Other |
+  |---|---|---|---|---|
+  | `"s"` | < 0.00001 dB | < 0.00001 dB | 1.00000 | none |
+  | `"vtf"` | 0.016 dB | 0.019 dB | 0.994 … 1.002 | cursor moved on 1 channel; CTLE on 1 |
+
+  COM − MATLAB's COM: −0.156 ± 0.092 dB (`"t"`, `"s"`) vs. −0.150 ± 0.091 dB (`"vtf"`). So the interpolation was
+  not a source of disagreement with MATLAB, and the T vs. S basis question is moot. This was the comprehensive
+  comparison the S→T ToDo called for. `"vtf"` is the default because it matches MATLAB's processing and never
+  needs 1/S21.
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/com.py:448-476` (`add_pkg()`)
 - **PyChOpMarg:** Interpolates the raw channel S-parameters onto the system frequency grid in the T basis (cubic,
