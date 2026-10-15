@@ -344,11 +344,75 @@ a common gain that largely cancels in COM.
   Each extra case costs one more full EQ optimization.
 - **Not modeled:** MATLAB's other per-case parameters, `PKG_Tx_FFE_preset` and `AC_CM_RMS` (see B5).
 
-### [ ] B3. Unsupported D3.3 features
+### [x] B3. Unsupported D3.3 features
 
 - MLSD (178A.1.10).
 - Floating Rx FFE taps (`Nwg`, `Nwf`, `Nmax`; sheet `N-g`, `N_f`, `N-max`). The sheet sets `N-g` = 0.
 - Interference noise `Sin` (178A.1.7.5; receiver-test calibration only).
+
+**Floating Rx FFE taps: resolved (2026-10-15), as MATLAB.**
+
+- D3.3 values (Tables 178-15, 179-24, 176C-10, 176D-7): `Nwg` = 2 groups of `Nwf` = 4 taps, within ±0.05 (relative
+  to the cursor tap), up to `Nmax` = 87 (KR, CR) or 56 (C2C, C2M), i.e. post-cursor position 80 or 50.
+- New `COMParams` fields `Nfix`, `Nwg` and `Nwf`. With floating taps, `rx_taps_min`/`rx_taps_max` span all `Nmax`
+  positions; the first `Nfix` are the fixed taps. The D3.3 presets set them.
+- Sheet: MATLAB COM's names, which the comparison sheet doesn't use: `N_bg` (groups), `N_bf` (taps per group,
+  default 6), `N_f` (latest post-cursor position) and `bmaxg` (limit, default 0.2). The comparison sheet's `N-g`,
+  `N_f` and `N-max` rows aren't MATLAB's switch either (MATLAB reads `N_bg`), so neither tool uses floating taps there.
+- D3.3 says only that the positions minimize the MSE. As MATLAB (`FOM_rxffe_floating_taps()`), `mmse()` places
+  one group at a time (`float_tap_cols()`): each at the start giving the best FOM along with the groups already
+  placed, not overlapping them or the fixed taps; the earliest wins a tie. This is redone at every sampling time
+  tried. Each group's candidates are solved together (`_mmse_fom_batch()`, the same solution as `_mmse_solve()`).
+- `mmse()` returns `rx_taps` over all `Nmax` positions, zero where unused, and the positions used in `rx_tap_cols`.
+  So COM's Rx FFE (`Hffe_Rx()`), noise and quantization noise need no changes.
+- Cost: example2 (THRU only, 2 × 4 taps to post-cursor 80) took 17.6 s, against 7.3 s with fixed taps only.
+- Tests: `test_float_tap_cols_greedy_as_matlab`, `test_mmse_fom_batch_matches_single_solves`,
+  `test_floating_rx_ffe_taps` (`tests/test_com.py`), `test_floating_rx_ffe_taps` (`tests/test_excel.py`) and
+  `test_com_params_have_floating_rx_ffe_taps` (`tests/test_devmodel.py`).
+- Measured effect: none on the comparison (not used there): the reference set matches the B1 results (COM exactly;
+  FOM to 7e-13 dB, from refactoring `mmse()`).
+
+**MLSD: resolved (2026-10-15), as D3.3.**
+
+- New `COMParams` fields `mlsd` (default off) and `dCOM_an` (ΔCOM_an, default 3 dB: the minimum COM limit, which
+  D3.3 makes the default). The D3.3 presets turn MLSD on for KR and CR. Sheet: MATLAB's `MLSD`/`MLSE` switch
+  (the comparison sheet has `MLSE` = 0) and `add_rx_noise`, which defaults to `COM Pass threshold`.
+- `COM.calc_mlsd()`, after COM_DFE (in MMSE mode), in `src/pychopmarg/mlsd.py`:
+  - Added Rx noise (178A.1.10.1): `solve_g_an()` finds `g_an` by bisection, so that the noise and interference PMF,
+    with σG² + `g_an`·∫`Srn`·|Hrxffe|² as its Gaussian variance (178A-53), has its DER0 point ΔCOM_an further out.
+  - DER_MLSD (178A-50): `der_mlsd()` sums the sequence terms with `p_j` built by 178A-54/55 (`scale_pmf()` rebins
+    `p_an(y/a)/|a|` through its cumulative distribution) and `V_j` from the normalized autocorrelation of
+    `Sni` = `Sn`·|Hrxffe|² + `San` + σX²·|DFT[hISI]|²/fb (178A-56). As in MATLAB, the infinite sum stops once a term
+    adds less than 1e-4 of the total.
+  - COM = COM_DFE + 20·log10(−Pan⁻¹(DER_MLSD)/As) (178A-49), but no less than COM_DFE.
+  - `com_rslts` gains `COM_DFE`, `g_an`, `DER_MLSD`, `mlsd_terms` and `delta_COM_mlsd`.
+- Tests: `tests/test_mlsd.py` (PMF scaling, the `g_an` penalty, a closed form for DER_MLSD with Gaussian noise and
+  no DFE, and the COM rule).
+- Measured effect: none on the comparison (MLSD is off there). With MLSD on (`MLSE` = 1 for MATLAB), on six
+  reference channels:
+
+  | Channel | COM_DFE (dB), Py / MATLAB | MLSD gain (dB), Py / MATLAB | COM (dB), Py / MATLAB |
+  |---|---|---|---|
+  | KR `KR_ch_3in_PCB_NPC_250mm_…` | 3.40 / 3.49 | +1.47 / +1.32 | 4.88 / 4.81 |
+  | KR `KRCA_wXTALK_10_…` | 2.38 / 2.45 | +1.27 / +1.08 | 3.65 / 3.54 |
+  | KR `KRCA_wXTALK_12_…` | 2.86 / 3.03 | +1.51 / +1.36 | 4.37 / 4.39 |
+  | CR `li_dj_CR_Design_C_Rev1` | 1.51 / 1.33 | +1.44 / +1.93 | 2.95 / 3.26 |
+  | CR `Via_28mm__12dB_1500mm` | −2.46 / −2.40 | +0.36 / +0.33 | −2.10 / −2.07 |
+  | CR `Via_28mm__12dB_500mm` | 0.27 / 0.47 | +1.39 / +1.33 | 1.66 / 1.80 |
+
+  The MLSD gains agree within about 0.2 dB (PyChOpMarg's slightly larger), except on `li_dj` (see A8), as expected
+  with MATLAB's different added-noise model (below). MLSD costs 3–6 s per channel.
+  (MATLAB was run from a `.mat` copy of the sheet's `parameter` cell array, since `xlsread` on macOS can't read
+  an `.xlsx`; MATLAB looks for it in its working directory.)
+- **Where MATLAB departs from D3.3 here** (not followed):
+  - Added noise: `scaleCDF()` stretches the whole PDF's voltage axis by 10^(ΔCOM_an/20), instead of adding Gaussian
+    Rx noise. Its `g_an` is only reported.
+  - It skips MLSD when DER_DFE exceeds `DER_CDR` (default 1e-2), for CDR lock.
+  - A sequence truncation penalty (`N_tc` / `trunc`, default 128) and a `Q_budget_adj`, both MATLAB-only.
+  - `MLSE` = 2 selects a Gaussian-assumption variant.
+
+**`Sin`: won't fix (2026-10-15).** It's used only to calibrate the receiver interference tolerance test, and is 0
+otherwise, which PyChOpMarg doesn't do.
 
 ### [ ] B4. Sheet path can't add a host board or partial host channel
 

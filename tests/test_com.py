@@ -366,3 +366,68 @@ def test_com_is_lowest_over_package_test_cases():
     assert com.com_params.zp_tx == cases[worst]["zp_tx"]
     assert com.fom_rslts["FOM"] == pytest.approx(
         alone.fom_rslts["FOM"]) if worst == 1 else com.fom_rslts["FOM"] != alone.fom_rslts["FOM"]
+
+
+def test_float_tap_cols_greedy_as_matlab():
+    """Floating tap groups are placed one at a time, each at the start giving the best FOM along w/ those already
+    placed (the earliest, on a tie), contiguous, and not overlapping the fixed taps or each other."""
+    n_fix, Nw, n_taps = 5, 30, 4
+    target = {8, 9, 10, 11, 20}  # Positions that pay, and the first group's best start (8) is unique.
+
+    def foms(cands):
+        return np.array([len(target & set(c)) + 0.01 * len(set(c) & {12, 13}) for c in cands.tolist()])
+
+    cols = optimize.float_tap_cols(n_fix, Nw, 2, n_taps, foms)
+    assert cols[:n_fix] == list(range(n_fix))
+    # First group: 8..11 (4 targets). Second: any start covering 20 (17..20), w/ the earliest winning the tie.
+    assert cols[n_fix:] == [8, 9, 10, 11, 17, 18, 19, 20]
+
+
+def test_mmse_fom_batch_matches_single_solves(example2_com):
+    "The batched candidate FOMs (used to place floating taps) are those of the full MMSE solution for each."
+    from scipy.linalg import convolution_matrix, toeplitz  # pylint: disable=import-outside-toplevel
+    com = example2_com
+    cp = com.com_params
+    nc = copy.copy(com.theNoiseCalc)
+    nfix, nmax = len(cp.rx_taps_max), cp.dw + 40 + 1
+    w_min = np.concatenate((cp.rx_taps_min, -0.05 * np.ones(nmax - nfix)))
+    w_max = np.concatenate((cp.rx_taps_max, 0.05 * np.ones(nmax - nfix)))
+    dh, first = divmod(nc.ts_ix, nc.nspui)
+    d = dh + cp.dw
+    h = np.concatenate((nc.vic_pulse_resp[first::nc.nspui], np.zeros(nmax - 1)))
+    H = convolution_matrix(h, nmax, mode='full')[:len(h)]
+    R = H.T @ H + toeplitz(nc.Rn()[:nmax]) / nc.varX
+    rng = np.random.default_rng(0)
+    cands = np.array([list(range(nfix)) + sorted(rng.choice(np.arange(nfix, nmax), 8, replace=False).tolist())
+                      for _ in range(20)])
+    args = (cp.dfe_min, cp.dfe_max)
+    batch = optimize._mmse_fom_batch(H, R, cands, d, len(cp.dfe_min), cp.dw, *args, w_min, w_max,  # pylint: disable=protected-access
+                                     optimize.NormMode.P8023dj, nc.varX, cp.RLM, cp.L)
+    single = [optimize._mmse_solve(H[:, c], R[np.ix_(c, c)], d, len(cp.dfe_min), cp.dw, *args,  # pylint: disable=protected-access
+                                   w_min[c], w_max[c], optimize.NormMode.P8023dj, nc.varX, cp.RLM, cp.L)["fom"]
+              for c in cands]
+    assert batch == pytest.approx(single, abs=1e-9)
+
+
+def test_floating_rx_ffe_taps():
+    """With floating Rx FFE taps, COM's Rx FFE spans all `Nmax` positions: zero except at the fixed taps and the
+    `Nwg` groups of `Nwf` contiguous floating taps chosen, which stay within their (cursor-relative) limits."""
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    cp = get_com_params(CFG)
+    nfix, nmax = len(cp.rx_taps_max), cp.dw + 24 + 1  # (A short span, for speed.)
+    cp = dataclasses.replace(
+        cp, rx_taps_min=np.concatenate((cp.rx_taps_min, -0.05 * np.ones(nmax - nfix))),
+        rx_taps_max=np.concatenate((cp.rx_taps_max, 0.05 * np.ones(nmax - nfix))), Nfix=nfix, Nwg=2, Nwf=3)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(cp, ch_set)
+        com()
+    cols = com.mmse_rslt["rx_tap_cols"]
+    floats = cols[nfix:]
+    assert len(com.rx_taps) == nmax and cols[:nfix] == list(range(nfix)) and len(floats) == 6
+    assert all(nfix <= c < nmax for c in floats)
+    groups = sorted({tuple(floats[i: i + 3]) for i in (0, 3)})
+    assert all(g[2] - g[0] == 2 for g in groups)  # Contiguous groups (sorted, so no overlap).
+    unused = sorted(set(range(nmax)) - set(cols))
+    assert not com.rx_taps[unused].any()
+    curs = com.rx_taps[cp.dw]
+    assert all(abs(com.rx_taps[c]) <= 0.05 * abs(curs) * (1 + 1e-9) for c in floats)

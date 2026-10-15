@@ -322,6 +322,23 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     if "z_pB" in com_params_dict:
         rslt.z_pB = com_params_dict["z_pB"]
 
+    # Floating Rx FFE taps, as MATLAB COM: `N_bg` groups of `N_bf` taps (default 6), within +/-`bmaxg` (default 0.2),
+    # as late as post-cursor tap `N_f`. (MATLAB COM uses them for the DFE instead, without an Rx FFE.)
+    n_bg = int(sheet_params.get("N_bg", 0))
+    if n_bg and len(rx_taps_max):
+        nfix = len(rx_taps_max)
+        nmax = rslt.dw + int(sheet_params["N_f"]) + 1
+        bmaxg = float(sheet_params.get("bmaxg", 0.2))
+        rslt.rx_taps_min = np.concatenate((rx_taps_min, -bmaxg * ones(nmax - nfix)))
+        rslt.rx_taps_max = np.concatenate((rx_taps_max, bmaxg * ones(nmax - nfix)))
+        rslt.Nfix, rslt.Nwg, rslt.Nwf = nfix, n_bg, int(sheet_params.get("N_bf", 6))
+
+    # MLSD: MATLAB COM's "MLSD" (or "MLSE") switch, wherever it appears; `add_rx_noise` defaults to the
+    # "COM Pass threshold", as in MATLAB COM (and D3.3: the minimum COM limit).
+    mlsd_flag = sheet_params.get("MLSD", sheet_params.get("MLSE", io_ctl.get("MLSD", io_ctl.get("MLSE", 0))))
+    rslt.mlsd = bool(float(mlsd_flag))
+    rslt.dCOM_an = float(sheet_params.get("add_rx_noise", sheet_params.get("COM Pass threshold", 3.0)))
+
     # Quantization noise: off unless the sheet sets `N_qb`, and `P_qc` defaults to 2 * DER_0, as in MATLAB COM.
     rslt.N_qb = int(sheet_params.get("N_qb", 0))
     rslt.P_qc = float(sheet_params.get("P_qc", 2 * rslt.DER_0))

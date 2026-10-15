@@ -387,9 +387,10 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         """
         return full(len(self.f) // self.nspui + 1, self.Tb * delta**2 / 12)  # i.e. - / fB
 
-    def Rn(self) -> Rvec:
+    def Sn(self) -> Rvec:
         """
-        Noise autocorrelation vector at Rx FFE input.
+        Total noise PSD at Rx FFE input (178A-17), at the current sampling time,
+        folded (two-sided) and uniformly sampled over [0, PI] (rads./s norm.).
 
         Notes:
             1. With ``Nqb`` > 0, the quantization noise (178A-28) is included, its step size found from a
@@ -413,5 +414,9 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
             Sn = Sn + self.Sqn(self.quant_step_size)[:min_len]                                  # (178A-17)
         else:
             self.quant_step_size = 0.0
+        return Sn
+
+    def Rn(self) -> Rvec:
+        """Noise autocorrelation vector at Rx FFE input (178A-18), at the current sampling time. (See ``Sn()``.)"""
         # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
-        return irfft(Sn) / self.Tb
+        return irfft(self.Sn()) / self.Tb

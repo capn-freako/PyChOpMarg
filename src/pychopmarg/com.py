@@ -34,6 +34,7 @@ from pychopmarg.common import (
     COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName)
 from pychopmarg.config.template    import COMParams
 from pychopmarg.devmodel import DeviceModel, gamma_term, renormalize_to, s_rx_model, s_tx_model
+from pychopmarg.mlsd     import der_mlsd, inv_cdf, solve_g_an
 from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import NormMode, mmse, przf
 from pychopmarg.utility  import (
@@ -317,7 +318,57 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             cursor_ix=self.fom_rslts['cursor_ix'])
         com = 20 * np.log10(As / Ani)
         self.com_rslts["COM"] = com
+        if self.com_params.mlsd and self.opt_mode == OptMode.MMSE:
+            self.com_rslts["COM_DFE"] = com
+            com = self.calc_mlsd(com)
+            self.com_rslts["COM"] = com
         return com
+
+    def calc_mlsd(self, com_dfe: float) -> float:  # pylint: disable=too-many-locals
+        """
+        COM for the MLSD-based reference receiver, as per 178A.1.10 (178A-49): COM_DFE plus the MLSD's advantage.
+
+        Args:
+            com_dfe: COM for the DFE-based reference receiver (dB), from ``calc_noise()``, whose results it uses.
+
+        Returns:
+            COM (dB): no less than ``com_dfe``.
+
+        Notes:
+            1. Fills in ``com_rslts`` keys "g_an", "DER_MLSD", "mlsd_terms", and "delta_COM_mlsd".
+        """
+        rslts = self.com_rslts
+        cp = self.com_params
+        nc = self.theNoiseCalc
+        As = rslts["As"]
+        ystep = rslts["y"][1] - rslts["y"][0]
+        b = float(rslts["dfe_taps"][0]) if len(rslts["dfe_taps"]) else 0.0
+        varX = nc.varX
+
+        # Noise and residual ISI at the FFE output (178A-56), w/o the added noise (below), and the Rx noise alone.
+        Sn = nc.Sn()
+        N = 2 * (len(Sn) - 1)
+        Hw2 = abs(np.fft.rfft(self.rx_taps if self.nRxTaps else np.ones(1), N))**2
+        Srn_w = nc.Srn[:len(Sn)] * Hw2
+        Sisi = varX * abs(np.fft.rfft(rslts["hISI"], N))**2 * nc.Tb
+
+        # Added Rx noise (178A.1.10.1), on a grid wide enough for its larger Gaussian noise.
+        Ani = rslts["Ani"]
+        pad = int(np.ceil(4 * Ani * 10**(cp.dCOM_an / 20) / ystep))
+        p_rest = np.pad(_conv_pmfs(_conv_pmfs(_conv_pmfs(rslts["pISI"], rslts["pJ"]), rslts["pXT"]), rslts["pQ"]),
+                        pad)
+        g_an, p_an = solve_g_an(p_rest, ystep, rslts["sigma_G"]**2, nc.variance(Srn_w), cp.DER_0, cp.dCOM_an)
+
+        # MLSD detector error ratio (178A-50), and COM (178A-49).
+        Sni = Sn * Hw2 + g_an * Srn_w + Sisi                                                    # (178A-56)
+        Rni = np.fft.irfft(Sni)
+        der, n_terms = der_mlsd(p_an, ystep, As, b, Rni / Rni[0], cp.L)
+        delta = 20 * np.log10(-inv_cdf(p_an, ystep, der) / As)                                  # (178A-49)
+        rslts["g_an"] = g_an
+        rslts["DER_MLSD"] = der
+        rslts["mlsd_terms"] = n_terms
+        rslts["delta_COM_mlsd"] = delta
+        return max(com_dfe, com_dfe + delta)
 
     def _set_pkg_case(self, case: dict[str, list[float]]) -> None:
         "Rebuild the packages, and the channels w/ them, for the given package test case (see ``COMParams.zp_cases``)."
@@ -993,7 +1044,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                     Nqb=self.com_params.N_qb, Pqc=self.com_params.P_qc)
                 rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, len(self.com_params.dfe_min), self.com_params.RLM,
                             self.com_params.L, bmin, bmax, rx_taps_min, rx_taps_max,
-                            norm_mode=norm_mode, ts_window=ts_window, ts_center=ts_center)
+                            norm_mode=norm_mode, ts_window=ts_window, ts_center=ts_center,
+                            n_fix=self.com_params.Nfix, n_float_groups=self.com_params.Nwg,
+                            n_float_taps=self.com_params.Nwf)
                 fom = rslt["fom"]
                 rx_taps = rslt["rx_taps"]
                 dfe_tap_weights = rslt["dfe_tap_weights"]

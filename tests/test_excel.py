@@ -133,3 +133,45 @@ def test_quantization_noise_params(tmp_path, rows, N_qb, P_qc):
     params = get_com_params(cfg)
     assert params.N_qb == N_qb
     assert params.P_qc == pytest.approx(P_qc if P_qc is not None else 2 * params.DER_0)
+
+
+def test_floating_rx_ffe_taps(tmp_path, params):
+    """MATLAB COM's `N_bg` groups of `N_bf` floating Rx FFE taps, within +/-`bmaxg`, as late as post-cursor tap `N_f`:
+    the tap limits extend to `dw + N_f + 1` positions, the first `Nfix` (the sheet's fixed taps) unchanged."""
+    sheet = pd.read_excel(CFG, header=None)
+    for name, val in (("N_bg", 2), ("N_bf", 4), ("bmaxg", 0.05)):
+        new_row = pd.DataFrame([[name, val] + [np.nan] * (sheet.shape[1] - 2)], columns=sheet.columns)
+        sheet = pd.concat([sheet, new_row], ignore_index=True)
+    sheet.loc[sheet[0] == "N_f", 1] = 80
+    if not (sheet[0] == "N_f").any():
+        sheet = pd.concat([sheet, pd.DataFrame([["N_f", 80] + [np.nan] * (sheet.shape[1] - 2)],
+                                               columns=sheet.columns)], ignore_index=True)
+    cfg = tmp_path / "float.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    fparams = get_com_params(cfg)
+    nfix = len(params.rx_taps_max)
+    assert (fparams.Nfix, fparams.Nwg, fparams.Nwf) == (nfix, 2, 4)
+    assert len(fparams.rx_taps_max) == len(fparams.rx_taps_min) == params.dw + 80 + 1
+    assert np.array_equal(fparams.rx_taps_max[:nfix], params.rx_taps_max)
+    assert np.array_equal(fparams.rx_taps_min[:nfix], params.rx_taps_min)
+    assert set(fparams.rx_taps_max[nfix:]) == {0.05} and set(fparams.rx_taps_min[nfix:]) == {-0.05}
+
+
+@pytest.mark.parametrize("mlse, add_rx_noise, mlsd, dCOM_an", [
+    (0, None, False, 3.0),   # As the sheet: off; `add_rx_noise` defaults to "COM Pass threshold" (3).
+    (1, None, True, 3.0),
+    (1, 2.5, True, 2.5),
+])
+def test_mlsd_params(tmp_path, mlse, add_rx_noise, mlsd, dCOM_an):
+    "MATLAB COM's `MLSE` switch (in the I/O control columns) and `add_rx_noise` set `mlsd` and `dCOM_an`."
+    sheet = pd.read_excel(CFG, header=None)
+    assert (sheet[5] == "MLSE").any()
+    sheet.loc[sheet[5] == "MLSE", 6] = mlse
+    if add_rx_noise is not None:
+        new_row = pd.DataFrame([["add_rx_noise", add_rx_noise] + [np.nan] * (sheet.shape[1] - 2)], columns=sheet.columns)
+        sheet = pd.concat([sheet, new_row], ignore_index=True)
+    cfg = tmp_path / "mlsd.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    assert params.mlsd == mlsd
+    assert params.dCOM_an == pytest.approx(dCOM_an)

@@ -197,3 +197,15 @@ def test_terminated_h21_is_formula_178a3():
     s11, s12, s21, s22 = as_tuple(ntwk)
     want = s21 * (1 - g1) * (1 + g2) / (1 - s11 * g1 - s22 * g2 + g1 * g2 * (s11 * s22 - s12 * s21))
     np.testing.assert_allclose(terminated_h21(ntwk, g1, g2), want)
+
+
+@pytest.mark.parametrize("group, dw, nfix, nmax", [("KR", 6, 15, 87), ("CR", 6, 15, 87),
+                                                    ("C2C", 5, 14, 56), ("C2M", 5, 14, 56)])
+def test_com_params_have_floating_rx_ffe_taps(group, dw, nfix, nmax):
+    """D3.3's Rx FFE: `Nfix` fixed taps (limits +/-0.7), and 2 groups of 4 floating taps (limits +/-0.05) as late as
+    `Nmax` (Tables 178-15, 179-24, 176C-10, 176D-7)."""
+    cp = dj.com_params(group, "egress" if group == "C2M" else "")
+    assert (cp.dw, cp.Nfix, cp.Nwg, cp.Nwf, len(cp.rx_taps_max)) == (dw, nfix, 2, 4, nmax)
+    assert list(cp.rx_taps_max[nfix:]) == [0.05] * (nmax - nfix)
+    assert list(cp.rx_taps_min[nfix:]) == [-0.05] * (nmax - nfix)
+    assert cp.rx_taps_max[dw] == cp.rx_taps_min[dw] == 1.0

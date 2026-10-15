@@ -114,6 +114,14 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     # Quantization noise (178A.1.7.6), as MATLAB COM's "N_qb" and "P_qc"
     N_qb: int = 0                   # noise-equivalent quantization bits; 0 = no quantization noise
     P_qc: float = 1e-7              # quantization clipping probability
+    # Floating Rx FFE taps (178A.1.8.1): with `Nwg` > 0, `rx_taps_min`/`rx_taps_max` span every tap position up to
+    # `Nmax` (their length), of which the first `Nfix` are fixed and the rest available to `Nwg` groups of `Nwf`.
+    Nfix: Optional[int] = None      # number of fixed-position taps; `None`: all
+    Nwg: int = 0                    # number of floating tap groups
+    Nwf: int = 0                    # number of taps per floating tap group
+    # MLSD reference receiver (178A.1.10), as MATLAB COM's "MLSD"/"MLSE" and "add_rx_noise"
+    mlsd: bool = False              # include MLSD
+    dCOM_an: float = 3.0            # penalty for added receiver noise (dB); D3.3: the minimum COM limit
 
     def __post_init__(self):  # pylint: disable=too-many-statements
         "Validate incoming COM parameters."
@@ -165,6 +173,11 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("eta_0", self.eta_0, 1e-10, 1e-6)
         check_range("sigma_Rj", self.sigma_Rj, 0.0, 1.0)
         check_range("N_qb", self.N_qb, 0, 16)
+        if self.Nwg:
+            assert self.Nfix is not None and self.dw < self.Nfix and self.Nwf > 0 \
+                and self.Nfix + self.Nwg * self.Nwf <= len(self.rx_taps_max), ValueError(
+                    f"Floating Rx FFE taps (`Nwg` = {self.Nwg}, `Nwf` = {self.Nwf}) need `Nfix` ({self.Nfix}) > `dw` "
+                    f"({self.dw}), and room for them among the {len(self.rx_taps_max)} tap positions!")
         check_range("P_qc", self.P_qc, 1e-15, 0.1)
         check_range("f_z", self.f_z, 1.0, 1000)
         check_range("f_p1", self.f_p1, 1.0, 1000)
