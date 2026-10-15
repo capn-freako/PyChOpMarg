@@ -175,3 +175,24 @@ def test_mlsd_params(tmp_path, mlse, add_rx_noise, mlsd, dCOM_an):
     params = get_com_params(cfg)
     assert params.mlsd == mlsd
     assert params.dCOM_an == pytest.approx(dCOM_an)
+
+
+def test_host_board_params(tmp_path, params):
+    """MATLAB COM's "Include PCB" and its board rows set the host boards (here, the sheet's own values, w/ C_0/C_1
+    defaulting to 0); "COM Pass threshold" sets the MLSD's `dCOM_an` (both rows are otherwise ignored)."""
+    assert params.include_pcb == 0
+    assert (params.zbp_tx, params.zbp_rx, params.zbp_next, params.zbp_fext) == (151.0, 151.0, 72.0, 72.0)
+    assert params.brd_Z_c == [109.8, 109.8] and params.brd_tau == pytest.approx(6.191e-3)
+    assert params.brd_gamma0_a1_a2 == pytest.approx([0.0, 4.114e-4, 2.547e-4])
+    assert params.brd_C0 == params.brd_C1 == [0.0, 0.0]
+    sheet = pd.read_excel(CFG, header=None)
+    sheet.loc[sheet[0] == "Include PCB", 1] = 2
+    sheet.loc[sheet[0] == "COM Pass threshold", 1] = 2.5
+    for name, val in (("C_0", "[1e-5 2e-5]"), ("C_1", 3e-5)):
+        sheet = pd.concat([sheet, pd.DataFrame([[name, val] + [np.nan] * (sheet.shape[1] - 2)], columns=sheet.columns)],
+                          ignore_index=True)
+    cfg = tmp_path / "pcb.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    p = get_com_params(cfg)
+    assert p.include_pcb == 2 and p.dCOM_an == 2.5
+    assert p.brd_C0 == pytest.approx([1e-5, 2e-5]) and p.brd_C1 == pytest.approx([3e-5, 3e-5])

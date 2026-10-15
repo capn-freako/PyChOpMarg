@@ -377,6 +377,8 @@ a common gain that largely cancels in COM.
 - New `COMParams` fields `mlsd` (default off) and `dCOM_an` (ΔCOM_an, default 3 dB: the minimum COM limit, which
   D3.3 makes the default). The D3.3 presets turn MLSD on for KR and CR. Sheet: MATLAB's `MLSD`/`MLSE` switch
   (the comparison sheet has `MLSE` = 0) and `add_rx_noise`, which defaults to `COM Pass threshold`.
+  (Until B4, `COM Pass threshold` wasn't actually read, being among `excel.py`'s ignored rows; the default, 3 dB,
+  matched the comparison sheet's value.)
 - `COM.calc_mlsd()`, after COM_DFE (in MMSE mode), in `src/pychopmarg/mlsd.py`:
   - Added Rx noise (178A.1.10.1): `solve_g_an()` finds `g_an` by bisection, so that the noise and interference PMF,
     with σG² + `g_an`·∫`Srn`·|Hrxffe|² as its Gaussian variance (178A-53), has its DER0 point ΔCOM_an further out.
@@ -414,12 +416,43 @@ a common gain that largely cancels in COM.
 **`Sin`: won't fix (2026-10-15).** It's used only to calibrate the receiver interference tolerance test, and is 0
 otherwise, which PyChOpMarg doesn't do.
 
-### [ ] B4. Sheet path can't add a host board or partial host channel
+### [x] B4. Sheet path can't add a host board or partial host channel
 
 - Sheet `Include PCB`, `z_bp (…)`, `board_tl_*` and `board_Z_c` are unused.
 - The D3.3 device models in `devmodel.py` can add a partial host channel, but loading settings from a sheet doesn't
   use them.
 - The comparison sheet has `Include PCB` = 0.
+- **Resolved (2026-10-15), as MATLAB's `add_brd()`:**
+  - New `COMParams` fields: `include_pcb` (0: none; 1: both ends; 2: the receiver only), `zbp_tx`, `zbp_rx`,
+    `zbp_next`, `zbp_fext` (mm), `brd_Z_c` and `brd_C0`/`brd_C1` (nF; [Tx, Rx] each), `brd_gamma0_a1_a2` and
+    `brd_tau`, w/ MATLAB's defaults. `get_com_params()` reads `Include PCB`, `z_bp (…)`, `board_Z_c`,
+    `board_tl_gamma0_a1_a2`, `board_tl_tau`, `C_0` and `C_1`.
+  - `COM._board()` builds each board as `devmodel.s_partial_host()` (C_0 at the package, the line, C_1 at the
+    channel; already tested against `add_brd()`), turned around for the receiver. `_pkg_models()` folds it into each
+    end's package model, so the cascade (package, board, channel, board, package) and everything downstream are
+    unchanged. The device-model path (`tx_device`/`rx_device`) is unchanged: its devices carry their own host.
+  - Tests: `test_host_boards_join_the_packages` (`tests/test_com.py`), `test_host_board_params` (`tests/test_excel.py`).
+- **Where MATLAB differs** (not followed): for NEXT, `add_brd()` puts `z_bp (RX)` on the aggressor's transmitter side
+  and `z_bp (NEXT)` on the receiver side. PyChOpMarg puts `z_bp (NEXT)` on the NEXT aggressor's transmitter, as its
+  name (and D3.3's per-device host model) says. Results differ only if the two lengths do.
+- **Measured effect:** none on the comparison (`Include PCB` = 0). Against MATLAB (`Include PCB` = 1, all `z_bp` =
+  30 mm, six reference channels), COM change from adding the boards, in dB:
+
+  | Channel | PyChOpMarg | MATLAB |
+  |---|---|---|
+  | KR `KR_ch_3in_PCB_NPC_250mm_…` | −3.51 | −3.37 |
+  | KR `KRCA_wXTALK_10_…` | −1.39 | −1.16 |
+  | KR `KRCA_wXTALK_12_…` | −1.98 | −1.87 |
+  | CR `li_dj_CR_Design_C_Rev1` | −3.35 | −3.39 |
+  | CR `Via_28mm__12dB_1500mm` | −4.35 | **−15.85** |
+  | CR `Via_28mm__12dB_500mm` | −4.32 | **−10.17** |
+
+  The unequalized pulse peaks w/ boards agree to 0.1% on all six (e.g. 28.72 vs. 28.74 mV, 36.56 vs. 36.56 mV on
+  the `Via_28mm` channels), so the channel-plus-board models match. The `Via_28mm` gap is in the EQ: MATLAB's FOM
+  is −7.9 dB (residual ISI σ 8 mV), where PyChOpMarg finds +4.0 dB (0.6 mV), on the same pulse. (Not investigated;
+  without boards, the two tools agree on these channels.) MATLAB's default board lengths (151 mm, 72 mm) cost
+  ~22 dB each at 53 GHz, collapsing COM to −12 … −31 dB in both tools; there, the tools agree only on the
+  `Via_28mm` channels.
 
 ### [ ] B5. MATLAB-only options PyChOpMarg ignores
 

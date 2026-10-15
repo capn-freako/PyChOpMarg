@@ -185,6 +185,9 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
 
     sheet_params = cfg_trans(com_cfg1)
     sheet_params.update(cfg_trans(com_cfg2))
+    # Rows `cfg_trans()` ignores (`ignored_fields`), but some of which we read, as is.
+    raw_params = {name.strip(): val for name, val in np.concatenate((com_cfg1, com_cfg2))
+                  if isinstance(name, str) and not pd.isna(val)}
     com_params_dict = vars(IEEE_8023dj).copy()
     com_params_dict.update(sheet_params)
 
@@ -337,7 +340,28 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     # "COM Pass threshold", as in MATLAB COM (and D3.3: the minimum COM limit).
     mlsd_flag = sheet_params.get("MLSD", sheet_params.get("MLSE", io_ctl.get("MLSD", io_ctl.get("MLSE", 0))))
     rslt.mlsd = bool(float(mlsd_flag))
-    rslt.dCOM_an = float(sheet_params.get("add_rx_noise", sheet_params.get("COM Pass threshold", 3.0)))
+    rslt.dCOM_an = float(sheet_params.get("add_rx_noise", raw_params.get("COM Pass threshold", 3.0)))
+
+    # Host boards: MATLAB COM's "Include PCB", w/ its board rows (and its defaults, where they're missing).
+    rslt.include_pcb = int(float(raw_params.get("Include PCB", 0)))
+    for key in ("zbp_tx", "zbp_rx", "zbp_next", "zbp_fext"):
+        if key in sheet_params:
+            setattr(rslt, key, float(sheet_params[key]))
+
+    def per_end(val: Any) -> list[float]:
+        "A [Tx, Rx] pair, from a scalar (used at both ends) or a pair."
+        vals = np.atleast_1d(np.asarray(val, dtype=float)).ravel().tolist()
+        return vals * 2 if len(vals) == 1 else vals[:2]
+
+    if "board_Z_c" in sheet_params:
+        rslt.brd_Z_c = per_end(sheet_params["board_Z_c"])
+    if "board_tl_gamma0_a1_a2" in sheet_params:
+        rslt.brd_gamma0_a1_a2 = np.asarray(sheet_params["board_tl_gamma0_a1_a2"], dtype=float).ravel().tolist()
+    if "board_tl_tau" in sheet_params:
+        rslt.brd_tau = float(sheet_params["board_tl_tau"])
+    for key, name in (("brd_C0", "C_0"), ("brd_C1", "C_1")):
+        if name in sheet_params:
+            setattr(rslt, key, per_end(sheet_params[name]))
 
     # Quantization noise: off unless the sheet sets `N_qb`, and `P_qc` defaults to 2 * DER_0, as in MATLAB COM.
     rslt.N_qb = int(sheet_params.get("N_qb", 0))

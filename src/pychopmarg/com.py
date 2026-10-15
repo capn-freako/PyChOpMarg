@@ -33,7 +33,8 @@ from pychopmarg.common import (
     PI, TWOPI, Cvec, Rvec, Cmat, OptMode,
     COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName)
 from pychopmarg.config.template    import COMParams
-from pychopmarg.devmodel import DeviceModel, gamma_term, renormalize_to, s_rx_model, s_tx_model
+from pychopmarg.devmodel import (
+    DeviceModel, PartialHost, TlineStage, gamma_term, renormalize_to, s_partial_host, s_rx_model, s_tx_model)
 from pychopmarg.mlsd     import der_mlsd, inv_cdf, solve_g_an
 from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import NormMode, mmse, przf
@@ -385,7 +386,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
         Notes:
             1. With device models (178A), these are ``s_tx_model()``/``s_rx_model()``.
-            Otherwise, they're built from ``com_params`` (93A.1.2), w/ each end's own package lengths.
+            Otherwise, they're built from ``com_params`` (93A.1.2), w/ each end's own package lengths,
+            and include any host boards (``com_params.include_pcb``; see ``_board()``).
         """
         key = (len(freqs), float(freqs[0]), float(freqs[-1]))
         if key in self._pkg_cache:
@@ -419,8 +421,31 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                     diff(rf.network.cascade_list([
                         self.sC(com_params.C_p[cp_rx_ix] / 1e9, freqs), tline(com_params.zp_rx),
                         self.sDie(True, freqs)])))
+            if com_params.include_pcb:  # Host boards, between the packages and the channel.
+                sTx, sNext, sFext, sRx = rslt
+                if com_params.include_pcb == 1:
+                    sTx = sTx ** self._board(freqs, com_params.zbp_tx, False)
+                    sNext = sNext ** self._board(freqs, com_params.zbp_next, False)
+                    sFext = sFext ** self._board(freqs, com_params.zbp_fext, False)
+                rslt = (sTx, sNext, sFext, self._board(freqs, com_params.zbp_rx, True) ** sRx)
         self._pkg_cache[key] = rslt
         return rslt
+
+    def _board(self, freqs: Rvec, zbp: float, isRx: bool) -> rf.Network:
+        """
+        Host board of length ``zbp`` (mm), as MATLAB COM's ``add_brd()`` (and P802.3dj's partial host channel, 178A-12):
+        C_0 at the package, a transmission line, and C_1 at the channel, w/ the transmitter's (or receiver's) values.
+        Port 1 faces the transmitter, as for the channel.
+        """
+        cp = self.com_params
+        end = 1 if isRx else 0
+        gamma0, a1, a2 = cp.brd_gamma0_a1_a2
+        host = PartialHost(C0=cp.brd_C0[end], C1=cp.brd_C1[end],
+                           tline=TlineStage(zc=cp.brd_Z_c[end], zp=zbp, gamma0=gamma0, a1=a1, a2=a2, tau=cp.brd_tau))
+        brd = s_partial_host(freqs, host, cp.R_0)
+        if isRx:
+            brd.flip()
+        return brd
 
     @property
     def fb(self) -> float:

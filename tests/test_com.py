@@ -431,3 +431,28 @@ def test_floating_rx_ffe_taps():
     assert not com.rx_taps[unused].any()
     curs = com.rx_taps[cp.dw]
     assert all(abs(com.rx_taps[c]) <= 0.05 * abs(curs) * (1 + 1e-9) for c in floats)
+
+
+@pytest.mark.parametrize("include_pcb", [1, 2])
+def test_host_boards_join_the_packages(include_pcb):
+    """With "Include PCB" (1: both ends; 2: the receiver only), each end's host board (C_0, line, C_1, as MATLAB COM's
+    `add_brd()`) sits between its package and the channel, w/ its own length: `zbp_next` for the NEXT aggressor's
+    transmitter. The receiver's board is the transmitter's, turned around (w/ the receiver's values)."""
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    cp = dataclasses.replace(get_com_params(CFG), zbp_tx=30.0, zbp_rx=40.0, zbp_next=20.0, zbp_fext=25.0,
+                             brd_C0=[1e-5, 2e-5], brd_C1=[3e-5, 4e-5])
+    with contextlib.redirect_stdout(io.StringIO()):
+        bare = COM(cp, ch_set)
+        com = COM(dataclasses.replace(cp, include_pcb=include_pcb), ch_set)
+    f = com.freqs
+    pkgs, bare_pkgs = com._pkg_models(f), bare._pkg_models(f)  # pylint: disable=protected-access
+    for got, pkg, zbp in zip(pkgs[:3], bare_pkgs[:3], (30.0, 20.0, 25.0)):  # Tx, NEXT, FEXT
+        want = pkg ** com._board(f, zbp, False) if include_pcb == 1 else pkg  # pylint: disable=protected-access
+        assert np.allclose(got.s, want.s)
+    assert np.allclose(pkgs[3].s, (com._board(f, 40.0, True) ** bare_pkgs[3]).s)  # pylint: disable=protected-access
+    rx_brd = com._board(f, 40.0, True)  # pylint: disable=protected-access
+    rx_as_tx = dataclasses.replace(cp, brd_C0=[2e-5, 2e-5], brd_C1=[4e-5, 4e-5])
+    com.com_params = rx_as_tx
+    tx_brd = com._board(f, 40.0, False)  # pylint: disable=protected-access
+    tx_brd.flip()
+    assert np.allclose(rx_brd.s, tx_brd.s)

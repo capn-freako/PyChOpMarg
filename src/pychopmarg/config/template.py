@@ -8,7 +8,7 @@ Original date:   November 6 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
 from pychopmarg.common import Rvec
@@ -122,6 +122,18 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     # MLSD reference receiver (178A.1.10), as MATLAB COM's "MLSD"/"MLSE" and "add_rx_noise"
     mlsd: bool = False              # include MLSD
     dCOM_an: float = 3.0            # penalty for added receiver noise (dB); D3.3: the minimum COM limit
+    # Host boards (MATLAB COM's "Include PCB"), added between each package and the channel: C_0 at the package,
+    # a transmission line, and C_1 at the channel (as `devmodel.PartialHost`). Defaults are MATLAB COM's.
+    include_pcb: int = 0            # 0: none; 1: at both ends; 2: at the receiver only
+    zbp_tx: float = 151.0           # victim transmitter board length (mm)
+    zbp_rx: float = 151.0           # victim receiver board length (mm)
+    zbp_next: float = 72.0          # NEXT aggressor transmitter board length (mm)
+    zbp_fext: float = 72.0          # FEXT aggressor transmitter board length (mm)
+    brd_Z_c: list[float] = field(default_factory=lambda: [109.8, 109.8])  # (Ohms) [Tx, Rx]
+    brd_gamma0_a1_a2: list[float] = field(default_factory=lambda: [0.0, 4.114e-4, 2.547e-4])  # (1/mm, ...)
+    brd_tau: float = 6.191e-3       # (ns/mm)
+    brd_C0: list[float] = field(default_factory=lambda: [0.0, 0.0])  # (nF) [Tx, Rx]
+    brd_C1: list[float] = field(default_factory=lambda: [0.0, 0.0])  # (nF) [Tx, Rx]
 
     def __post_init__(self):  # pylint: disable=too-many-statements
         "Validate incoming COM parameters."
@@ -173,6 +185,7 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("eta_0", self.eta_0, 1e-10, 1e-6)
         check_range("sigma_Rj", self.sigma_Rj, 0.0, 1.0)
         check_range("N_qb", self.N_qb, 0, 16)
+        assert self.include_pcb in (0, 1, 2), ValueError(f"`include_pcb` ({self.include_pcb}) must be 0, 1, or 2!")
         if self.Nwg:
             assert self.Nfix is not None and self.dw < self.Nfix and self.Nwf > 0 \
                 and self.Nfix + self.Nwg * self.Nwf <= len(self.rx_taps_max), ValueError(
