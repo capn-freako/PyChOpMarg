@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from pychopmarg.utility import delta_pmf, loc_curs
+from pychopmarg.utility import calc_hJ, delta_pmf, loc_curs
 
 NSPUI = 32
 NO_DFE = (np.zeros(1), np.zeros(1))
@@ -70,3 +70,23 @@ class TestDeltaPmf:
         grid's opposite edge, corrupting COM's interference PMFs whenever they outgrew it.)"""
         with pytest.raises(ValueError, match="exceeds the y grid"):
             delta_pmf(np.array([0.3, 0.3]), L=2, y=self.Y)
+
+
+class TestCalcHJ:
+    def test_slopes_at_every_ui(self):
+        """(178A-23): one central-difference slope (V/UI) per UI at the cursor's phase, pre-cursors included, and
+        however small. (They once started at the cursor, and skipped samples below 0.1% of As.)"""
+        pr = _pulse(400)
+        hJ = calc_hJ(pr, 400, NSPUI)
+        assert len(hJ) == len(pr) // NSPUI
+        ixs = 400 % NSPUI + NSPUI * np.arange(1, len(hJ) - 1)
+        assert np.allclose(hJ[1:-1], (pr[ixs + 1] - pr[ixs - 1]) * NSPUI / 2)
+        assert hJ[400 // NSPUI - 1] > 0  # Rising pre-cursor slope
+        assert np.all(np.delete(hJ, 400 // NSPUI) != 0)  # No small-sample filtering (0 only at the peak)
+
+    def test_phase_zero(self):
+        "At sampling phase zero, the first slope uses zero padding rather than wrapping or dropping it."
+        pr = _pulse(400)
+        hJ = calc_hJ(pr, 13 * NSPUI, NSPUI)
+        assert len(hJ) == len(pr) // NSPUI
+        assert hJ[0] == pytest.approx(pr[1] * NSPUI / 2)

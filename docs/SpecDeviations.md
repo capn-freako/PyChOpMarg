@@ -28,8 +28,8 @@ PyChOpMarg-vs-MATLAB comparison (`notebook/PyChOpMarg_vs_MATLAB.ipynb`).
   - 40 channels (10 per group), thru only, at MATLAB's CTLE: peak-FOM error vs. MATLAB, max 0.879 → 0.739 dB
     (mean −0.08 dB, unchanged).
   - **It did not explain the cursor-timing bias.** PyChOpMarg's best offset minus MATLAB's: mean +1.45 → +1.48,
-    rms 1.70 → 1.70 samples. Without jitter, the bias is about half (mean +0.70, rms 1.36), so A3 (jitter slopes
-    skip the pre-cursors) is now the leading suspect.
+    rms 1.70 → 1.70 samples. Without jitter, the bias is about half (mean +0.70, rms 1.36). (A3 turned out not to
+    affect the timing search; see there.)
 
 **Original finding:**
 
@@ -50,7 +50,26 @@ PyChOpMarg-vs-MATLAB comparison (`notebook/PyChOpMarg_vs_MATLAB.ipynb`).
 - **Where:** `src/pychopmarg/com.py:1105` (`calc_noise()`: `n_pre = min(5, curs_uis)`; the comment cites MATLAB v2.60)
 - **MATLAB / D3.3:** 4p17p0 (`get_PSDs` COMPUTE_COM pass, `get_pdf`) and 178A-42 use every pre-cursor sample.
 
-### [ ] A3. Jitter slopes taken only from the cursor onward, and magnitude-filtered
+### [x] A3. Jitter slopes taken only from the cursor onward, and magnitude-filtered
+
+- **Resolved (2026-10-15):** `calc_hJ(pulse_resp, cursor_ix, nspui)` now returns one central-difference slope per
+  UI at the cursor's phase, pre-cursors included, unfiltered (as `NoiseCalc.Sjn` and MATLAB's `h_J` do). Its
+  `As` and `rel_thresh` arguments are gone. The dual-Dirac PMF still drops tiny samples, through `filt_pr_samps`
+  (see F1). Tests: `TestCalcHJ` in `tests/test_probability.py`.
+- **Not a cause of the cursor-timing bias:** The MMSE timing search's jitter comes from `NoiseCalc.Sjn`, which
+  already used every UI. `calc_hJ` only feeds the final COM (`calc_noise()`) and the PRZF FOM.
+- **Measured effect** (40 channels, 10 per group, vs. MATLAB results saved 2026-10-11 with the comparison sheet):
+
+  | | old | new |
+  |---|---|---|
+  | σ_rjit / MATLAB's `sgm_rjit` (mean, range) | 0.91 (0.74–1.09) | 1.07 (0.86–1.20) |
+  | σ(p_DD) / MATLAB's `sgm_p_DD` (mean, range) | 0.91 (0.74–1.09) | 1.07 (0.86–1.20) |
+  | COM − MATLAB's COM, mean ± std | +0.25 ± 0.30 dB | **+0.005 ± 0.27 dB** |
+
+  COM fell 0.05–0.65 dB per channel (mean 0.24 dB). The remaining 7% excess jitter may come from the late
+  cursor timing (steeper slopes there).
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/utility/probability.py:133-156` (`calc_hJ()`: `range(cursor_ix, ...)`, plus a
   `rel_thresh` = 0.1%·As filter). Used at `src/pychopmarg/com.py:832` and `:1097`.

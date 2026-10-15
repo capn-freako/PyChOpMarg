@@ -829,7 +829,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
                 # Step f - Jitter noise.
-                hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, M)
+                hJ = calc_hJ(vic_pulse_resp, cursor_ix, M)
                 varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * (hJ**2).sum()   # (93A-32)
 
                 # Step g - Crosstalk.
@@ -1094,7 +1094,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         else:
             Stx = self.theNoiseCalc.Stn(Hrx=Hrx)
             varTx = self.theNoiseCalc.variance(Stx)                                 # (178A-17)
-        hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
+        hJ = calc_hJ(vic_pulse_resp, cursor_ix, self.nspui)
         hDD = filt_pr_samps(self.com_params.A_DD * hJ, As)
         varJ = self.com_params.sigma_Rj**2 * varX * (hJ**2).sum()                   # (93A-31)
         varG = varTx + varJ + varN                                                  # (93A-41)

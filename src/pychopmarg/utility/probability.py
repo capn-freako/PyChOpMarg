@@ -130,30 +130,26 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
     return y, rslt
 
 
-def calc_hJ(pulse_resp: Rvec, As: float, cursor_ix: int, nspui: int, rel_thresh: float = 0.001) -> Rvec:
+def calc_hJ(pulse_resp: Rvec, cursor_ix: int, nspui: int) -> Rvec:
     """
-    Calculate the set of slopes for valid pulse response samples.
+    Calculate the slope of the pulse response around each of its samples at the cursor's sampling phase,
+    as per (178A-23) (and MATLAB COM's ``h_J``): every UI, pre-cursors included, unfiltered.
 
     Args:
         pulse_resp: The pulse response of interest.
-        As: Signal amplitude, as per 93A.1.6.c.
         cursor_ix: Cursor index.
         nspui: Number of samples per UI.
 
-    Keyword Args:
-        rel_thresh: Filtration threshold (As).
-            Default: 0.001 (i.e. - 0.1%, as per Note 2 of 93A.1.7.1)
-
     Returns:
-        The calculated slopes around the valid samples.
+        The slopes (V/UI), one per UI.
+
+    Notes:
+        1. Zero padding keeps the first sample valid at sampling phase zero (as in ``NoiseCalc.Sjn``).
     """
 
-    thresh = As * rel_thresh
-    valid_pr_samp_ixs = np.array(list(filter(lambda ix: abs(pulse_resp[ix]) >= thresh,
-                                             range(cursor_ix, len(pulse_resp) - 1, nspui))))
-    m1s = pulse_resp[valid_pr_samp_ixs - 1]
-    p1s = pulse_resp[valid_pr_samp_ixs + 1]
-    return (p1s - m1s) / (2 / nspui)  # (93A-28)
+    ixs = cursor_ix % nspui + nspui * np.arange(len(pulse_resp) // nspui)
+    _pulse_resp = np.pad(pulse_resp, 1)
+    return (_pulse_resp[ixs + 2] - _pulse_resp[ixs]) / (2 / nspui)  # (178A-23)
 
 
 def loc_curs(  # pylint: disable=too-many-arguments,too-many-positional-arguments
