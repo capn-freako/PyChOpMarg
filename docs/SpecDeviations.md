@@ -45,7 +45,18 @@ PyChOpMarg-vs-MATLAB comparison (`notebook/PyChOpMarg_vs_MATLAB.ipynb`).
 - **Suggested fix:** Keep all pre-cursors and drop the 0.1% zeroing. Then re-run the comparison and check whether
   the cursor-timing scatter tightens.
 
-### [ ] A2. Final COM ISI keeps only 5 pre-cursor UIs
+### [x] A2. Final COM ISI keeps only 5 pre-cursor UIs
+
+- **Resolved (2026-10-15):** `calc_noise()`'s ISI is now every sample of the post-FFE pulse at the cursor's phase
+  (as MATLAB's `get_pdf()`), including the post-cursor tail beyond 2048 UI that was also cut. Test:
+  `test_com_isi_has_every_precursor`.
+- **Measured effect** (same 40 channels and MATLAB results as A3): COM fell 0–0.21 dB per channel (mean 0.06 dB).
+  COM − MATLAB's COM went from +0.005 ± 0.27 to −0.057 ± 0.26 dB.
+- **Open observation:** PyChOpMarg's `sigma_ISI` is about 1.23× MATLAB's `sgm_isi` (range 0.78–1.54), both before
+  and after this change. MATLAB's `sgm_isi` may come from its FOM pass (`OptFom_Calc_Noise`), not from the final
+  COM's ISI, so this needs checking before reading it as a discrepancy.
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/com.py:1105` (`calc_noise()`: `n_pre = min(5, curs_uis)`; the comment cites MATLAB v2.60)
 - **MATLAB / D3.3:** 4p17p0 (`get_PSDs` COMPUTE_COM pass, `get_pdf`) and 178A-42 use every pre-cursor sample.

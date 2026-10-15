@@ -1101,13 +1101,11 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
         # Sec. 93A.1.7.3
         self.set_status("Sec. 93A.1.7.3")
-        # - ISI (Inconsistent w/ IEEE 802.3-22, but consistent w/ v2.60 of MATLAB code.)
-        n_pre = min(5, curs_uis)
-        # Sample every M points, such that we include our identified cursor sample.
+        # - ISI: every sample at the cursor's phase, pre-cursors included, as per (178A-42) and MATLAB COM's `get_pdf()`.
+        n_pre = curs_uis
         isi_sample_slice = slice(curs_ofst, len(vic_pulse_resp), M)
-        isi_select_slice = slice(curs_uis - n_pre, curs_uis + 2048)
-        tISI = self.times[isi_sample_slice][isi_select_slice]
-        hISI = vic_pulse_resp[isi_sample_slice][isi_select_slice].copy()
+        tISI = self.times[isi_sample_slice]
+        hISI = vic_pulse_resp[isi_sample_slice].copy()
         hISI[n_pre] = 0  # No ISI at cursor.
         dfe_slice = slice(n_pre + 1, n_pre + 1 + nDFE)
         dfe_tap_weights = np.maximum(                                               # (93A-26)

@@ -68,6 +68,18 @@ def test_mmse_keeps_every_precursor(example2_com):
     assert np.array_equal(r["h"], r["vic_pulse_resp"][first_samp::com.nspui])
 
 
+def test_com_isi_has_every_precursor(example2_com):
+    """COM's ISI is every sample of the post-FFE pulse response at the cursor's phase, pre-cursors included, as in
+    (178A-42) and MATLAB COM. It once kept only 5 pre-cursor UIs."""
+    com = example2_com
+    rslts = com.com_rslts
+    curs_uis, curs_ofst = divmod(rslts["cursor_ix"], com.nspui)
+    samps = rslts["pulse_resps"][0][curs_ofst::com.nspui]
+    assert len(rslts["hISI"]) == len(samps)
+    assert np.array_equal(rslts["hISI"][:curs_uis], samps[:curs_uis])
+    assert rslts["hISI"][curs_uis] == 0
+
+
 def test_tx_noise_variance_per_178a_21(example2_com):
     """The Tx noise variance is 10^(-SNR_TX/10) * sum(h_tn(n)^2), by (178A-21) and Parseval: no sigma_X^2 factor
     (unlike crosstalk's (178A-20)), as in MATLAB COM by default."""
