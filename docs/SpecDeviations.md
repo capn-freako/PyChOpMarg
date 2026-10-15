@@ -454,12 +454,14 @@ otherwise, which PyChOpMarg doesn't do.
   ~22 dB each at 53 GHz, collapsing COM to −12 … −31 dB in both tools; there, the tools agree only on the
   `Via_28mm` channels.
 
-### [ ] B5. MATLAB-only options PyChOpMarg ignores
+### [-] B5. MATLAB-only options PyChOpMarg ignores
 
 - `Raised_Cosine` (now 0 in the comparison sheet). D3.3 calls for Butterworth only, so PyChOpMarg matches D3.3.
 - `ts_anchor` modes other than peak.
 - `ffe_main_cursor_min`, `ffe_tap_step_size`, `f_min`.
 - Per-package-case `PKG_Tx_FFE_preset` and `AC_CM_RMS`.
+- **Won't fix (2026-10-15):** none of these is in D3.3, and the comparison sheet doesn't use them; implementing
+  them would make PyChOpMarg imitate MATLAB rather than the draft. Reopen any one if a sheet that matters uses it.
 
 ### [x] B6. CTLE form can't express `fz2` ≠ `fp3`
 
