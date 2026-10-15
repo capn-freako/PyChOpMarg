@@ -1,0 +1,50 @@
+{
+  "C2C": [
+    "C2C_Mezz_13_PCB-95mm_95mm_thru",
+    "C2C_withXtalk_Mezz_13_PCB-95mm_95mm_thru",
+    "C2C_withXtalk_Mezz_14_PCB-130mm_95mm_thru",
+    "C2C_withXtalk_Mezz_22_PCB-60mm_200mm_thru",
+    "Tx_14in_Rx_100ohms_TxVia_35mils_RxVia_45mils_thru1",
+    "Tx_2in_Rx_93ohms_TxVia_60mils_RxVia_70mils_thru1",
+    "Tx_6in_Rx_thru1",
+    "Tx_8in_Rx_93ohms_TxVia_60mils_RxVia_70mils_thru1",
+    "Tx_8in_Rx_thru1",
+    "Tx_9in_Rx_thru1"
+  ],
+  "C2M": [
+    "C2M_PCB_100ohms_10p5in_20230620_v3_thru1",
+    "C2M_PCB_100ohms_9p0in_20230620_v3_thru1",
+    "C2M_PCB_85ohms_10p0in_20230620_v3_thru1",
+    "C2M_PCB_85ohms_6p5in_20230620_v3_thru1",
+    "C2M_TP0TP1a_11p7dB_CabledHost_7p85dB_THRU",
+    "C2M_TP1a_18_twskew_high_PCB-80_mm_FO-450_mm_thru",
+    "C2M_TP1a_2_twskew_med_PCB-55_mm_FO-150_mm_thru",
+    "C2M_X_OSFP224_7in_host_PCB_25C_thru_TP0_Tx7_to_TP1a_Tx7",
+    "C2M_Y_OSFP224_7in_host_PCB_80C_thru_TP4a_Rx8_to_TP5_Rx8",
+    "host_pkg_top_50mm_max_skew_cable_module_pin_pad_thru"
+  ],
+  "CR": [
+    "HH_5in_DAC_X_0p5m_HN_3in_thru_TP0_Tx7_to_TP5_Rx7",
+    "Via_28mm__12dB_1500mm_NVAC_thru",
+    "Via_28mm__12dB_500mm_NVAC_thru",
+    "Via_28mm__3.2dB_500mm_NVAC_thru",
+    "li_dj_CR_Design_C_Rev1_THRU",
+    "sma_1.0mm_12dB_1500mm_NVAC_thru",
+    "sma_1.85mm_12dB_1500mm_NVAC_thru",
+    "sma_1.85mm_12dB_500mm_NVAC_thru",
+    "sma_1.85mm_8dB_500mm_NVAC_thru",
+    "tline_termi_3.2dB_500mm_NVAC_thru"
+  ],
+  "KR": [
+    "KRCA_wXTALK_10_PCB-25-25_mm_FO-100-100_mm_CA-500_mm_thru",
+    "KRCA_wXTALK_12_PCB-75-75_mm_FO-100-100_mm_CA-500_mm_thru",
+    "KRCA_wXTALK_9_PCB-75-75_mm_FO-300-300_mm_CA-200_mm_thru",
+    "KRCA_wXTALK_LD_26_PCB-50-50_mm_FO-300-300_mm_CA-1000_mm_thru",
+    "KRCA_wXTALK_MX_13_PCB-25-25_mm_FO-200-200_mm_CA-500_mm_thru",
+    "KRCA_wXTALK_MX_20_PCB-50-50_mm_FO-100-100_mm_CA-1000_mm_thru",
+    "KR_ch_3in_PCB_80C_NPC_300mm_29AWG_70C_BP_800mm_27AWG_70C_NPC_150mm_29AWG_70C_thru",
+    "KR_ch_3in_PCB_NPC_200mm_29AWG_BP_800mm_27AWG_NPC_350mm_29AWG_thru",
+    "KR_ch_3in_PCB_NPC_250mm_29AWG_BP_800mm_27AWG_thru",
+    "KR_ch_3in_PCB_NPC_400mm_29AWG_BP_800mm_27AWG_NPC_200mm_29AWG_thru"
+  ]
+}

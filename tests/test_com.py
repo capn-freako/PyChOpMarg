@@ -80,6 +80,21 @@ def test_com_isi_has_every_precursor(example2_com):
     assert rslts["hISI"][curs_uis] == 0
 
 
+def test_crosstalk_phase_chosen_at_rx_ffe_input(example2_com):
+    """Under MMSE, each aggressor's sampling phase in COM is the one chosen at the Rx FFE input (178A-20), as in
+    MATLAB COM, not after it. (It was once re-chosen after the Rx FFE.)"""
+    nc = example2_com.theNoiseCalc
+    assert example2_com.com_rslts["xt_phases"] == [nc.agg_phase(pr) for pr in nc.agg_pulse_resps]
+    # Here, the phases chosen before and after the Rx FFE coincide; so, shift the former, to tell them apart.
+    com = copy.deepcopy(example2_com)
+    nc = com.theNoiseCalc
+    shifted = [(nc.agg_phase(pr) + 7) % com.nspui for pr in nc.agg_pulse_resps]
+    nc.agg_phase = lambda pr: shifted[[id(p) for p in nc.agg_pulse_resps].index(id(pr))]
+    with contextlib.redirect_stdout(io.StringIO()):
+        com.calc_noise(cursor_ix=com.fom_rslts["cursor_ix"])
+    assert com.com_rslts["xt_phases"] == shifted
+
+
 def test_tx_noise_variance_per_178a_21(example2_com):
     """The Tx noise variance is 10^(-SNR_TX/10) * sum(h_tn(n)^2), by (178A-21) and Parseval: no sigma_X^2 factor
     (unlike crosstalk's (178A-20)), as in MATLAB COM by default."""

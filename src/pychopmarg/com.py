@@ -1133,10 +1133,16 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val                                       # (93A-27)
         varISI = varX * (hISI**2).sum()                                                         # (93A-31)
         hISI_filt = filt_pr_samps(hISI, As)
-        # - Crosstalk: each aggressor's samples at its own worst phase.
+        # - Crosstalk: each aggressor's samples at its own worst phase. Under MMSE, that's the phase chosen at the
+        #   Rx FFE input (178A-20), as in MATLAB COM. (The Rx FFE's taps are whole UIs apart; so, it keeps phases.)
         hXTs = []
-        for pulse_resp in pulse_resps[1:]:                                                      # (93A-44)
-            i = np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)])                      # (93A-33)
+        xt_phases = []
+        for k, pulse_resp in enumerate(pulse_resps[1:]):                                        # (93A-44)
+            if self.opt_mode == OptMode.MMSE and nRxTaps:
+                i = self.theNoiseCalc.agg_phase(self.theNoiseCalc.agg_pulse_resps[k])           # (178A-20)
+            else:
+                i = np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)])                  # (93A-33)
+            xt_phases.append(int(i))
             hXTs.append(filt_pr_samps(pulse_resp[i::M], As))
 
         # Voltage grid, as MATLAB COM: bin size As/1000, but no larger than 10 uV (its default "PDF bin size"),
@@ -1188,6 +1194,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.com_rslts['Py']          = Py
         self.com_rslts['y']           = y
         self.com_rslts['dfe_taps']    = dfe_tap_weights
+        self.com_rslts['xt_phases']   = xt_phases
 
         return (As, Ani, cursor_ix)
 

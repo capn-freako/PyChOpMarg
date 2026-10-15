@@ -13,6 +13,28 @@ Line numbers refer to `main` at `fd4abd2`.
 When you resolve an item, check it off, and record the commit and any measured effect on the
 PyChOpMarg-vs-MATLAB comparison (`notebook/PyChOpMarg_vs_MATLAB.ipynb`).
 
+## Reference channel set
+
+From A5 on, effects are measured on a fixed **reference set** of 40 channels, 10 per group, from the notebook's
+200-channel run. They're listed in `notebook/reference_channels.json`; the notebook's `ChnlSel.REFERENCE` mode
+runs them and saves MATLAB's results to `notebook/reference_matlab_results.pickle` (not committed). (A1–A4 were
+measured on an earlier, overlapping set of 40, against MATLAB results from before the sheet's latest edits.)
+
+Baseline (after A4; MATLAB COM 4p17p0 run 2026-10-15, comparison sheet as committed), PyChOpMarg − MATLAB:
+
+| Quantity | Mean | Std | Range |
+|---|---|---|---|
+| COM (dB) | +0.33 | 0.24 | +0.04 … +0.98 |
+| FOM (dB) | +0.31 | 0.24 | +0.02 … +0.99 |
+| As (ratio) | 1.145 | 0.099 | 0.90 … 1.41 |
+| Ani (ratio) | 1.102 | 0.087 | 0.81 … 1.29 |
+| σ ISI, σ_rjit, σ_XT (ratio) | 1.16, 1.15, 1.12 | | |
+| Cursor offset (samples) | +1.18 | rms 4.29 | exact on 1/40 |
+
+Same CTLE as MATLAB on 13/40. The FOM is already high by about as much as COM, so the gap arises in the EQ
+optimization rather than the final COM calculation. Signal and noise are both about 10–15% larger than MATLAB's,
+a common gain that largely cancels in COM.
+
 ---
 
 ## A. Differences from both MATLAB and D3.3 that affect today's comparison results
@@ -118,7 +140,16 @@ PyChOpMarg-vs-MATLAB comparison (`notebook/PyChOpMarg_vs_MATLAB.ipynb`).
 - **MATLAB:** Uses the sheet's values. The comparison sheet has Tx 34 mm and Rx 32 mm (each with 1.8 mm).
 - **Why it matters:** The total length is the same, so the effect is probably small, but it isn't the same model.
 
-### [ ] A5. Aggressor sampling phase chosen after the Rx FFE
+### [x] A5. Aggressor sampling phase chosen after the Rx FFE
+
+- **Resolved (2026-10-15):** Under MMSE, `calc_noise()` now samples each aggressor at the phase chosen at the Rx FFE
+  input (new `NoiseCalc.agg_phase()`, which `Sxn()` also uses), as in MATLAB's `get_PSDs()`/`get_pdf()`. PRZF
+  keeps the post-FFE choice, as MATLAB's non-MMSE path does. The phases are in `com_rslts['xt_phases']`. Test:
+  `test_crosstalk_phase_chosen_at_rx_ffe_input`.
+- **Measured effect** (reference set): negligible. COM changed −0.016 to +0.008 dB (mean −0.001 dB), and no CTLE
+  choice changed. The two phase choices almost always coincide.
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/com.py:1124` (`calc_noise()`)
 - **PyChOpMarg:** Picks each aggressor's phase by maximum energy of its pulse *after* the Rx FFE.

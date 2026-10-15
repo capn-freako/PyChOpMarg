@@ -215,16 +215,30 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
             Folded (two-sided) crosstalk PSD at Rx FFE input, uniformly sampled over [0, PI] (rads./s norm.).
         """
 
-        t     = self.t
+        sampled_agg_pr = self._sampled_agg_prs(agg_pulse_resp)[self.agg_phase(agg_pulse_resp)]
+
+        return self.varX * abs(rfft(sampled_agg_pr))**2 * self.Tb  # i.e. - / fB
+
+    def _sampled_agg_prs(self, agg_pulse_resp: Rvec) -> Rmat:
+        "The given aggressor pulse response, sampled once per UI at each phase (one row per phase)."
         nspui = self.nspui
-
         # Truncate at # of whole UIs in `t`, to avoid +/-1 length variation, due to sampling phase.
-        nUI = int(len(t) / nspui)
+        nUI = int(len(self.t) / nspui)
         _agg_pulse_resp = agg_pulse_resp[:nUI * nspui]
-        sampled_agg_prs: Rmat = array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
-        best_m = argmax([(pr_samps**2).sum() for pr_samps in sampled_agg_prs])
+        return array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
 
-        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
+    def agg_phase(self, agg_pulse_resp: Rvec) -> int:
+        """
+        Sampling phase of the given aggressor pulse response at Rx FFE input, as per (178A-20):
+        the one maximizing the sum of its squared samples (as used by ``Sxn()``).
+
+        Args:
+            agg_pulse_resp: Aggressor pulse response (V).
+
+        Returns:
+            Sampling phase (vector samples, in [0, nspui)).
+        """
+        return int(argmax([(pr_samps**2).sum() for pr_samps in self._sampled_agg_prs(agg_pulse_resp)]))
 
     def Stn(self, Hrx: Optional[Cvec] = None) -> Rvec:
         """
