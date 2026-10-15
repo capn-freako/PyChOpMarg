@@ -122,6 +122,14 @@ def test_noise_calc_left_at_chosen_sampling_time(example2_com):
     assert com.theNoiseCalc.ts_ix == com.fom_rslts["cursor_ix"]
 
 
+def test_fom_and_com_tx_noise_agree(example2_com):
+    """The Tx noise `mmse()` reports for the chosen EQ is COM's (`calc_noise()`), up to the Rx FFE's scaling: `mmse()`'s
+    taps give a unit cursor; COM's, a unit cursor tap. (Its Rx FFE response once had an extra, synthesized cursor tap.)"""
+    com = example2_com
+    scale = com.mmse_rslt["rx_taps"][com.nRxPreTaps] / com.rx_taps[com.nRxPreTaps]
+    assert com.fom_rslts["sigma_Tx"] == pytest.approx(scale * com.com_rslts["sigma_Tx"], rel=1e-6)
+
+
 def test_tx_noise_pulse_has_the_signals_phase(example2_com):
     """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.
     (It was once formed w/ a causal moving sum, which delayed it ~half a UI.) Here, w/ no Tx FFE, it's the victim's

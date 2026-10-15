@@ -319,7 +319,16 @@ a common gain that largely cancels in COM.
 
 ## D. Bugs in reported intermediate values (FOM and COM unaffected)
 
-### [ ] D1. `fom_rslts['sigma_Tx']` is about 4.4× too large
+### [x] D1. `fom_rslts['sigma_Tx']` is about 4.4× too large
+
+- **Resolved (2026-10-15):** `mmse()` passes `hasCurs=True`. Its `sigma_Tx` now equals COM's, up to the Rx FFE's
+  scaling. Test: `test_fom_and_com_tx_noise_agree`.
+- **Note on units:** `fom_rslts`' sigmas aren't comparable with `com_rslts`', and they don't share units with each
+  other. ISI and Tx are relative to a unit cursor (`mmse()`'s taps make h0·w = 1; on `example2`, its cursor tap
+  is 191 vs. COM's 1). Jitter, crosstalk and thermal noise are pre-FFE volts. FOM itself uses the MSE, which is
+  consistent. Only these reported values are affected.
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/optimize.py:404`
 - `mmse()` computes `varTx` with `calc_Hffe(…, w_lim, Nw - dw - 1)` without `hasCurs=True`, so it inserts an extra

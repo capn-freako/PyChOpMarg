@@ -396,7 +396,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["dfe_tap_weights"] = b_lim
                 rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
                 rslt["cursor_ix"] = ts_ix
-                rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1)))
+                rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1, hasCurs=True)))
                 rslt["varISI"] = varISI
                 rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
                 rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
