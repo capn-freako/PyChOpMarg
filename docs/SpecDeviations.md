@@ -225,7 +225,16 @@ a common gain that largely cancels in COM.
   `hnoffe` at `ts0`, with the same pulse shape as the signal.
 - **Measured effect:** Negligible (measured earlier).
 
-### [ ] A8. Cursor-timing sweep range excludes +16
+### [x] A8. Cursor-timing sweep range excludes +16
+
+- **Resolved (2026-10-15):** `mmse()` sweeps −16 … +16 inclusive. The "middle" search order still matches MATLAB's
+  stable sort on |offset| (−16 before +16). Test: `test_middle_timing_search_follows_matlab` (now 33 offsets).
+- **Measured effect** (reference set, vs. after D2): none. No channel's best offset is +16.
+- **Observation:** three CR channels land on the −16 edge in PyChOpMarg. Two are at or near it in MATLAB too
+  (`sma_1.0mm_12dB_1500mm`: −16 / −16; `sma_1.85mm_12dB_1500mm`: −16 / −15), so their optimum lies outside the
+  ±½ UI search in both tools (see C1). On `li_dj_CR_Design_C_Rev1`, the tools disagree: −16 vs. MATLAB's −2.
+
+**Original finding:**
 
 - **Where:** `src/pychopmarg/optimize.py:306` (`range(-ts_sweep_ix, ts_sweep_ix)` → −16…+15)
 - **MATLAB:** `sample_adjustment` = [-16 16], which includes +16.

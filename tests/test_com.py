@@ -222,13 +222,13 @@ def test_middle_timing_search_follows_matlab(example2_com, monkeypatch, center):
     monkeypatch.setattr(optimize, "log10", lambda x: (tried.append((nc.ts_ix - peak, 20 * log10(x))), log10(x))[1])
     full = optimize.mmse(*args)
     fom_at = dict(tried)
-    assert sorted(fom_at) == list(range(-16, 16)) and full["n_ts_evals"] == 32
+    assert sorted(fom_at) == list(range(-16, 17)) and full["n_ts_evals"] == 33  # MATLAB's [-16 16], inclusive
     tried.clear()
     rslt = optimize.mmse(*args, ts_window=2, ts_center=center)
 
     # MATLAB COM's "middle" itick loop, transliterated (about `center`, rather than 0).
     expected, pos, neg = [], None, None
-    for itick in sorted(range(-16, 16), key=lambda k: abs(k - center)):
+    for itick in sorted(range(-16, 17), key=lambda k: abs(k - center)):
         if ((itick >= center and pos is not None and abs(pos[1] - itick) >= 2)
                 or (itick <= center and neg is not None and abs(neg[1] - itick) >= 2)):
             continue
@@ -239,7 +239,7 @@ def test_middle_timing_search_follows_matlab(example2_com, monkeypatch, center):
             neg = (fom_at[itick], itick)
 
     assert [ofst for ofst, _ in tried] == expected
-    assert rslt["n_ts_evals"] == len(expected) < 32
+    assert rslt["n_ts_evals"] == len(expected) < 33
     assert rslt["cursor_ix"] - peak == max(expected, key=lambda k: (fom_at[k], -expected.index(k)))
 
 
