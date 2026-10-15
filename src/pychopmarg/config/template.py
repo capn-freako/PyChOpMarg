@@ -63,7 +63,7 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     f_z: float                  # (GHz)
     f_p1: float                 # (GHz)
     f_p2: float                 # (GHz)
-    f_LF: float                 # (GHz)
+    f_LF: float                 # (GHz) second stage zero, `fz2` (and pole, `fp3`, unless `f_p3` is given)
     g_DC: list[float]           # (dB)
     g_DC2: list[float]          # (dB)
     # Tx FFE
@@ -111,6 +111,9 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     local_search: int = 0           # "Local Search": EQ grid search radius (grid steps); 0 = full search.
     ts_srch_mode: str = "full-sweep"  # "TS_SRCH_MODE": cursor timing search, "full-sweep" or "middle".
     ts_track: bool = False          # (PyChOpMarg only) Centre each "middle" timing search on the best so far.
+    # D3.3's CTLE second stage pole, `fp3` (GHz), when it differs from its zero, `fz2` (`f_LF`). (PyChOpMarg only:
+    # MATLAB COM's "f_HP_PZ" ties them.) `None`: `f_LF`, as (93A-22).
+    f_p3: Optional[float] = None
     # Quantization noise (178A.1.7.6), as MATLAB COM's "N_qb" and "P_qc"
     N_qb: int = 0                   # noise-equivalent quantization bits; 0 = no quantization noise
     P_qc: float = 1e-7              # quantization clipping probability
@@ -196,6 +199,8 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("f_p1", self.f_p1, 1.0, 1000)
         check_range("f_p2", self.f_p2, 1.0, 1000)
         check_range("f_LF", self.f_LF, 0.1, 10.)
+        if self.f_p3 is not None:
+            check_range("f_p3", self.f_p3, 0.1, 10.)
         check_range("g_DC", self.g_DC, -30, 0)
         check_range("g_DC2", self.g_DC2, -20, 0)
         check_range("tx_taps_min", self.tx_taps_min, -1, 1)

@@ -536,7 +536,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         if gDC2 is None:
             gDC2 = self.gDC2
         return calc_Hctle(self.freqs, self.com_params.f_z * 1e9, self.com_params.f_p1 * 1e9,
-                          self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2)
+                          self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2,
+                          fp3=None if self.com_params.f_p3 is None else self.com_params.f_p3 * 1e9)
 
     @property
     def gamma1_Tx(self) -> float:

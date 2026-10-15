@@ -8,7 +8,7 @@ Original date:   March 3, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from typing import cast
+from typing import Optional, cast
 import warnings
 
 import numpy as np  # type: ignore
@@ -23,28 +23,35 @@ def from_dB(x: float) -> float:
 
 
 def calc_Hctle(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-    f: Rvec, fz: float, fp1: float, fp2: float, fLF: float, gDC: float, gDC2: float
+    f: Rvec, fz: float, fp1: float, fp2: float, fLF: float, gDC: float, gDC2: float,
+    fp3: Optional[float] = None
 ) -> Cvec:
     """
     Return the voltage transfer function, H(f), of the Rx CTLE,
-    according to (93A-22).
+    according to (93A-22), or P802.3dj/D3.3's form (178A-14's ``Hctf``), whose second stage's zero and pole may differ.
 
     Args:
         f: Frequencies at which to calculate ``Hctle`` (Hz).
         fz: First stage zero frequency (Hz).
         fp1: First stage lower pole frequency (Hz).
         fp2: First stage upper pole frequency (Hz).
-        fLF: Second stage pole/zero frequency (Hz).
+        fLF: Second stage zero frequency, ``fz2`` (Hz); and its pole frequency, ``fp3``, unless given.
         gDC: First stage d.c. gain (dB).
         gDC2: Second stage d.c. gain (dB).
+
+    Keyword Args:
+        fp3: Second stage pole frequency (Hz).
+            Default: None (``fLF``, as in (93A-22))
 
     Returns:
         The complex voltage transfer function, H(f), for the CTLE.
     """
     g1 = from_dB(gDC)
     g2 = from_dB(gDC2)
+    if fp3 is None:
+        fp3 = fLF
     num = (g1 + 1j * f / fz) * (g2 + 1j * f / fLF)
-    den = (1 + 1j * f / fp1) * (1 + 1j * f / fp2) * (1 + 1j * f / fLF)
+    den = (1 + 1j * f / fp1) * (1 + 1j * f / fp2) * (1 + 1j * f / fp3)
     return num / den
 
 

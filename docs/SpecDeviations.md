@@ -461,10 +461,15 @@ otherwise, which PyChOpMarg doesn't do.
 - `ffe_main_cursor_min`, `ffe_tap_step_size`, `f_min`.
 - Per-package-case `PKG_Tx_FFE_preset` and `AC_CM_RMS`.
 
-### [ ] B6. CTLE form can't express `fz2` ≠ `fp3`
+### [x] B6. CTLE form can't express `fz2` ≠ `fp3`
 
 - PyChOpMarg's 93A-22 form ties `fz2` = `fp3` = `f_LF`. The D3.3 tables set `fz2` = `fp3` = fb/80, so this is
   equivalent today.
+- **Resolved (2026-10-15), as D3.3:** new optional `COMParams.f_p3` (GHz); `calc_Hctle()` takes `fp3`, and `f_LF`
+  is the second stage's zero, `fz2`. `None` (the default) keeps `fp3` = `f_LF`, as (93A-22) and MATLAB COM's
+  `f_HP_PZ` (CL120d), which ties them too; so there's no sheet row for it. The D3.3 presets set `f_p3` = fb/80
+  explicitly. Test: `test_ctle_second_stage_pole_may_differ_from_its_zero` (`tests/test_filter.py`).
+- **Measured effect:** none (`f_p3` unset, and fz2 = fp3 in every D3.3 table).
 
 ---
 

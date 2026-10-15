@@ -35,3 +35,19 @@ def test_data_with_dc_is_used_as_is():
     fin = np.concatenate(([0.0], FIN))
     H = (1 - fin / 100e9) * np.exp(-2j * np.pi * fin * 1e-9)
     assert interp_vtf(H, fin, FOUT)[:5001] == pytest.approx(H)
+
+
+def test_ctle_second_stage_pole_may_differ_from_its_zero():
+    """The CTLE (178A-14's Hctf): (g1 + jf/fz1)(g2 + jf/fz2) / ((1 + jf/fp1)(1 + jf/fp2)(1 + jf/fp3)); w/o `fp3`,
+    it's (93A-22), w/ fp3 = fz2."""
+    from pychopmarg.utility import calc_Hctle  # pylint: disable=import-outside-toplevel
+    f = np.linspace(0, 100e9, 101)
+    fz1, fp1, fp2, fz2, fp3, gdc, gdc2 = 42.5e9, 42.5e9, 106.25e9, 1.3e9, 2.0e9, -6.0, -2.0
+    g1, g2 = 10**(gdc / 20), 10**(gdc2 / 20)
+    want = ((g1 + 1j * f / fz1) * (g2 + 1j * f / fz2)
+            / ((1 + 1j * f / fp1) * (1 + 1j * f / fp2) * (1 + 1j * f / fp3)))
+    assert np.allclose(calc_Hctle(f, fz1, fp1, fp2, fz2, gdc, gdc2, fp3=fp3), want)
+    assert np.allclose(calc_Hctle(f, fz1, fp1, fp2, fz2, gdc, gdc2),
+                       calc_Hctle(f, fz1, fp1, fp2, fz2, gdc, gdc2, fp3=fz2))
+    # High-frequency asymptote of the second stage: fp3 / fz2.
+    assert abs(calc_Hctle(np.array([1e15]), 1e30, 1e30, 1e30, fz2, 0.0, gdc2, fp3=fp3)[0]) == pytest.approx(fp3 / fz2, rel=1e-3)
