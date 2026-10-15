@@ -17,7 +17,22 @@ PyChOpMarg-vs-MATLAB comparison (`notebook/PyChOpMarg_vs_MATLAB.ipynb`).
 
 ## A. Differences from both MATLAB and D3.3 that affect today's comparison results
 
-### [ ] A1. MMSE solve keeps only `dw` pre-cursor UIs, and zeroes small samples
+### [x] A1. MMSE solve keeps only `dw` pre-cursor UIs, and zeroes small samples
+
+- **Resolved (2026-10-14):** `mmse()` now uses every pre-cursor sample, unaltered (`d = dh + dw`, as in MATLAB).
+  The zeroing also turned out to write into `theNoiseCalc.vic_pulse_resp` (`h` was a strided view of it); that's
+  gone too. Test: `test_mmse_keeps_every_precursor`.
+- **Measured effect:**
+  - CR `HN_3in_DAC_Z_1p5m_HL_2in_thru_TP0_Tx7_to_TP5_Rx7`: same cursor and EQ, FOM −0.009 dB, COM unchanged.
+  - `example2`: COM −17.16 → −16.79 dB (MATLAB COM 4.80: −16.85 dB). Its CTLE choice moved (−8/−1 → −2/−3 dB).
+  - 40 channels (10 per group), thru only, at MATLAB's CTLE: peak-FOM error vs. MATLAB, max 0.879 → 0.739 dB
+    (mean −0.08 dB, unchanged).
+  - **It did not explain the cursor-timing bias.** PyChOpMarg's best offset minus MATLAB's: mean +1.45 → +1.48,
+    rms 1.70 → 1.70 samples. Without jitter, the bias is about half (mean +0.70, rms 1.36), so A3 (jitter slopes
+    skip the pre-cursors) is now the leading suspect.
+
+**Original finding:**
+
 
 - **Where:** `src/pychopmarg/optimize.py:320-329` (`mmse()`)
 - **PyChOpMarg:** Truncates `h` to exactly `dw` (5) pre-cursor UIs (`dh = dw`) before forming `HᵀH`.

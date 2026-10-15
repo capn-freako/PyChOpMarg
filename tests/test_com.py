@@ -51,10 +51,21 @@ def test_noise_pmfs_cover_their_support(example2_com):
 
 def test_noise_model_is_the_chosen_eqs(example2_com):
     """COM's Tx noise comes from the noise model of the EQ `opt_eq()` chose, not of the last one it tried (which once
-    made it use the last CTLE setting's response: here, -2 dB, vs. the chosen -12 dB)."""
+    made it use the last CTLE setting's response)."""
     com = example2_com
-    assert com.gDC != com.com_params.g_DC[-1]  # (Else, this test can't tell.)
+    cp = com.com_params
+    assert (com.gDC, com.gDC2) != (cp.g_DC[-1], cp.g_DC2[-1])  # (Else, this test can't tell.)
     assert np.allclose(com.theNoiseCalc.Hctf, com.calc_Hctf(com.gDC, com.gDC2))
+
+
+def test_mmse_keeps_every_precursor(example2_com):
+    """The MMSE solve sees every pre-cursor sample of the pulse response, unaltered, as in (178A-32) and MATLAB COM.
+    It once kept only `dw` of them, and zeroed samples below 0.1% of the peak (in the pulse response itself)."""
+    com = example2_com
+    r = com.mmse_rslt
+    dh, first_samp = divmod(r["cursor_ix"], com.nspui)
+    assert r["d"] == dh + com.nRxPreTaps
+    assert np.array_equal(r["h"], r["vic_pulse_resp"][first_samp::com.nspui])
 
 
 def test_tx_noise_variance_per_178a_21(example2_com):

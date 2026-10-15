@@ -317,16 +317,11 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             n_ts_evals += 1
             ts_ix = curs_ix + ts_ofst
             theNoiseCalc.ts_ix = ts_ix
-            dh, first_samp = divmod(ts_ix, nspui)
-            _h = vic_pr[first_samp::nspui]
-            if dw > dh:
-                h = pad(_h, (dw - dh, 0))
-            else:
-                h = _h[dh - dw:]
-            dh = dw  # At this point, there are exactly `dw` pre-cursor samples in `h`.
+            # Keep every pre-cursor sample, as D3.3 (178A-32) and MATLAB COM's `MMSE()` do,
+            # so that early pre-cursor ISI contributes to the MSE.
+            dh, first_samp = divmod(ts_ix, nspui)  # `dh`: number of pre-cursor samples in `h`
+            h = vic_pr[first_samp::nspui].copy()
             d = dh + dw
-            h_thresh = 0.001 * max(h)
-            h[abs(h) < h_thresh] = 0  # We don't want to be summing long runs of numerical precision "noise".
             first_col = concatenate((h, zeros(Nw - 1)))
             H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
             h0 = H[d]
