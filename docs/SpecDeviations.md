@@ -323,11 +323,26 @@ a common gain that largely cancels in COM.
     also drops zero-valued taps before indexing the cursor tap, which would shift that index if a pre-cursor tap were 0.
   - MATLAB's "Fast" `Clip Method` (Vqc = Σ|h|) isn't implemented; its default, "Slow", is the D3.3 method.
 
-### [ ] B2. Only the first package test case is evaluated
+### [x] B2. Only the first package test case is evaluated
 
 - PyChOpMarg builds only `zp_sel` = 0 (`_sPkgTx` / `_sPkgRx` are single-element lists).
 - D3.3 groups define Test 1 / Test 2 cases, and MATLAB evaluates every case in a multi-case `z_p` list.
 - The comparison sheet has one case.
+- **Resolved (2026-10-15), as MATLAB:** MATLAB runs the whole COM calculation once per `z_p select` entry and
+  reports the lowest COM (`min_COM`).
+  - New `COMParams` field `zp_cases`: a list of per-case dicts of `zp_tx`, `zp_rx`, `zp_next` and `zp_fext`, which
+    override those fields. `get_com_params()` fills it when the sheet's `z_p select` lists more than one case
+    (previously it warned and used the first). `zp_tx`, etc. still hold the first case.
+  - `COM.__call__()` evaluates each case in turn: it rebuilds the packages and the channels with them
+    (`_set_pkg_case()`), then optimizes EQ and calculates COM (`_calc_com()`). It returns the lowest COM, and the
+    instance keeps that case's state (`com_params`, channels, EQ, `com_rslts`, `fom_rslts`, noise calculator).
+    `com_rslts["case_coms"]` holds every case's COM; `com_rslts["pkg_case"]`, the (0-based) index of the lowest.
+  - The device-model path (`tx_device` / `rx_device`) is unchanged: one device pair, one case.
+  - Tests: `test_com_is_lowest_over_package_test_cases` (`tests/test_com.py`) and
+    `test_zp_select_lists_every_test_case` (`tests/test_excel.py`).
+- **Measured effect:** none on the comparison (one case); the reference set matches the B1 results exactly.
+  Each extra case costs one more full EQ optimization.
+- **Not modeled:** MATLAB's other per-case parameters, `PKG_Tx_FFE_preset` and `AC_CM_RMS` (see B5).
 
 ### [ ] B3. Unsupported D3.3 features
 
@@ -347,6 +362,7 @@ a common gain that largely cancels in COM.
 - `Raised_Cosine` (now 0 in the comparison sheet). D3.3 calls for Butterworth only, so PyChOpMarg matches D3.3.
 - `ts_anchor` modes other than peak.
 - `ffe_main_cursor_min`, `ffe_tap_step_size`, `f_min`.
+- Per-package-case `PKG_Tx_FFE_preset` and `AC_CM_RMS`.
 
 ### [ ] B6. CTLE form can't express `fz2` ≠ `fp3`
 

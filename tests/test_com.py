@@ -343,3 +343,26 @@ def test_quantization_noise_in_fom_and_com(example2_com, example2_com_quant):
     assert pQ.sum() == pytest.approx(1.0)
     assert np.sqrt((y**2 * pQ).sum()) == pytest.approx(rslts["sigma_Q"], rel=0.02)
     assert rslts["sigma_Q"] == pytest.approx(np.sqrt((com.rx_taps**2).sum() / 12) * rslts["quant_step"])
+
+
+def test_com_is_lowest_over_package_test_cases():
+    """With several package test cases, COM is the lowest of them, as MATLAB COM, each case evaluated as if alone
+    (its own packages and EQ), and the instance keeps the lowest case's results."""
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    ends = ("zp_tx", "zp_rx", "zp_next", "zp_fext")
+    cases = [dict.fromkeys(ends, [12.0, 1.8]), dict.fromkeys(ends, [31.0, 1.8])]
+    params = get_com_params(CFG)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(dataclasses.replace(params, zp_cases=cases), ch_set)
+        com_val = com()
+        alone = COM(dataclasses.replace(params, zp_cases=cases[1:]), ch_set)
+        alone()
+    case_coms = com.com_rslts["case_coms"]
+    assert case_coms[0] != pytest.approx(case_coms[1], abs=0.01)  # (Else, this test can't tell.)
+    assert case_coms[1] == pytest.approx(alone.com_rslts["COM"], abs=1e-9)
+    worst = int(np.argmin(case_coms))
+    assert com_val == min(case_coms) == com.com_rslts["COM"]
+    assert com.com_rslts["pkg_case"] == worst
+    assert com.com_params.zp_tx == cases[worst]["zp_tx"]
+    assert com.fom_rslts["FOM"] == pytest.approx(
+        alone.fom_rslts["FOM"]) if worst == 1 else com.fom_rslts["FOM"] != alone.fom_rslts["FOM"]

@@ -103,6 +103,10 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     zp_rx: Optional[list[float]] = None
     zp_next: Optional[list[float]] = None
     zp_fext: Optional[list[float]] = None
+    # Every package test case to evaluate (MATLAB COM's "z_p select"): each a dict of any of "zp_tx", "zp_rx", "zp_next",
+    # and "zp_fext" (as above), overriding those fields. COM is the lowest over them, as in MATLAB COM.
+    # `None`: one case, given by `zp_tx`, etc.
+    zp_cases: Optional[list[dict[str, list[float]]]] = None
     # EQ search control (MATLAB COM's "I/O control" settings of the same names)
     local_search: int = 0           # "Local Search": EQ grid search radius (grid steps); 0 = full search.
     ts_srch_mode: str = "full-sweep"  # "TS_SRCH_MODE": cursor timing search, "full-sweep" or "middle".
@@ -198,6 +202,11 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         for nm in ("zp_tx", "zp_rx", "zp_next", "zp_fext"):
             if getattr(self, nm) is not None:
                 check_range(nm, getattr(self, nm), 0.001, 100.)
+        for n, case in enumerate(self.zp_cases or []):
+            for nm, zp in case.items():
+                assert nm in ("zp_tx", "zp_rx", "zp_next", "zp_fext"), ValueError(
+                    f"`zp_cases[{n}]` has an unknown key: {nm}!")
+                check_range(f"zp_cases[{n}][{nm}]", zp, 0.001, 100.)
         check_range("gamma0", self.gamma0, 1e-7, 1e-3)
         check_range("a1", self.a1, 1e-7, 1e-3)
         check_range("a2", self.a2, 1e-7, 1e-3)

@@ -102,6 +102,21 @@ def test_zp_select_picks_test_case(tmp_path, zp_tx, zp_sel, expected):
     assert params.zp_tx == params.zp_rx == params.zp_next == params.zp_fext == expected
 
 
+def test_zp_select_lists_every_test_case(tmp_path):
+    "With several `z_p select` cases, `zp_cases` holds each one's lengths, in order; `zp_tx`, etc., the first's."
+    sheet = pd.read_excel(CFG, header=None)
+    for col in (0, 9):
+        for end in ("TX", "RX", "NEXT", "FEXT"):
+            sheet.loc[sheet[col] == f"z_p ({end})", col + 1] = "[12 30 ; 1.8 1.8]"
+        sheet.loc[sheet[col] == "z_p select", col + 1] = "[2 1]"
+    cfg = tmp_path / "zp_cases.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    ends = ("zp_tx", "zp_rx", "zp_next", "zp_fext")
+    assert params.zp_cases == [dict.fromkeys(ends, [30.0, 1.8]), dict.fromkeys(ends, [12.0, 1.8])]
+    assert params.zp_tx == [30.0, 1.8]
+
+
 @pytest.mark.parametrize("rows, N_qb, P_qc", [
     ([], 0, None),                              # Off, by default.
     ([("N_qb", 6)], 6, None),                   # `P_qc` defaults to 2 * DER_0, as in MATLAB COM.

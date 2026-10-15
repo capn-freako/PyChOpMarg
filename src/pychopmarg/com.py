@@ -19,6 +19,7 @@ ToDo:
     1. Provide type hints for imports.
 """
 
+from dataclasses import replace
 from pathlib import Path
 from typing  import Any, Optional, cast
 import warnings
@@ -109,6 +110,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         """
 
         # General
+        if com_params.zp_cases and tx_device is None:  # Start w/ the first package test case.
+            com_params = replace(com_params, **com_params.zp_cases[0])
         self.com_params: COMParams = com_params
         self.debug: bool = debug
         self.do_init: bool = do_init
@@ -172,6 +175,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                     ntwks.append((sdd_21(rf.Network(str(fname))), chtype))
         else:
             raise TypeError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
+        self._ntwks: list[COMNtwk] = ntwks
 
         # Create the system time & frequency vectors.
         fb = com_params.fb * 1e9
@@ -260,7 +264,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 Default: None
 
         Returns:
-            COM: The calculated COM value (dB).
+            COM: The calculated COM value (dB): with several package test cases (``com_params.zp_cases``),
+            the lowest, as in MATLAB COM. ``com_rslts["case_coms"]`` holds each case's COM, and
+            ``com_rslts["pkg_case"]`` the (0-based) index of the lowest, whose results this instance keeps.
 
         Raises:
             RuntimeError if throughput channel is missing.
@@ -277,6 +283,33 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         if dbg_dict is not None:
             self.dbg_dict  = dbg_dict
 
+        # Each package test case in turn (as MATLAB COM), keeping the lowest COM and the state that gave it.
+        cases = (self.com_params.zp_cases if not self.use_devices else None) or [None]
+        case_rslts: list[tuple[float, dict[str, Any]]] = []
+        for n, case in enumerate(cases):
+            if n:  # (The first case's packages were added at initialization.)
+                self._set_pkg_case(case)
+            com = self._calc_com()
+            case_rslts.append((com, {nm: getattr(self, nm) for nm in self._case_state if hasattr(self, nm)}))
+        case_coms = [com for com, _ in case_rslts]
+        worst = int(np.argmin(case_coms))
+        for nm, val in case_rslts[worst][1].items():
+            setattr(self, nm, val)
+        com = case_coms[worst]
+        self.com_rslts["case_coms"] = case_coms
+        self.com_rslts["pkg_case"] = worst
+        self.set_status(f"Ready; COM = {com: 5.1f} dB")
+        return com
+
+    #: Instance state that depends on the package test case (restored to the worst case's, by ``__call__()``).
+    _case_state = ("com_params", "chnls", "_sPkgTx", "_sPkgNext", "_sPkgFext", "_sPkgRx", "_pkg_cache",
+                   "tx_ix", "gDC", "gDC2", "rx_taps", "dfe_taps", "cursor_ix", "com_rslts", "fom_rslts",
+                   "theNoiseCalc", "mmse_rslt", "n_fom_evals")
+
+    def _calc_com(self) -> float:
+        "Optimize EQ and calculate COM, for the current package test case."
+        self.com_rslts = {}
+        self.fom_rslts = {}
         self.set_status("Optimizing EQ...")
         assert self.opt_eq(), RuntimeError("EQ optimization failed!")
         self.set_status("Calculating noise...")
@@ -284,8 +317,15 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             cursor_ix=self.fom_rslts['cursor_ix'])
         com = 20 * np.log10(As / Ani)
         self.com_rslts["COM"] = com
-        self.set_status(f"Ready; COM = {com: 5.1f} dB")
         return com
+
+    def _set_pkg_case(self, case: dict[str, list[float]]) -> None:
+        "Rebuild the packages, and the channels w/ them, for the given package test case (see ``COMParams.zp_cases``)."
+        self.com_params = replace(self.com_params, **case)
+        self._pkg_cache = {}
+        sPkgTx, sPkgNext, sPkgFext, sPkgRx = self._pkg_models(self.freqs)
+        self._sPkgTx, self._sPkgNext, self._sPkgFext, self._sPkgRx = [sPkgTx], [sPkgNext], [sPkgFext], [sPkgRx]
+        self.chnls = list(map(self.add_pkg, self._ntwks))
 
     # Instance Properties
     def _pkg_models(self, freqs: Rvec) -> tuple[rf.Network, rf.Network, rf.Network, rf.Network]:
