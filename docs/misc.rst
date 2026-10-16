@@ -19,6 +19,14 @@ common
    :undoc-members:
    :show-inheritance:
 
+devmodel
+--------
+
+.. automodule:: pychopmarg.devmodel
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 excel
 -----
 
@@ -31,6 +39,14 @@ matlab
 ------
 
 .. automodule:: pychopmarg.matlab
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+mlsd
+----
+
+.. automodule:: pychopmarg.mlsd
    :members:
    :undoc-members:
    :show-inheritance:

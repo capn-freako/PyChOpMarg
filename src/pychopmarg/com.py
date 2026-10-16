@@ -20,6 +20,7 @@ ToDo:
 """
 
 from dataclasses import replace
+from importlib.metadata import version
 from pathlib import Path
 from typing  import Any, Optional, cast
 import warnings
@@ -113,7 +114,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
         # General
         if com_params.zp_cases and tx_device is None:  # Start w/ the first package test case.
-            com_params = replace(com_params, **com_params.zp_cases[0])
+            com_params = replace(com_params, **cast(dict[str, Any], com_params.zp_cases[0]))
         self.com_params: COMParams = com_params
         self.debug: bool = debug
         self.do_init: bool = do_init
@@ -286,10 +287,12 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             self.dbg_dict  = dbg_dict
 
         # Each package test case in turn (as MATLAB COM), keeping the lowest COM and the state that gave it.
-        cases = (self.com_params.zp_cases if not self.use_devices else None) or [None]
+        cases: list[Optional[dict[str, list[float]]]] = [None]
+        if self.com_params.zp_cases and not self.use_devices:
+            cases = list(self.com_params.zp_cases)
         case_rslts: list[tuple[float, dict[str, Any]]] = []
         for n, case in enumerate(cases):
-            if n:  # (The first case's packages were added at initialization.)
+            if n and case:  # (The first case's packages were added at initialization.)
                 self._set_pkg_case(case)
             com = self._calc_com()
             case_rslts.append((com, {nm: getattr(self, nm) for nm in self._case_state if hasattr(self, nm)}))
@@ -373,7 +376,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
     def _set_pkg_case(self, case: dict[str, list[float]]) -> None:
         "Rebuild the packages, and the channels w/ them, for the given package test case (see ``COMParams.zp_cases``)."
-        self.com_params = replace(self.com_params, **case)
+        self.com_params = replace(self.com_params, **cast(dict[str, Any], case))
         self._pkg_cache = {}
         sPkgTx, sPkgNext, sPkgFext, sPkgRx = self._pkg_models(self.freqs)
         self._sPkgTx, self._sPkgNext, self._sPkgFext, self._sPkgRx = [sPkgTx], [sPkgNext], [sPkgFext], [sPkgRx]
@@ -1346,7 +1349,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             if self.opt_mode == OptMode.MMSE and nRxTaps:
                 i = self.theNoiseCalc.agg_phase(self.theNoiseCalc.agg_pulse_resps[k])           # (178A-20)
             else:
-                i = np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)])                  # (93A-33)
+                i = int(np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)]))             # (93A-33)
             xt_phases.append(int(i))
             hXTs.append(filt_pr_samps(pulse_resp[i::M], As))
 
@@ -1427,11 +1430,11 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
         return (As, Ani, cursor_ix)
 
-    about_str = """
+    about_str = f"""
       <H2><em>PyChOpMarg</em> - A Python implementation of COM, as per IEEE 802.3-22 Annex 93A/178A.</H2>\n
       <strong>By:</strong> David Banas <capn.freako@gmail.com><p>\n
       <strong>On:</strong> January 20, 2025<p>\n
-      <strong>At:</strong> v3.1.0\n
+      <strong>At:</strong> v{version("PyChOpMarg")}\n
       <H3>Useful Links</H3>\n
       (You'll probably need to: right click, select <em>Copy link address</em>, and paste into your browser.)
         <UL>\n

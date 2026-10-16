@@ -322,7 +322,7 @@ def sPkgTline(  # pylint: disable=too-many-arguments,too-many-positional-argumen
 
 def s2p_pulse_response(s2p: rf.Network, ui: float, t: Optional[Rvec] = None) -> tuple[Rvec, Rvec]:
     """
-    Calculate the __pulse__ response of a 2-port network, using the SciKit-RF provided __step__ response.
+    Calculate the *pulse* response of a 2-port network, using the SciKit-RF provided *step* response.
 
     Args:
         s2p: The 2-port network to use.
@@ -330,7 +330,7 @@ def s2p_pulse_response(s2p: rf.Network, ui: float, t: Optional[Rvec] = None) -> 
 
     Keyword Args:
         t: Optional time vector for use in interpolating the resultant pulse response (s).
-            Default: None (Use time vector returned by __SciKit-RF__ step response function.)
+            Default: None (Use time vector returned by *SciKit-RF* step response function.)
 
     Returns:
         t, p: A pair consisting of:

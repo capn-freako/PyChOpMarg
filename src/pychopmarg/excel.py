@@ -91,7 +91,7 @@ matlab_only_fields: dict[str, tuple[Any, ...]] = {
 class UsageDict(dict):
     "A ``dict`` that records which keys have been looked up (w/ ``[]``, ``get()``, or ``in``), in ``used``."
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.used: set[Any] = set()
 
