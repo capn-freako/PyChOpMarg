@@ -8,17 +8,20 @@ Original date:   August 30, 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
+from collections.abc import Callable
+from functools import partial
 from typing     import Any, Optional
 
 import numpy as np
 # pylint: disable=redefined-builtin
 from numpy import (
-    argmax, array, array_equal, concatenate, dot, identity,
+    argmax, array, array_equal, concatenate, dot, einsum, identity, ix_,
     log10, maximum, minimum, ones, pad, sqrt, sum, vectorize, where, zeros)
-from numpy.linalg import lstsq
+from numpy.linalg import lstsq, solve as np_solve
+from numpy.typing import NDArray
 from scipy.linalg import convolution_matrix, solve, toeplitz
 
-from pychopmarg.common  import Rvec, NormMode
+from pychopmarg.common  import Rmat, Rvec, NormMode
 from pychopmarg.noise   import NoiseCalc
 from pychopmarg.utility import calc_Hffe
 
@@ -225,11 +228,189 @@ def przf(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     return wn, bn, h[dh - nPreTaps: dh - nPreTaps + nTaps]
 
 
+def _mmse_solve(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    H: Rmat, R: Rmat, d: int, Nb: int, dw: int,
+    b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
+    norm_mode: NormMode, varX: float, Rlm: float, L: int
+) -> dict[str, Any]:
+    """
+    MMSE Rx FFE/DFE solution, w/ DFE and FFE limits enforced, for the given FFE taps, as per (178A-33..36)
+    and MATLAB COM's ``MMSE_FOM()``.
+
+    Args:
+        H: Pulse response convolution matrix, one column per FFE tap.
+        R: ``H.T @ H + Rnn / varX`` (178A-33), for the same taps.
+        d: Index (in ``H``'s rows) of the cursor.
+        Nb: Number of DFE taps.
+        dw: Index (in ``H``'s columns) of the FFE's cursor tap.
+        b_min: Minimum DFE tap weight values.
+        b_max: Maximum DFE tap weight values.
+        w_min: Minimum FFE tap weight values (relative to the cursor tap), for the same taps.
+        w_max: Maximum FFE tap weight values (relative to the cursor tap), for the same taps.
+        norm_mode: The tap weight normalization mode to use.
+        varX: Signal power.
+        Rlm: Relative level mismatch.
+        L: Number of modulation levels.
+
+    Returns:
+        A dictionary containing the FOM ("fom"), MSE ("mse"), FFE and DFE tap weights ("w_lim", "b_lim"),
+        and intermediate values.
+    """
+    Nw = H.shape[1]
+    h0 = H[d]
+    Hb = H[d + 1: d + 1 + Nb]
+    Ib = identity(Nb)
+    zb = zeros(Nb)
+    A = concatenate((concatenate((R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),
+                     concatenate((-Hb, Ib, zeros((Nb, 1))), axis=1),
+                     concatenate((h0, zb, zeros(1))).reshape((1, Nw + Nb + 1))))
+    y = concatenate((h0, zeros(Nb), ones(1)))
+    x = solve(A, y)
+    w = x[:Nw]
+    lam = x[-1]
+
+    # Check DFE tap weights, enforcing limits if necessary.
+    b = x[Nw: Nw + Nb]
+    b_lim = maximum(b_min, minimum(b_max, b))
+    delta_w = zeros(len(w))
+    hit_b_limit = False
+    if not array_equal(b_lim, b):
+        hit_b_limit = True
+        _A = concatenate((concatenate((R, -h0.reshape((Nw, 1))), axis=1),
+                          concatenate((h0, zeros(1))).reshape((1, -1))))
+        _y = concatenate((h0 + Hb.T @ b_lim, ones(1)))
+        _x = solve(_A, _y)
+        _w = _x[:Nw]
+        delta_w = _w - w
+        lam = _x[-1]
+        w = _w
+
+    # Clip to limits if apropos.
+    if norm_mode == NormMode.P8023dj:
+        w_lim = clip_taps(w, dw, w_min, w_max)
+    else:
+        w_lim = w
+
+    # Make final adjustments if necessary.
+    if not array_equal(w_lim, w):
+        w_lim /= dot(h0, w_lim)  # Normalize for unit pulse response amplitude.
+        b = Hb @ w_lim.flatten()
+        b_lim = maximum(b_min, minimum(b_max, b))
+
+    mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
+    fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
+    return {"fom": fom, "mse": mse, "w_lim": w_lim, "b_lim": b_lim, "lam": lam, "delta_w": delta_w,
+            "hit_b_limit": hit_b_limit, "h0": h0, "Hb": Hb, "A": A, "y": y, "x": x, "b": b}
+
+
+def _mmse_fom_batch(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    H_all: Rmat, R_all: Rmat, cols: NDArray[np.int_], d: int, Nb: int, dw: int,
+    b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
+    norm_mode: NormMode, varX: float, Rlm: float, L: int
+) -> Rvec:
+    """
+    The FOM of ``_mmse_solve()`` for each of several sets of FFE tap positions (the rows of ``cols``), at once.
+
+    Args:
+        H_all: Pulse response convolution matrix, one column per FFE tap position.
+        R_all: ``H_all.T @ H_all + Rnn / varX``, for the same positions.
+        cols: FFE tap positions (indices into the columns of ``H_all``), one set per row.
+        d: Index (in ``H_all``'s rows) of the cursor.
+        Nb: Number of DFE taps.
+        dw: Index (in each row of ``cols``) of the FFE's cursor tap.
+        b_min: Minimum DFE tap weight values.
+        b_max: Maximum DFE tap weight values.
+        w_min: Minimum FFE tap weight values (relative to the cursor tap), for every position.
+        w_max: Maximum FFE tap weight values (relative to the cursor tap), for every position.
+        norm_mode: The tap weight normalization mode to use.
+        varX: Signal power.
+        Rlm: Relative level mismatch.
+        L: Number of modulation levels.
+
+    Returns:
+        The FOM (dB) for each row of ``cols``.
+    """
+    K, n = cols.shape
+    h0 = H_all[d][cols]                                         # K x n
+    Hb = H_all[d + 1: d + 1 + Nb][:, cols].transpose(1, 0, 2)   # K x Nb x n
+    R = R_all[cols[:, :, None], cols[:, None, :]]               # K x n x n
+    m = n + Nb + 1
+    A = zeros((K, m, m))
+    A[:, :n, :n] = R
+    A[:, :n, n: n + Nb] = -Hb.transpose(0, 2, 1)
+    A[:, :n, -1] = -h0
+    A[:, n: n + Nb, :n] = -Hb
+    A[:, n: n + Nb, n: n + Nb] = identity(Nb)
+    A[:, -1, :n] = h0
+    y = concatenate((h0, zeros((K, Nb)), ones((K, 1))), axis=1)
+    x = np_solve(A, y[..., None])[..., 0]
+    w = x[:, :n]
+    b = x[:, n: n + Nb]
+
+    # DFE limits: re-solve the FFE, w/ the DFE taps clipped, where any was.
+    b_lim = maximum(b_min, minimum(b_max, b))
+    hit = (b_lim != b).any(axis=1)
+    if hit.any():
+        _A = zeros((K, n + 1, n + 1))
+        _A[:, :n, :n] = R
+        _A[:, :n, -1] = -h0
+        _A[:, -1, :n] = h0
+        _y = concatenate((h0 + einsum('kbn,kb->kn', Hb, b_lim), ones((K, 1))), axis=1)
+        w[hit] = np_solve(_A[hit], _y[hit][..., None])[..., 0][:, :n]
+
+    # FFE limits, relative to the cursor tap; then renormalize, and recompute the DFE.
+    if norm_mode == NormMode.P8023dj:
+        w_curs = w[:, dw: dw + 1]
+        w_lim = minimum(w_max[cols] * w_curs, maximum(w_min[cols] * w_curs, w))
+    else:
+        w_lim = w
+    clipped = (w_lim != w).any(axis=1)
+    if clipped.any():
+        w_lim[clipped] /= (h0 * w_lim).sum(axis=1)[clipped, None]
+        b_lim[clipped] = maximum(b_min, minimum(b_max, einsum('kbn,kn->kb', Hb, w_lim)))[clipped]
+
+    wRw = einsum('kn,knm,km->k', w_lim, R, w_lim)
+    wh0 = (w_lim * h0).sum(axis=1)
+    wHbb = einsum('kn,kbn,kb->k', w_lim, Hb, b_lim)
+    mse = varX * (wRw + 1 + (b_lim**2).sum(axis=1) - 2 * wh0 - 2 * wHbb)
+    return 20 * log10(Rlm / (L - 1) / sqrt(mse))
+
+
+def float_tap_cols(
+    n_fix: int, Nw: int, n_groups: int, n_taps: int, foms: Callable[[NDArray[np.int_]], Rvec]
+) -> list[int]:
+    """
+    Choose the Rx FFE's floating tap positions, as MATLAB COM's ``FOM_rxffe_floating_taps()``: one group at a time,
+    each placed where it gives the best FOM, along w/ the groups already placed, without overlapping them (178A.1.8.1).
+
+    Args:
+        n_fix: Number of fixed-position taps (``Nfix``), which are taps ``0 .. n_fix - 1``.
+        Nw: Full span of the FFE (``Nmax``): floating taps may occupy positions ``n_fix .. Nw - 1``.
+        n_groups: Number of floating tap groups (``Nwg``).
+        n_taps: Number of contiguous taps per group (``Nwf``).
+        foms: The FOM given by each of several sets of FFE tap positions (the rows of its argument).
+
+    Returns:
+        The FFE tap positions: the fixed ones, followed by the floating ones, in order.
+    """
+    chosen: list[int] = []
+    for _ in range(n_groups):
+        starts = [start for start in range(n_fix, Nw - n_taps + 1)
+                  if not any(col in chosen for col in range(start, start + n_taps))]
+        if not starts:  # No room for another group.
+            break
+        cands = array([list(range(n_fix)) + sorted(chosen + list(range(start, start + n_taps))) for start in starts])
+        start = starts[int(argmax(foms(cands)))]  # (The earliest, on a tie, as MATLAB's `max()`.)
+        chosen += list(range(start, start + n_taps))
+    return list(range(n_fix)) + sorted(chosen)
+
+
 def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,too-many-branches
     theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
     ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj,
-    ts_window: int = 0, ts_center: int = 0
+    ts_window: int = 0, ts_center: int = 0, ts_range: Optional[tuple[int, int]] = None,
+    n_fix: Optional[int] = None, n_float_groups: int = 0, n_float_taps: int = 0
 ) -> dict[str, Any]:
     """
     Optimize Rx FFE tap weights, via *Minimum Mean Squared Error* (MMSE).
@@ -254,6 +435,16 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         ts_window: Cursor timing search window (vector samples); 0 = full search. (See Note 2.)
             Default: 0
         ts_center: Cursor timing search starting point, relative to the peak (vector samples). (See Note 2.)
+            Default: 0
+        ts_range: Cursor timing search range, (first, last) offsets from the peak (vector samples, inclusive),
+            as MATLAB COM's ``sample_adjustment``; overrides ``ts_sweep``.
+            Default: None (``ts_sweep``)
+        n_fix: Number of fixed-position Rx FFE taps (``Nfix``); the rest of the ``Nw`` (= ``Nmax``) positions
+            are for floating taps. (See Note 3.)
+            Default: None (``Nw``, i.e. - no floating taps)
+        n_float_groups: Number of floating tap groups (``Nwg``).
+            Default: 0
+        n_float_taps: Number of taps per floating tap group (``Nwf``).
             Default: 0
 
     Returns:
@@ -281,6 +472,10 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         or more samples beyond the best so far on its side of ``ts_center`` is skipped.
         Otherwise, every offset in the search radius is tried.
         The number of offsets tried is returned in the "n_ts_evals" key.
+
+        3. With floating taps, their positions are chosen at each sampling time (``float_tap_cols()``), and the
+        returned "rx_taps" span all ``Nw`` positions, w/ zeros at those unused. Their positions are returned in
+        the "rx_tap_cols" key. (``w_min``/``w_max`` also span all ``Nw`` positions.)
     """
 
     assert Nw == 0 or Nw > dw, ValueError(
@@ -290,20 +485,25 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     nspui       = theNoiseCalc.nspui
     vic_pr      = theNoiseCalc.vic_pulse_resp
     curs_ix     = int(argmax(vic_pr))
-    ts_sweep_ix = int(ts_sweep * nspui)
+    if ts_range is None:
+        ts_sweep_ix = int(ts_sweep * nspui)
+        ts_range = (-ts_sweep_ix, ts_sweep_ix)
+    ts_first, ts_last = int(ts_range[0]), int(ts_range[1])
+    assert ts_first <= ts_last, ValueError(f"Empty cursor timing search range: {ts_range}!")
 
     # Confirm sufficient room for `ts` sweeping.
-    assert curs_ix >= ts_sweep_ix, ValueError(
+    assert curs_ix + ts_first >= 0, ValueError(
         f"Insufficient room at beginning of pulse response: {curs_ix}!\nvic_pr: {vic_pr}")
-    assert curs_ix <= len(vic_pr) - ts_sweep_ix, ValueError(
+    assert curs_ix + ts_last < len(vic_pr), ValueError(
         f"Insufficient room at end of pulse response: {len(vic_pr) - curs_ix}!")
 
     # Initialize and run the search for optimum `ts` and Rx FFE tap weights.
     max_fom = -1000
     rslt = {}
     varX = theNoiseCalc.varX
+    _n_fix = Nw if n_fix is None else n_fix
     if Nw:
-        ts_ofsts = list(range(-ts_sweep_ix, ts_sweep_ix))
+        ts_ofsts = list(range(ts_first, ts_last + 1))  # Inclusive, as MATLAB COM's `sample_adjustment`.
         if ts_window:  # Work outward from `ts_center` (a stable sort, like MATLAB's).
             ts_center = min(max(ts_center, ts_ofsts[0]), ts_ofsts[-1])
             ts_ofsts.sort(key=lambda k: abs(k - ts_center))
@@ -317,75 +517,36 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             n_ts_evals += 1
             ts_ix = curs_ix + ts_ofst
             theNoiseCalc.ts_ix = ts_ix
-            dh, first_samp = divmod(ts_ix, nspui)
-            _h = vic_pr[first_samp::nspui]
-            if dw > dh:
-                h = pad(_h, (dw - dh, 0))
-            else:
-                h = _h[dh - dw:]
-            dh = dw  # At this point, there are exactly `dw` pre-cursor samples in `h`.
+            # Keep every pre-cursor sample, as D3.3 (178A-32) and MATLAB COM's `MMSE()` do,
+            # so that early pre-cursor ISI contributes to the MSE.
+            dh, first_samp = divmod(ts_ix, nspui)  # `dh`: number of pre-cursor samples in `h`
+            h = vic_pr[first_samp::nspui].copy()
             d = dh + dw
-            h_thresh = 0.001 * max(h)
-            h[abs(h) < h_thresh] = 0  # We don't want to be summing long runs of numerical precision "noise".
             first_col = concatenate((h, zeros(Nw - 1)))
-            H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
-            h0 = H[d]
-            Hb = H[d + 1: d + 1 + Nb]
+            H_all = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
             Rn = theNoiseCalc.Rn()[:Nw]
-            R = H.T @ H + toeplitz(Rn) / varX
-            Ib = identity(Nb)
-            zb = zeros(Nb)
-            try:  # FixMe: The following breaks when `Nb` /= 1!
-                A = concatenate((concatenate((R, -Hb.T, -h0.reshape((Nw, 1))), axis=1),
-                                 concatenate((-Hb, Ib, zeros((Nb, 1))), axis=1),
-                                 concatenate((h0, zb, zeros(1))).reshape((1, Nw + Nb + 1))))
-            except ValueError:
-                print(f"R.shape: {R.shape}", flush=True)
-                print(f"Hb.shape: {Hb.shape}", flush=True)
-                print(f"Nw: {Nw}", flush=True)
-                print(f"Nb: {Nb}", flush=True)
-                print(f"h0.reshape((Nw, 1)).shape: {h0.reshape((Nw, 1)).shape}", flush=True)
-                print(f"concatenate((h0, zb, zeros(1))).reshape((1, Nw + Nb + 1)).shape: {concatenate((h0, zb, zeros(1))).reshape((1, Nw + Nb + 1)).shape}", flush=True)
-                raise
-            y = concatenate((h0, zeros(Nb), ones(1)))
-            x = solve(A, y)
-            w = x[:Nw]
-            lam = x[-1]
+            R_all = H_all.T @ H_all + toeplitz(Rn) / varX
 
-            # Check DFE tap weights, enforcing limits if necessary.
-            b = x[Nw: Nw + Nb]
-            b_lim = maximum(b_min, minimum(b_max, b))
-            delta_w = zeros(len(w))
-            hit_b_limit = False
-            if not array_equal(b_lim, b):
-                hit_b_limit = True
-                _A = concatenate((concatenate((R, -h0.reshape((Nw, 1))), axis=1),
-                                  concatenate((h0, zeros(1))).reshape((1, -1))))
-                _y = concatenate((h0 + Hb.T @ b_lim, ones(1)))
-                _x = solve(_A, _y)
-                _w = _x[:Nw]
-                delta_w = _w - w
-                lam = _x[-1]
-                w = _w
-
-            # Clip to limits if apropos.
-            if norm_mode == NormMode.P8023dj:
-                w_lim = clip_taps(w, dw, w_min, w_max)
+            if _n_fix < Nw and n_float_groups:
+                cols = float_tap_cols(
+                    _n_fix, Nw, n_float_groups, n_float_taps,
+                    partial(_mmse_fom_batch, H_all, R_all, d=d, Nb=Nb, dw=dw, b_min=b_min, b_max=b_max,
+                            w_min=w_min, w_max=w_max, norm_mode=norm_mode, varX=varX, Rlm=Rlm, L=L))
             else:
-                w_lim = w
-
-            # Make final adjustments if necessary.
-            if not array_equal(w_lim, w):
-                w_lim /= dot(h0, w_lim)  # Normalize for unit pulse response amplitude.
-                b = Hb @ w_lim.flatten()
-                b_lim = maximum(b_min, minimum(b_max, b))
+                cols = list(range(_n_fix))
+            sol = _mmse_solve(H_all[:, cols], R_all[ix_(cols, cols)], d, Nb, dw,
+                              b_min, b_max, w_min[cols], w_max[cols], norm_mode, varX, Rlm, L)
+            fom = sol["fom"]
+            H = H_all[:, cols]
+            w_lim = sol["w_lim"]
+            b_lim = sol["b_lim"]
+            w_full = zeros(Nw)
+            w_full[cols] = w_lim
 
             # Calculate residual ISI.
-            hISI = concatenate((array([h0 @ w_lim - 1]), Hb @ w_lim, H[d + 1 + Nb:] @ w_lim))
+            hISI = concatenate((array([sol["h0"] @ w_lim - 1]), sol["Hb"] @ w_lim, H[d + 1 + Nb:] @ w_lim))
             varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
-            mse = varX * (w_lim @ R @ w_lim.T + 1 + b_lim @ b_lim - 2 * w_lim @ h0 - 2 * w_lim @ Hb.T @ b_lim).flatten()[0]
-            fom = 20 * log10(Rlm / (L - 1) / sqrt(mse))
             if ts_window:
                 for side in sides:
                     if side not in side_best or fom > side_best[side][0]:
@@ -393,33 +554,36 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             if fom > max_fom:
                 max_fom = fom
                 rslt["fom"] = fom
-                rslt["mse"] = mse
-                rslt["lambda"] = lam  # Should be `mse / varX`.
-                rslt["delta_w"] = delta_w
-                rslt["hit_b_limit"] = hit_b_limit
-                rslt["rx_taps"] = w_lim
+                rslt["mse"] = sol["mse"]
+                rslt["lambda"] = sol["lam"]  # Should be `mse / varX`.
+                rslt["delta_w"] = sol["delta_w"]
+                rslt["hit_b_limit"] = sol["hit_b_limit"]
+                rslt["rx_taps"] = w_full
+                rslt["rx_tap_cols"] = cols
                 rslt["dfe_tap_weights"] = b_lim
                 rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
                 rslt["cursor_ix"] = ts_ix
-                rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_lim, Nw - dw - 1)))
+                rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_full, Nw - dw - 1, hasCurs=True)))
                 rslt["varISI"] = varISI
                 rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
                 rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
                 rslt["varN"] = theNoiseCalc.variance(theNoiseCalc.Srn)
+                rslt["quant_step"] = theNoiseCalc.quant_step_size  # From `Rn()`, above.
                 # DEBUGGING:
                 rslt["h"] = h
-                rslt["h0"] = h0
+                rslt["h0"] = sol["h0"]
                 rslt["H"] = H
                 rslt["d"] = d
-                rslt["R"] = R
-                rslt["A"] = A
-                rslt["y"] = y
-                rslt["x"] = x
-                rslt["b"] = b
+                rslt["R"] = R_all[ix_(cols, cols)]
+                rslt["A"] = sol["A"]
+                rslt["y"] = sol["y"]
+                rslt["x"] = sol["x"]
+                rslt["b"] = sol["b"]
                 rslt["theNoiseCalc"] = theNoiseCalc
                 rslt["varX"] = varX
                 rslt["Rn"] = Rn
         rslt["n_ts_evals"] = n_ts_evals
+        theNoiseCalc.ts_ix = rslt["cursor_ix"]  # Leave the noise calculator at the chosen sampling time.
         # Apply desired normalization to tap weights.
         w = rslt["rx_taps"]
         match norm_mode:
@@ -463,5 +627,6 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
         rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
         rslt["varN"] = theNoiseCalc.variance(theNoiseCalc.Srn)
+        rslt["quant_step"] = theNoiseCalc.quant_step_size  # From `Rn()`, above.
 
     return rslt

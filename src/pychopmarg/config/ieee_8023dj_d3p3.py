@@ -125,7 +125,7 @@ def c2m_module_device() -> DeviceModel:
 
 # COM parameter values (Tables 178-15, 179-24, 176C-10, 176D-7), as far as `COMParams` can express them.
 # Not modeled by PyChOpMarg (so COM here is approximate, e.g. for ranking channels and package cases):
-# the Rx FFE's floating tap groups (Nwg, Nwf, Nmax), quantization noise (Nqb, Pqc), and MLSD (KR, CR).
+# nothing (as of B3 in `SpecDeviations.md`); but see the ERL / SCMR calculations, which PyChOpMarg doesn't do.
 def com_params(group: str, direction: str = "") -> COMParams:
     """
     COM parameters for channel group ``group`` ("KR", "CR", "C2C", or "C2M").
@@ -137,22 +137,23 @@ def com_params(group: str, direction: str = "") -> COMParams:
         raise ValueError(f"Unknown channel group: {group!r}!")
     long_rx = group in ("KR", "CR")                     # dw = 6, Nfix = 15 (vs. 5 and 14 for C2C/C2M)
     dw, nfix = (6, 15) if long_rx else (5, 14)
+    nmax = 87 if long_rx else 56                        # Nmax; 2 floating tap groups of 4 taps each, within +/-0.05
     der0 = {"KR": 2e-4, "CR": 2e-4, "C2C": 0.67e-5, "C2M": 2e-5}[group]
     t_r = 0.007 if (group == "C2M" and direction == "ingress") else 0.004
     return replace(
         IEEE_8023dj,
         fb=FB, L=4, M=32, DER_0=der0, T_r=t_r, RLM=0.95, A_v=0.385, A_fe=0.385, A_ne=0.481, R_0=R0,
-        A_DD=0.02, SNR_TX=33.5, eta_0=7.5e-9, sigma_Rj=0.01,
-        f_z=FB / 2.5, f_p1=FB / 2.5, f_p2=FB, f_LF=FB / 80,          # f_z1, f_p1, f_p2, and f_z2 = f_p3
+        A_DD=0.02, SNR_TX=33.5, eta_0=7.5e-9, sigma_Rj=0.01, N_qb=6, P_qc=1e-7,
+        f_z=FB / 2.5, f_p1=FB / 2.5, f_p2=FB, f_LF=FB / 80, f_p3=FB / 80,  # f_z1, f_p1, f_p2, f_z2, f_p3
         g_DC=[-float(n) for n in range(21)], g_DC2=[-float(n) for n in range(7)],
         tx_taps_min=[0.0, 0.0, -0.34, -0.2, 0.0, 0.0],             # c(-3), c(-2), c(-1), c(1), c(2), c(3)
         tx_taps_max=[0.0, 0.14, 0.0, 0.0, 0.0, 0.0],
         tx_taps_step=[0.0, 0.02, 0.02, 0.02, 0.0, 0.0],
         c0_min=0.54, f_r=0.55,
         dfe_min=np.array([0.0]), dfe_max=np.array([0.85]),
-        rx_taps_min=np.array([-0.7] * dw + [1.0] + [-0.7] * (nfix - dw - 1)),
-        rx_taps_max=np.array([0.7] * dw + [1.0] + [0.7] * (nfix - dw - 1)),
-        dw=dw)
+        rx_taps_min=np.array([-0.7] * dw + [1.0] + [-0.7] * (nfix - dw - 1) + [-0.05] * (nmax - nfix)),
+        rx_taps_max=np.array([0.7] * dw + [1.0] + [0.7] * (nfix - dw - 1) + [0.05] * (nmax - nfix)),
+        dw=dw, Nfix=nfix, Nwg=2, Nwf=4, mlsd=long_rx, dCOM_an=3.0)
 
 
 # Package cases, per group, as selectable by name.

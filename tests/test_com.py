@@ -13,6 +13,7 @@ import skrf as rf
 
 import pychopmarg.optimize as optimize
 from pychopmarg.com import COM
+from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.excel import get_com_params
 from pychopmarg.utility import sdd_21
 
@@ -34,6 +35,19 @@ def example2_com():
     return com
 
 
+@pytest.fixture(scope="module")
+def example2_com_quant():
+    "As ``example2_com``, but with D3.3's quantization noise (178A.1.7.6): N_qb = 6, P_qc = 1e-7."
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"],
+              "FEXT": [CHNL / f"example2_FEXT{n}.s4p" for n in (1, 2)],
+              "NEXT": [CHNL / f"example2_NEXT{n}.s4p" for n in (1, 2, 3)]}
+    params = dataclasses.replace(get_com_params(CFG), N_qb=6, P_qc=1e-7)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(params, ch_set)
+        com()
+    return com
+
+
 def test_com_not_floored(example2_com):
     """Interference far above the signal gives a COM far below 0 dB. The noise PMFs' voltage grid once spanned only
     +/-1.1 * As, capping `Ani` there, i.e. flooring COM at -0.83 dB. (MATLAB COM 4.80 gives -16.85 dB here.)"""
@@ -51,10 +65,58 @@ def test_noise_pmfs_cover_their_support(example2_com):
 
 def test_noise_model_is_the_chosen_eqs(example2_com):
     """COM's Tx noise comes from the noise model of the EQ `opt_eq()` chose, not of the last one it tried (which once
-    made it use the last CTLE setting's response: here, -2 dB, vs. the chosen -12 dB)."""
+    made it use the last CTLE setting's response)."""
     com = example2_com
-    assert com.gDC != com.com_params.g_DC[-1]  # (Else, this test can't tell.)
+    cp = com.com_params
+    assert (com.gDC, com.gDC2) != (cp.g_DC[-1], cp.g_DC2[-1])  # (Else, this test can't tell.)
     assert np.allclose(com.theNoiseCalc.Hctf, com.calc_Hctf(com.gDC, com.gDC2))
+
+
+def test_mmse_keeps_every_precursor(example2_com):
+    """The MMSE solve sees every pre-cursor sample of the pulse response, unaltered, as in (178A-32) and MATLAB COM.
+    It once kept only `dw` of them, and zeroed samples below 0.1% of the peak (in the pulse response itself)."""
+    com = example2_com
+    r = com.mmse_rslt
+    dh, first_samp = divmod(r["cursor_ix"], com.nspui)
+    assert r["d"] == dh + com.nRxPreTaps
+    assert np.array_equal(r["h"], r["vic_pulse_resp"][first_samp::com.nspui])
+
+
+def test_com_isi_has_every_precursor(example2_com):
+    """COM's ISI is every sample of the post-FFE pulse response at the cursor's phase, pre-cursors included, as in
+    (178A-42) and MATLAB COM. It once kept only 5 pre-cursor UIs."""
+    com = example2_com
+    rslts = com.com_rslts
+    curs_uis, curs_ofst = divmod(rslts["cursor_ix"], com.nspui)
+    samps = rslts["pulse_resps"][0][curs_ofst::com.nspui]
+    assert len(rslts["hISI"]) == len(samps)
+    assert np.array_equal(rslts["hISI"][:curs_uis], samps[:curs_uis])
+    assert rslts["hISI"][curs_uis] == 0
+
+
+def test_crosstalk_phase_chosen_at_rx_ffe_input(example2_com):
+    """Under MMSE, each aggressor's sampling phase in COM is the one chosen at the Rx FFE input (178A-20), as in
+    MATLAB COM, not after it. (It was once re-chosen after the Rx FFE.)"""
+    nc = example2_com.theNoiseCalc
+    assert example2_com.com_rslts["xt_phases"] == [nc.agg_phase(pr) for pr in nc.agg_pulse_resps]
+    # Here, the phases chosen before and after the Rx FFE coincide; so, shift the former, to tell them apart.
+    com = copy.deepcopy(example2_com)
+    nc = com.theNoiseCalc
+    shifted = [(nc.agg_phase(pr) + 7) % com.nspui for pr in nc.agg_pulse_resps]
+    nc.agg_phase = lambda pr: shifted[[id(p) for p in nc.agg_pulse_resps].index(id(pr))]
+    with contextlib.redirect_stdout(io.StringIO()):
+        com.calc_noise(cursor_ix=com.fom_rslts["cursor_ix"])
+    assert com.com_rslts["xt_phases"] == shifted
+
+
+def test_signal_path_includes_tx_rise_time_filter(example2_com):
+    """The signal path's transfer function is H_txffe * Ht * H21 * Hr * Hctf (* H_rxffe), as per (178A-14) and MATLAB
+    COM (w/ `FORCE_TR`): it includes the Tx rise time filter, Ht (93A-46). (It once didn't, inflating As ~15%.)"""
+    com = example2_com
+    H21 = com.chnls[0][1]
+    Hctf = com.calc_Hctf(com.gDC, com.gDC2)
+    expected = com.Htx(com.tx_ix) * com.Ht * H21 * com.Hr * Hctf * com.Hffe_Rx(com.rx_taps)
+    assert np.allclose(com.H(H21, com.tx_ix, Hctf=Hctf, rx_taps=com.rx_taps), expected)
 
 
 def test_tx_noise_variance_per_178a_21(example2_com):
@@ -65,6 +127,33 @@ def test_tx_noise_variance_per_178a_21(example2_com):
     htn = nc.Stn_debug["_htn"]
     # (Within 0.1%: the folded PSD's length rounds; sigma_X^2 would be 44%.)
     assert var == pytest.approx(10**(-nc.snr_tx / 10) * (htn**2).sum(), rel=1e-3)
+
+
+def test_noise_calc_left_at_chosen_sampling_time(example2_com):
+    """After the MMSE timing search, the noise calculator samples at the chosen cursor, which COM's final Tx noise
+    (`calc_noise()`, via `Stn()`) relies on. (It was once left at the last offset tried.)"""
+    com = example2_com
+    assert com.theNoiseCalc.ts_ix == com.fom_rslts["cursor_ix"]
+
+
+def test_fom_and_com_tx_noise_agree(example2_com):
+    """The Tx noise `mmse()` reports for the chosen EQ is COM's (`calc_noise()`), up to the Rx FFE's scaling: `mmse()`'s
+    taps give a unit cursor; COM's, a unit cursor tap. (Its Rx FFE response once had an extra, synthesized cursor tap.)"""
+    com = example2_com
+    scale = com.mmse_rslt["rx_taps"][com.nRxPreTaps] / com.rx_taps[com.nRxPreTaps]
+    assert com.fom_rslts["sigma_Tx"] == pytest.approx(scale * com.com_rslts["sigma_Tx"], rel=1e-6)
+
+
+def test_tx_noise_pulse_has_the_signals_phase(example2_com):
+    """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.
+    (It was once formed w/ a causal moving sum, which delayed it ~half a UI.) Here, w/ no Tx FFE, it's the victim's
+    pre-Rx-FFE pulse response, scaled and shifted by whole UIs (the FFE frames' fixed delays), which don't matter."""
+    nc = copy.deepcopy(example2_com.theNoiseCalc)
+    nc.Stn()
+    pulse, vic = nc.Stn_debug["htn_pulse"][:len(nc.vic_pulse_resp)], nc.vic_pulse_resp
+    shift = int(np.argmax(vic) - np.argmax(pulse))
+    assert shift % nc.nspui == 0
+    assert np.allclose(np.roll(pulse, shift) / pulse.max(), vic / vic.max(), atol=1e-6)
 
 
 @pytest.mark.parametrize("phase", [0, 1, 17])
@@ -155,13 +244,13 @@ def test_middle_timing_search_follows_matlab(example2_com, monkeypatch, center):
     monkeypatch.setattr(optimize, "log10", lambda x: (tried.append((nc.ts_ix - peak, 20 * log10(x))), log10(x))[1])
     full = optimize.mmse(*args)
     fom_at = dict(tried)
-    assert sorted(fom_at) == list(range(-16, 16)) and full["n_ts_evals"] == 32
+    assert sorted(fom_at) == list(range(-16, 17)) and full["n_ts_evals"] == 33  # MATLAB's [-16 16], inclusive
     tried.clear()
     rslt = optimize.mmse(*args, ts_window=2, ts_center=center)
 
     # MATLAB COM's "middle" itick loop, transliterated (about `center`, rather than 0).
     expected, pos, neg = [], None, None
-    for itick in sorted(range(-16, 16), key=lambda k: abs(k - center)):
+    for itick in sorted(range(-16, 17), key=lambda k: abs(k - center)):
         if ((itick >= center and pos is not None and abs(pos[1] - itick) >= 2)
                 or (itick <= center and neg is not None and abs(neg[1] - itick) >= 2)):
             continue
@@ -172,16 +261,238 @@ def test_middle_timing_search_follows_matlab(example2_com, monkeypatch, center):
             neg = (fom_at[itick], itick)
 
     assert [ofst for ofst, _ in tried] == expected
-    assert rslt["n_ts_evals"] == len(expected) < 32
+    assert rslt["n_ts_evals"] == len(expected) < 33
     assert rslt["cursor_ix"] - peak == max(expected, key=lambda k: (fom_at[k], -expected.index(k)))
 
 
-def test_add_pkg_survives_a_zero_s21(example2_com):
+def test_fext_uses_its_own_package():
+    "Each channel type gets its own end's package lengths, as in MATLAB COM: changing `zp_fext` changes only FEXT."
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"],
+              "FEXT": [CHNL / "example2_FEXT1.s4p"],
+              "NEXT": [CHNL / "example2_NEXT1.s4p"]}
+    cp = get_com_params(CFG)
+    with contextlib.redirect_stdout(io.StringIO()):
+        base = {ntype: H for (_, ntype), H in COM(cp, ch_set).chnls}
+        alt = {ntype: H for (_, ntype), H in COM(dataclasses.replace(cp, zp_fext=[10.0, 1.8]), ch_set).chnls}
+    assert np.array_equal(alt["THRU"], base["THRU"])
+    assert np.array_equal(alt["NEXT"], base["NEXT"])
+    assert not np.allclose(alt["FEXT"], base["FEXT"])
+
+
+def test_channel_impulse_response_truncated_as_matlab(example2_com):
+    """With `chnl_interp` = "vtf" (default), as MATLAB COM: each channel's end-to-end impulse response (of Ht * H21 * Hr)
+    is zero after its last sample above 1e-3 of its peak."""
+    com = example2_com
+    assert com.chnl_interp == "vtf"
+    for (_, ntype), H21 in com.chnls:
+        h = np.fft.irfft(com.Ht * H21 * com.Hr)
+        last = np.nonzero(abs(h) > 1e-3 * abs(h).max())[0][-1]
+        assert last < len(h) - 1, ntype
+        assert np.allclose(h[last + 1:], 0, atol=1e-9 * abs(h).max()), ntype
+
+
+@pytest.mark.parametrize("chnl_interp", ["vtf", "t"])
+def test_add_pkg_survives_a_zero_s21(example2_com, monkeypatch, chnl_interp):
     """A channel whose S21 is exactly zero somewhere (e.g., a weakly coupled aggressor, written with too few decimal
-    places) can't be interpolated as T parameters, which need 1/S21. `add_pkg()` falls back to S parameters there."""
+    places) can't be interpolated as T parameters, which need 1/S21. The legacy "t" mode of `add_pkg()` falls back
+    to S parameters there; the default, "vtf", never needs T parameters."""
     fext = sdd_21(rf.Network(str(CHNL / "example2_FEXT1.s4p")))
     fext.s[-4, 1, 0] = fext.s[-4, 0, 1] = 0  # (As in the CR group's HN_3in_DAC_Z_1p5m_HL_2in_FEXT_TP0_Tx8_to_TP5_Rx7.)
     with pytest.raises(np.linalg.LinAlgError):
         _ = fext.t
+    monkeypatch.setattr(example2_com, "chnl_interp", chnl_interp)
     _, H21 = example2_com.add_pkg((fext, "FEXT"))
     assert np.all(np.isfinite(H21))
+
+
+def test_quantization_noise_off_by_default(example2_com):
+    "Without `N_qb`, there's no quantization noise, in FOM or COM."
+    com = example2_com
+    assert com.com_params.N_qb == 0
+    assert com.mmse_rslt["quant_step"] == 0 and com.com_rslts["sigma_Q"] == 0
+
+
+def test_quantization_noise_psd_per_178a_28(example2_com):
+    "The quantization noise PSD at the Rx FFE input, Delta^2 / 12 / fb (178A-28), is white, of variance Delta^2 / 12."
+    nc = example2_com.theNoiseCalc
+    delta = 1e-3
+    assert nc.variance(nc.Sqn(delta)) == pytest.approx(delta**2 / 12)
+
+
+def test_quantization_step_per_178a_29(example2_com):
+    """With a noiseless signal of one sample, A, every level has probability 1/L (> P_qc / 2); so, the clipping
+    amplitude is A, and Delta = 2 * A / (2^N_qb - 1) (178A-29)."""
+    nc = copy.copy(example2_com.theNoiseCalc)
+    nc.Nqb, nc.Pqc = 6, 1e-7
+    A = 0.1
+    pulse = np.zeros(len(nc.vic_pulse_resp))
+    pulse[nc.ts_ix] = A
+    nc.vic_pulse_resp = pulse
+    assert nc.quant_step(0.0) == pytest.approx(2 * A / 63, rel=1e-3)
+    # Noise only widens the noisy signal's distribution, so the clipping amplitude grows.
+    assert nc.quant_step(1e-4) > nc.quant_step(0.0)
+
+
+def test_quantization_noise_in_fom_and_com(example2_com, example2_com_quant):
+    """Quantization noise lowers the FOM (it's added to every candidate's noise), and enters COM as Delta's uniform PMF
+    (178A-43) through each Rx FFE tap (178A-46): its variance is Delta^2 / 12 * sum(w(n)^2)."""
+    com = example2_com_quant
+    rslts = com.com_rslts
+    assert com.mmse_rslt["quant_step"] > 0 and rslts["quant_step"] > 0
+    assert com.fom_rslts["FOM"] < example2_com.fom_rslts["FOM"]
+    y, pQ = rslts["y"], rslts["pQ"]
+    assert pQ.sum() == pytest.approx(1.0)
+    assert np.sqrt((y**2 * pQ).sum()) == pytest.approx(rslts["sigma_Q"], rel=0.02)
+    assert rslts["sigma_Q"] == pytest.approx(np.sqrt((com.rx_taps**2).sum() / 12) * rslts["quant_step"])
+
+
+def test_com_is_lowest_over_package_test_cases():
+    """With several package test cases, COM is the lowest of them, as MATLAB COM, each case evaluated as if alone
+    (its own packages and EQ), and the instance keeps the lowest case's results."""
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    ends = ("zp_tx", "zp_rx", "zp_next", "zp_fext")
+    cases = [dict.fromkeys(ends, [12.0, 1.8]), dict.fromkeys(ends, [31.0, 1.8])]
+    params = get_com_params(CFG)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(dataclasses.replace(params, zp_cases=cases), ch_set)
+        com_val = com()
+        alone = COM(dataclasses.replace(params, zp_cases=cases[1:]), ch_set)
+        alone()
+    case_coms = com.com_rslts["case_coms"]
+    assert case_coms[0] != pytest.approx(case_coms[1], abs=0.01)  # (Else, this test can't tell.)
+    assert case_coms[1] == pytest.approx(alone.com_rslts["COM"], abs=1e-9)
+    worst = int(np.argmin(case_coms))
+    assert com_val == min(case_coms) == com.com_rslts["COM"]
+    assert com.com_rslts["pkg_case"] == worst
+    assert com.com_params.zp_tx == cases[worst]["zp_tx"]
+    assert com.fom_rslts["FOM"] == pytest.approx(
+        alone.fom_rslts["FOM"]) if worst == 1 else com.fom_rslts["FOM"] != alone.fom_rslts["FOM"]
+
+
+def test_float_tap_cols_greedy_as_matlab():
+    """Floating tap groups are placed one at a time, each at the start giving the best FOM along w/ those already
+    placed (the earliest, on a tie), contiguous, and not overlapping the fixed taps or each other."""
+    n_fix, Nw, n_taps = 5, 30, 4
+    target = {8, 9, 10, 11, 20}  # Positions that pay, and the first group's best start (8) is unique.
+
+    def foms(cands):
+        return np.array([len(target & set(c)) + 0.01 * len(set(c) & {12, 13}) for c in cands.tolist()])
+
+    cols = optimize.float_tap_cols(n_fix, Nw, 2, n_taps, foms)
+    assert cols[:n_fix] == list(range(n_fix))
+    # First group: 8..11 (4 targets). Second: any start covering 20 (17..20), w/ the earliest winning the tie.
+    assert cols[n_fix:] == [8, 9, 10, 11, 17, 18, 19, 20]
+
+
+def test_mmse_fom_batch_matches_single_solves(example2_com):
+    "The batched candidate FOMs (used to place floating taps) are those of the full MMSE solution for each."
+    from scipy.linalg import convolution_matrix, toeplitz  # pylint: disable=import-outside-toplevel
+    com = example2_com
+    cp = com.com_params
+    nc = copy.copy(com.theNoiseCalc)
+    nfix, nmax = len(cp.rx_taps_max), cp.dw + 40 + 1
+    w_min = np.concatenate((cp.rx_taps_min, -0.05 * np.ones(nmax - nfix)))
+    w_max = np.concatenate((cp.rx_taps_max, 0.05 * np.ones(nmax - nfix)))
+    dh, first = divmod(nc.ts_ix, nc.nspui)
+    d = dh + cp.dw
+    h = np.concatenate((nc.vic_pulse_resp[first::nc.nspui], np.zeros(nmax - 1)))
+    H = convolution_matrix(h, nmax, mode='full')[:len(h)]
+    R = H.T @ H + toeplitz(nc.Rn()[:nmax]) / nc.varX
+    rng = np.random.default_rng(0)
+    cands = np.array([list(range(nfix)) + sorted(rng.choice(np.arange(nfix, nmax), 8, replace=False).tolist())
+                      for _ in range(20)])
+    args = (cp.dfe_min, cp.dfe_max)
+    batch = optimize._mmse_fom_batch(H, R, cands, d, len(cp.dfe_min), cp.dw, *args, w_min, w_max,  # pylint: disable=protected-access
+                                     optimize.NormMode.P8023dj, nc.varX, cp.RLM, cp.L)
+    single = [optimize._mmse_solve(H[:, c], R[np.ix_(c, c)], d, len(cp.dfe_min), cp.dw, *args,  # pylint: disable=protected-access
+                                   w_min[c], w_max[c], optimize.NormMode.P8023dj, nc.varX, cp.RLM, cp.L)["fom"]
+              for c in cands]
+    assert batch == pytest.approx(single, abs=1e-9)
+
+
+def test_floating_rx_ffe_taps():
+    """With floating Rx FFE taps, COM's Rx FFE spans all `Nmax` positions: zero except at the fixed taps and the
+    `Nwg` groups of `Nwf` contiguous floating taps chosen, which stay within their (cursor-relative) limits."""
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    cp = get_com_params(CFG)
+    nfix, nmax = len(cp.rx_taps_max), cp.dw + 24 + 1  # (A short span, for speed.)
+    cp = dataclasses.replace(
+        cp, rx_taps_min=np.concatenate((cp.rx_taps_min, -0.05 * np.ones(nmax - nfix))),
+        rx_taps_max=np.concatenate((cp.rx_taps_max, 0.05 * np.ones(nmax - nfix))), Nfix=nfix, Nwg=2, Nwf=3)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(cp, ch_set)
+        com()
+    cols = com.mmse_rslt["rx_tap_cols"]
+    floats = cols[nfix:]
+    assert len(com.rx_taps) == nmax and cols[:nfix] == list(range(nfix)) and len(floats) == 6
+    assert all(nfix <= c < nmax for c in floats)
+    groups = sorted({tuple(floats[i: i + 3]) for i in (0, 3)})
+    assert all(g[2] - g[0] == 2 for g in groups)  # Contiguous groups (sorted, so no overlap).
+    unused = sorted(set(range(nmax)) - set(cols))
+    assert not com.rx_taps[unused].any()
+    curs = com.rx_taps[cp.dw]
+    assert all(abs(com.rx_taps[c]) <= 0.05 * abs(curs) * (1 + 1e-9) for c in floats)
+
+
+def test_default_die_models_per_device():
+    "`IEEE_8023dj`'s `C_d`/`L_s` give each device the sheet's 3-segment die ladder, not one segment of it per device."
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    cp = get_com_params(CFG)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(dataclasses.replace(cp, C_d=IEEE_8023dj.C_d, L_s=IEEE_8023dj.L_s), ch_set)
+        sheet = COM(cp, ch_set)
+    for isRx in (False, True):
+        assert np.allclose(com.sDie(isRx).s, sheet.sDie(isRx).s)
+
+
+def test_rx_package_impedances():
+    "`z_c_rx` (MATLAB COM's \"package_Z_c\" column 2) sets the receiver package's line impedances; `None`: `z_c`."
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    cp = get_com_params(CFG)
+    with contextlib.redirect_stdout(io.StringIO()):
+        coms = [COM(dataclasses.replace(cp, z_c_rx=z_c_rx), ch_set) for z_c_rx in (None, cp.z_c, [80.0, 95.0])]
+    f = coms[0].freqs
+    base, same, other = (com._pkg_models(f) for com in coms)  # pylint: disable=protected-access
+    assert all(np.array_equal(a.s, b.s) for a, b in zip(base, same))
+    assert all(np.array_equal(a.s, b.s) for a, b in zip(base[:3], other[:3]))
+    assert not np.allclose(base[3].s, other[3].s)
+
+
+@pytest.mark.parametrize("include_pcb", [1, 2])
+def test_host_boards_join_the_packages(include_pcb):
+    """With "Include PCB" (1: both ends; 2: the receiver only), each end's host board (C_0, line, C_1, as MATLAB COM's
+    `add_brd()`) sits between its package and the channel, w/ its own length: `zbp_next` for the NEXT aggressor's
+    transmitter. The receiver's board is the transmitter's, turned around (w/ the receiver's values)."""
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    cp = dataclasses.replace(get_com_params(CFG), zbp_tx=30.0, zbp_rx=40.0, zbp_next=20.0, zbp_fext=25.0,
+                             brd_C0=[1e-5, 2e-5], brd_C1=[3e-5, 4e-5])
+    with contextlib.redirect_stdout(io.StringIO()):
+        bare = COM(cp, ch_set)
+        com = COM(dataclasses.replace(cp, include_pcb=include_pcb), ch_set)
+    f = com.freqs
+    pkgs, bare_pkgs = com._pkg_models(f), bare._pkg_models(f)  # pylint: disable=protected-access
+    for got, pkg, zbp in zip(pkgs[:3], bare_pkgs[:3], (30.0, 20.0, 25.0)):  # Tx, NEXT, FEXT
+        want = pkg ** com._board(f, zbp, False) if include_pcb == 1 else pkg  # pylint: disable=protected-access
+        assert np.allclose(got.s, want.s)
+    assert np.allclose(pkgs[3].s, (com._board(f, 40.0, True) ** bare_pkgs[3]).s)  # pylint: disable=protected-access
+    rx_brd = com._board(f, 40.0, True)  # pylint: disable=protected-access
+    rx_as_tx = dataclasses.replace(cp, brd_C0=[2e-5, 2e-5], brd_C1=[4e-5, 4e-5])
+    com.com_params = rx_as_tx
+    tx_brd = com._board(f, 40.0, False)  # pylint: disable=protected-access
+    tx_brd.flip()
+    assert np.allclose(rx_brd.s, tx_brd.s)
+
+
+def test_timing_search_range_as_matlab_sample_adjustment(example2_com):
+    """`ts_range` (MATLAB COM's `sample_adjustment`; `COMParams.ts_sample_adj`) sets the cursor offsets tried, from
+    the pulse peak, inclusive, and may be asymmetric."""
+    nc = copy.copy(example2_com.theNoiseCalc)
+    cp = example2_com.com_params
+    args = (nc, example2_com.nRxTaps, example2_com.nRxPreTaps, len(cp.dfe_min), cp.RLM, cp.L,
+            cp.dfe_min, cp.dfe_max, cp.rx_taps_min, cp.rx_taps_max)
+    peak = int(np.argmax(nc.vic_pulse_resp))
+    rslt = optimize.mmse(*args, ts_range=(-3, 5))
+    assert rslt["n_ts_evals"] == 9
+    assert -3 <= rslt["cursor_ix"] - peak <= 5
+    wide = optimize.mmse(*args, ts_range=(-32, 32))
+    assert wide["n_ts_evals"] == 65 and wide["fom"] >= optimize.mmse(*args)["fom"]

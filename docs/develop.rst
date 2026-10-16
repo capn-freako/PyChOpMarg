@@ -65,7 +65,6 @@ To install *PyChOpMarg* into a dedicated new virtual environment for development
 5. Using the command: ``pip install <module>``, install the following <module>s:
 
     - ``setuptools``
-    - ``tox``
 
 Develop & Test
 --------------

@@ -76,3 +76,176 @@ def test_dfe_limits(tmp_path, rows, dfe_min, dfe_max):
     params = get_com_params(cfg)
     assert list(params.dfe_min) == pytest.approx(dfe_min)
     assert list(params.dfe_max) == pytest.approx(dfe_max)
+
+
+def test_per_end_package_lengths(params):
+    "The sheet's `z_p (TX)`/`(RX)`/`(NEXT)`/`(FEXT)` rows set each end's package segment lengths (mm), as in MATLAB."
+    assert params.zp_tx == params.zp_next == params.zp_fext == [34.0, 1.8]
+    assert params.zp_rx == [32.0, 1.8]
+
+
+@pytest.mark.parametrize("zp_tx, zp_sel, expected", [
+    ("[12 30 ; 1.8 1.8]", 2, [30.0, 1.8]),  # One row per segment, one column per test case.
+    ("[12 30 ; 1.8 1.8]", 1, [12.0, 1.8]),
+    ("[12 30]", 2, [30.0]),                 # A single segment.
+])
+def test_zp_select_picks_test_case(tmp_path, zp_tx, zp_sel, expected):
+    "`z_p select` (1-based) picks the test case (column) of each `z_p (...)` row."
+    sheet = pd.read_excel(CFG, header=None)
+    for col in (0, 9):
+        for end in ("TX", "RX", "NEXT", "FEXT"):  # (Every row must have the same number of test cases.)
+            sheet.loc[sheet[col] == f"z_p ({end})", col + 1] = zp_tx
+        sheet.loc[sheet[col] == "z_p select", col + 1] = zp_sel
+    cfg = tmp_path / "zp.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    assert params.zp_tx == params.zp_rx == params.zp_next == params.zp_fext == expected
+
+
+def test_zp_select_lists_every_test_case(tmp_path):
+    "With several `z_p select` cases, `zp_cases` holds each one's lengths, in order; `zp_tx`, etc., the first's."
+    sheet = pd.read_excel(CFG, header=None)
+    for col in (0, 9):
+        for end in ("TX", "RX", "NEXT", "FEXT"):
+            sheet.loc[sheet[col] == f"z_p ({end})", col + 1] = "[12 30 ; 1.8 1.8]"
+        sheet.loc[sheet[col] == "z_p select", col + 1] = "[2 1]"
+    cfg = tmp_path / "zp_cases.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    ends = ("zp_tx", "zp_rx", "zp_next", "zp_fext")
+    assert params.zp_cases == [dict.fromkeys(ends, [30.0, 1.8]), dict.fromkeys(ends, [12.0, 1.8])]
+    assert params.zp_tx == [30.0, 1.8]
+
+
+@pytest.mark.parametrize("rows, N_qb, P_qc", [
+    ([], 0, None),                              # Off, by default.
+    ([("N_qb", 6)], 6, None),                   # `P_qc` defaults to 2 * DER_0, as in MATLAB COM.
+    ([("N_qb", 6), ("P_qc", 1e-7)], 6, 1e-7),
+])
+def test_quantization_noise_params(tmp_path, rows, N_qb, P_qc):
+    "`N_qb` and `P_qc` are read from the sheet; without them, quantization noise is off, as in MATLAB COM."
+    sheet = pd.read_excel(CFG, header=None)
+    for name, val in rows:
+        new_row = pd.DataFrame([[name, val] + [np.nan] * (sheet.shape[1] - 2)], columns=sheet.columns)
+        sheet = pd.concat([sheet, new_row], ignore_index=True)
+    cfg = tmp_path / "quant.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    assert params.N_qb == N_qb
+    assert params.P_qc == pytest.approx(P_qc if P_qc is not None else 2 * params.DER_0)
+
+
+def test_floating_rx_ffe_taps(tmp_path, params):
+    """MATLAB COM's `N_bg` groups of `N_bf` floating Rx FFE taps, within +/-`bmaxg`, as late as post-cursor tap `N_f`:
+    the tap limits extend to `dw + N_f + 1` positions, the first `Nfix` (the sheet's fixed taps) unchanged."""
+    sheet = pd.read_excel(CFG, header=None)
+    for name, val in (("N_bg", 2), ("N_bf", 4), ("bmaxg", 0.05)):
+        new_row = pd.DataFrame([[name, val] + [np.nan] * (sheet.shape[1] - 2)], columns=sheet.columns)
+        sheet = pd.concat([sheet, new_row], ignore_index=True)
+    sheet.loc[sheet[0] == "N_f", 1] = 80
+    if not (sheet[0] == "N_f").any():
+        sheet = pd.concat([sheet, pd.DataFrame([["N_f", 80] + [np.nan] * (sheet.shape[1] - 2)],
+                                               columns=sheet.columns)], ignore_index=True)
+    cfg = tmp_path / "float.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    fparams = get_com_params(cfg)
+    nfix = len(params.rx_taps_max)
+    assert (fparams.Nfix, fparams.Nwg, fparams.Nwf) == (nfix, 2, 4)
+    assert len(fparams.rx_taps_max) == len(fparams.rx_taps_min) == params.dw + 80 + 1
+    assert np.array_equal(fparams.rx_taps_max[:nfix], params.rx_taps_max)
+    assert np.array_equal(fparams.rx_taps_min[:nfix], params.rx_taps_min)
+    assert set(fparams.rx_taps_max[nfix:]) == {0.05} and set(fparams.rx_taps_min[nfix:]) == {-0.05}
+
+
+@pytest.mark.parametrize("mlse, add_rx_noise, mlsd, dCOM_an", [
+    (0, None, False, 3.0),   # As the sheet: off; `add_rx_noise` defaults to "COM Pass threshold" (3).
+    (1, None, True, 3.0),
+    (1, 2.5, True, 2.5),
+])
+def test_mlsd_params(tmp_path, mlse, add_rx_noise, mlsd, dCOM_an):
+    "MATLAB COM's `MLSE` switch (in the I/O control columns) and `add_rx_noise` set `mlsd` and `dCOM_an`."
+    sheet = pd.read_excel(CFG, header=None)
+    assert (sheet[5] == "MLSE").any()
+    sheet.loc[sheet[5] == "MLSE", 6] = mlse
+    if add_rx_noise is not None:
+        new_row = pd.DataFrame([["add_rx_noise", add_rx_noise] + [np.nan] * (sheet.shape[1] - 2)], columns=sheet.columns)
+        sheet = pd.concat([sheet, new_row], ignore_index=True)
+    cfg = tmp_path / "mlsd.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    params = get_com_params(cfg)
+    assert params.mlsd == mlsd
+    assert params.dCOM_an == pytest.approx(dCOM_an)
+
+
+def test_host_board_params(tmp_path, params):
+    """MATLAB COM's "Include PCB" and its board rows set the host boards (here, the sheet's own values, w/ C_0/C_1
+    defaulting to 0); "COM Pass threshold" sets the MLSD's `dCOM_an` (both rows are otherwise ignored)."""
+    assert params.include_pcb == 0
+    assert (params.zbp_tx, params.zbp_rx, params.zbp_next, params.zbp_fext) == (151.0, 151.0, 72.0, 72.0)
+    assert params.brd_Z_c == [109.8, 109.8] and params.brd_tau == pytest.approx(6.191e-3)
+    assert params.brd_gamma0_a1_a2 == pytest.approx([0.0, 4.114e-4, 2.547e-4])
+    assert params.brd_C0 == params.brd_C1 == [0.0, 0.0]
+    sheet = pd.read_excel(CFG, header=None)
+    sheet.loc[sheet[0] == "Include PCB", 1] = 2
+    sheet.loc[sheet[0] == "COM Pass threshold", 1] = 2.5
+    for name, val in (("C_0", "[1e-5 2e-5]"), ("C_1", 3e-5)):
+        sheet = pd.concat([sheet, pd.DataFrame([[name, val] + [np.nan] * (sheet.shape[1] - 2)], columns=sheet.columns)],
+                          ignore_index=True)
+    cfg = tmp_path / "pcb.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    p = get_com_params(cfg)
+    assert p.include_pcb == 2 and p.dCOM_an == 2.5
+    assert p.brd_C0 == pytest.approx([1e-5, 2e-5]) and p.brd_C1 == pytest.approx([3e-5, 3e-5])
+
+
+def test_timing_search_range(params):
+    "MATLAB COM's `sample_adjustment` (I/O control column) sets the cursor timing search range (samples, inclusive)."
+    assert params.ts_sample_adj == (-16, 16)
+
+
+def test_matlab_row_names(tmp_path, params):
+    """MATLAB COM's names for the level mismatch, Rj, and package transmission line rows are read, as is `T_r` from
+    the I/O control column; "package_Z_c" has one row per segment, of [Tx Rx] impedances."""
+    assert params.z_c == [87.5, 92.5] and params.z_c_rx is None  # (The sheet's ends match.)
+    sheet = pd.read_excel(CFG, header=None)
+    for col, name, val in ((0, "R_LM", 0.9), (0, "sigma_RJ", 0.02), (5, "T_r", 0.006), (9, "package_tl_tau", 0.007),
+                           (9, "package_tl_gamma0_a1_a2", "[1e-4 1e-3 3e-4]"), (9, "package_Z_c", "[80 85 ; 90 95]")):
+        assert (sheet[col] == name).any()
+        sheet.loc[sheet[col] == name, col + 1] = val
+    cfg = tmp_path / "names.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    p = get_com_params(cfg)
+    assert (p.RLM, p.sigma_Rj, p.T_r, p.tau) == pytest.approx((0.9, 0.02, 0.006, 0.007))
+    assert (p.gamma0, p.a1, p.a2) == pytest.approx((1e-4, 1e-3, 3e-4))
+    assert p.z_c == [80.0, 90.0] and p.z_c_rx == [85.0, 95.0]
+
+
+def test_unread_rows_warn(tmp_path):
+    """Rows PyChOpMarg doesn't read, and MATLAB COM options it doesn't model set to other values than it matches,
+    get warnings; report and display rows don't."""
+    sheet = pd.read_excel(CFG, header=None)
+    sheet.loc[sheet[5] == "ts_anchor", 6] = 0
+    sheet.loc[sheet[5] == "Raised_Cosine", 6] = 0
+    sheet.loc[sheet[5] == "DIAGNOSTICS", 6] = 1
+    sheet = pd.concat([sheet, pd.DataFrame([["bogus_row", 1] + [np.nan] * (sheet.shape[1] - 2)],
+                                           columns=sheet.columns)], ignore_index=True)
+    cfg = tmp_path / "unread.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    with pytest.warns(UserWarning) as record:
+        get_com_params(cfg)
+    msgs = [str(w.message) for w in record]
+    assert len(msgs) == 2
+    assert "'ts_anchor' is 0" in msgs[0]
+    assert "ignores them: 'N-g', 'N-max', 'bogus_row'." in msgs[1]
+
+
+def test_no_rx_ffe_rows(tmp_path):
+    "Without the `ffe_*` rows, there's no Rx FFE (only the cursor tap), as in MATLAB COM; one length alone is an error."
+    sheet = pd.read_excel(CFG, header=None)
+    cfg = tmp_path / "no_ffe.xlsx"
+    sheet[~sheet[0].astype(str).str.startswith("ffe_")].to_excel(cfg, header=False, index=False)
+    p = get_com_params(cfg)
+    assert p.dw == 0 and list(p.rx_taps_min) == list(p.rx_taps_max) == [1.0]
+    sheet[sheet[0] != "ffe_post_tap_len"].to_excel(cfg, header=False, index=False)
+    with pytest.raises(AssertionError):
+        get_com_params(cfg)

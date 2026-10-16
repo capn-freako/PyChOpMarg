@@ -11,11 +11,12 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 # pylint: disable=redefined-builtin
 from typing                 import Optional
 
-from numpy                  import arange, argmax, array, diff, ones, pad, sum
+from numpy                  import abs as np_abs, arange, argmax, array, cumsum, diff, exp, full, ones, pad, sinc, sqrt, sum
 from numpy.fft              import irfft, rfft
-from scipy.signal           import lfilter
+from scipy.signal           import fftconvolve
 
 from pychopmarg.common      import Rvec, Cvec, Rmat
+from pychopmarg.utility.probability import delta_pmf
 
 
 class NoiseCalc:  # pylint: disable=too-many-instance-attributes
@@ -38,6 +39,8 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
     snr_tx          = float(25)                  # Tx signal-to-noise ratio (dB)
     Add             = float(0)                   # Dual-Dirac peak amplitude (V)
     sigma_Rj        = float(0)                   # Dual-Dirac random stdev (V)
+    Nqb             = 0                          # Noise-equivalent quantization bits (0 = no quantization noise)
+    Pqc             = 1e-7                       # Quantization clipping probability
 
     # Invariant dependent variables, set during instance initialization.
     fN       = 53.125e9                   # Nyquist frequency (Hz)
@@ -49,7 +52,7 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         vic_pulse_resp: Rvec, agg_pulse_resps: list[Rvec],
         f: Rvec, Ht: Cvec, H21: Cvec, Hr: Cvec, Hctf: Cvec,
         eta0: float, Av: float, snr_tx: float, Add: float, sigma_Rj: float,
-        eps: float = 0.001
+        eps: float = 0.001, Nqb: int = 0, Pqc: float = 1e-7
     ) -> None:
         """
         ``NoiseCalc`` class initializer.
@@ -75,6 +78,10 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         Keyword Args:
             eps: Margin of error when checking floats for integral multiples.
                 Default: 0.001
+            Nqb: Noise-equivalent quantization bits (178A.1.7.6).
+                Default: 0 (No quantization noise.)
+            Pqc: Quantization clipping probability (178A.1.7.6).
+                Default: 1e-7
 
         Returns:
             Initialized ``NoiseCalc`` instance.
@@ -145,6 +152,9 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         self.snr_tx          = snr_tx
         self.Add             = Add
         self.sigma_Rj        = sigma_Rj
+        self.Nqb             = Nqb
+        self.Pqc             = Pqc
+        self.quant_step_size = 0.0  # Quantization step size, Delta (V), as of the last call to `Rn()`.
 
         # Calculate invariant dependent variable values.
         self.fN      = 0.5 / Tb                         # Nyquist frequency
@@ -215,16 +225,32 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
             Folded (two-sided) crosstalk PSD at Rx FFE input, uniformly sampled over [0, PI] (rads./s norm.).
         """
 
-        t     = self.t
+        return self.varX * abs(rfft(self.sampled_agg_pr(agg_pulse_resp)))**2 * self.Tb  # i.e. - / fB
+
+    def sampled_agg_pr(self, agg_pulse_resp: Rvec) -> Rvec:
+        "The given aggressor pulse response, sampled once per UI at its phase (``agg_phase()``)."
+        return self._sampled_agg_prs(agg_pulse_resp)[self.agg_phase(agg_pulse_resp)]
+
+    def _sampled_agg_prs(self, agg_pulse_resp: Rvec) -> Rmat:
+        "The given aggressor pulse response, sampled once per UI at each phase (one row per phase)."
         nspui = self.nspui
-
         # Truncate at # of whole UIs in `t`, to avoid +/-1 length variation, due to sampling phase.
-        nUI = int(len(t) / nspui)
+        nUI = int(len(self.t) / nspui)
         _agg_pulse_resp = agg_pulse_resp[:nUI * nspui]
-        sampled_agg_prs: Rmat = array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
-        best_m = argmax([(pr_samps**2).sum() for pr_samps in sampled_agg_prs])
+        return array([_agg_pulse_resp[m::nspui] for m in range(nspui)])
 
-        return self.varX * abs(rfft(sampled_agg_prs[best_m]))**2 * self.Tb  # i.e. - / fB
+    def agg_phase(self, agg_pulse_resp: Rvec) -> int:
+        """
+        Sampling phase of the given aggressor pulse response at Rx FFE input, as per (178A-20):
+        the one maximizing the sum of its squared samples (as used by ``Sxn()``).
+
+        Args:
+            agg_pulse_resp: Aggressor pulse response (V).
+
+        Returns:
+            Sampling phase (vector samples, in [0, nspui)).
+        """
+        return int(argmax([(pr_samps**2).sum() for pr_samps in self._sampled_agg_prs(agg_pulse_resp)]))
 
     def Stn(self, Hrx: Optional[Cvec] = None) -> Rvec:
         """
@@ -245,7 +271,9 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
 
         Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx * self.Av  # "* Av" is for consistency w/ MATLAB code.
         htn  = irfft(Htn)                               # impulse response of complete signal path, except Tx FFE
-        htn_ave_xM = lfilter(ones(self.nspui), ones(1), htn)  # combination averaging and pre-normalization filter
+        # Pulse response (178A-22), formed as the signal's is (`COM.pulse_resp()`): w/ a zero-phase, 1 UI wide
+        # rectangle (`nspui * sinc(f * Tb)`), so that sampling at `ts_ix` takes it at the signal's phase.
+        htn_ave_xM = irfft(self.nspui * sinc(f * self.Tb) * Htn)
         _htn = self.baud_rate_sample(htn_ave_xM)        # decimated by `nspui`
         _Htn = rfft(_htn)
 
@@ -254,6 +282,7 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
             self.Stn_debug = {  # pylint: disable=attribute-defined-outside-init
                 'Htn':  Htn,
                 'htn':  htn,
+                'htn_pulse': htn_ave_xM,
                 '_Htn': _Htn,
                 '_htn': _htn,
             }
@@ -261,10 +290,9 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         # No `varX` (sigma_X^2) here, unlike `Sxn()`: (178A-21), and MATLAB COM's default (`S_tn_w_AM` = 0).
         return self.Tb * 10**(-self.snr_tx / 10) * abs(_Htn)**2                       # (178A-21)
 
-    @property
-    def Sjn(self) -> Rvec:
+    def _jitter_psd(self, var_jit: float) -> Rvec:
         """
-        Folded (two-sided) noise PSD due to jitter at Rx FFE input,
+        Folded (two-sided) PSD of the noise due to jitter of variance ``var_jit`` (UI^2) at Rx FFE input,
         uniformly sampled over [0, PI] (rads./s norm.).
         """
 
@@ -272,7 +300,6 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         ts_ix          = self.ts_ix
         Tb             = self.Tb
         nspui          = self.nspui
-        varX           = self.varX
         vic_pulse_resp = self.vic_pulse_resp
 
         # Central difference around each sample, `ts_ix % nspui + n * nspui`, as per (178A-23).
@@ -283,10 +310,94 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         _vic_pulse_resp = pad(vic_pulse_resp, 1)
         hJ = (_vic_pulse_resp[ixs + 2] - _vic_pulse_resp[ixs]) / (2 * t[1])
 
-        return varX * (self.Add**2 + self.sigma_Rj**2) * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
+        return self.varX * var_jit * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
 
-    def Rn(self) -> Rvec:
-        """Noise autocorrelation vector at Rx FFE input."""
+    @property
+    def Sjn(self) -> Rvec:
+        """
+        Folded (two-sided) noise PSD due to jitter at Rx FFE input,
+        uniformly sampled over [0, PI] (rads./s norm.).
+        """
+        return self._jitter_psd(self.Add**2 + self.sigma_Rj**2)
+
+    @property
+    def Sjn_rj(self) -> Rvec:
+        """
+        Folded (two-sided) noise PSD due to random jitter alone at Rx FFE input (178A-45),
+        uniformly sampled over [0, PI] (rads./s norm.).
+        """
+        return self._jitter_psd(self.sigma_Rj**2)
+
+    def quant_step(self, var_noise: float, noise_samps: Optional[list[Rvec]] = None, npts: int = 2001) -> float:
+        """
+        Quantization step size, Delta, as per (178A-29): ``2 * Vqc / (2**Nqb - 1)``, where the clipping amplitude,
+        ``Vqc``, satisfies ``Psn(-Vqc) = Pqc / 2`` for the noisy signal at the quantizer (178A-30).
+
+        Args:
+            var_noise: Variance of the Gaussian noise at the quantizer (V^2).
+
+        Keyword Args:
+            noise_samps: Sample sets (V) whose delta-PMFs (93A-40) are also convolved into the noise
+                (e.g. crosstalk and dual-Dirac jitter, as for the final COM calculation, in 178A.1.9).
+                Default: None
+            npts: Number of points in the voltage grid (odd). The default, used during EQ optimization,
+                gives Delta within about 0.2%, at a quarter of the cost of 8001.
+                Default: 2001
+
+        Returns:
+            Quantization step size (V); 0, if ``Nqb`` is 0.
+
+        Notes:
+            1. The noiseless signal is the victim pulse response sampled once per UI at the current
+            sampling phase (``ts_ix``), every UI included (178A.1.7.6).
+        """
+
+        if not self.Nqb:
+            return 0.0
+        noise_samps = noise_samps or []
+        sig_samps = self.baud_rate_sample(self.vic_pulse_resp)
+
+        # Voltage grid spanning the full support of the noisy signal.
+        sigma = sqrt(var_noise)
+        support = np_abs(sig_samps).sum() + sum([np_abs(h).sum() for h in noise_samps]) + 10 * sigma
+        npts |= 1  # MUST BE ODD!
+        ystep = 2 * support / (npts - 1)
+        y = (arange(npts) - npts // 2) * ystep
+
+        def pmf(samps: Rvec) -> Rvec:
+            return delta_pmf(samps[np_abs(samps) > ystep / 2], L=self.L, y=y)[1]
+
+        psn = pmf(sig_samps)                                                                    # (93A-40)
+        for h in noise_samps:
+            psn = fftconvolve(psn, pmf(h), mode="same")
+        if sigma > 0:
+            psn = fftconvolve(psn, exp(-y**2 / (2 * var_noise)), mode="same")                  # (93A-42)
+        psn = psn.clip(min=0)
+        Psn = cumsum(psn) / psn.sum()                                                           # (178A-30)
+        Vqc = -y[argmax(Psn >= self.Pqc / 2)]
+        return 2 * Vqc / (2**self.Nqb - 1)                                                      # (178A-29)
+
+    def Sqn(self, delta: float) -> Rvec:
+        """
+        Folded (two-sided) quantization noise PSD at Rx FFE input (178A-28),
+        uniformly sampled over [0, PI] (rads./s norm.).
+
+        Args:
+            delta: Quantization step size (V).
+        """
+        return full(len(self.f) // self.nspui + 1, self.Tb * delta**2 / 12)  # i.e. - / fB
+
+    def Sn(self) -> Rvec:
+        """
+        Total noise PSD at Rx FFE input (178A-17), at the current sampling time,
+        folded (two-sided) and uniformly sampled over [0, PI] (rads./s norm.).
+
+        Notes:
+            1. With ``Nqb`` > 0, the quantization noise (178A-28) is included, its step size found from a
+            Gaussian approximation of the noise at the quantizer, whose variance (178A-31) is that of
+            every other noise term, but with only the random part of the jitter (as MATLAB COM's ``get_PSDs()``).
+            The step size is left in ``quant_step_size``.
+        """
         Srn = self.Srn
         Sxn = sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)
         Stn = self.Stn()
@@ -297,5 +408,15 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         else:
             min_len = min(len(Srn), len(Stn), len(Sjn))
             Sn = Srn[:min_len] + Stn[:min_len] + Sjn[:min_len]
+        if self.Nqb:
+            Sga = Sn - Sjn[:min_len] + self.Sjn_rj[:min_len]
+            self.quant_step_size = self.quant_step(self.variance(Sga))                         # (178A-31)
+            Sn = Sn + self.Sqn(self.quant_step_size)[:min_len]                                  # (178A-17)
+        else:
+            self.quant_step_size = 0.0
+        return Sn
+
+    def Rn(self) -> Rvec:
+        """Noise autocorrelation vector at Rx FFE input (178A-18), at the current sampling time. (See ``Sn()``.)"""
         # i.e. - `* fB`, which when combined w/ the implicit `1/N` of `irfft()` yields `* df`.
-        return irfft(Sn) / self.Tb
+        return irfft(self.Sn()) / self.Tb

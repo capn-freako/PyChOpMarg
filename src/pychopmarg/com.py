@@ -19,8 +19,11 @@ ToDo:
     1. Provide type hints for imports.
 """
 
+from dataclasses import replace
+from importlib.metadata import version
 from pathlib import Path
 from typing  import Any, Optional, cast
+import warnings
 
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
@@ -31,12 +34,14 @@ from pychopmarg.common import (
     PI, TWOPI, Cvec, Rvec, Cmat, OptMode,
     COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName)
 from pychopmarg.config.template    import COMParams
-from pychopmarg.devmodel import DeviceModel, gamma_term, renormalize_to, s_rx_model, s_tx_model
+from pychopmarg.devmodel import (
+    DeviceModel, PartialHost, TlineStage, gamma_term, renormalize_to, s_partial_host, s_rx_model, s_tx_model)
+from pychopmarg.mlsd     import der_mlsd, inv_cdf, solve_g_an
 from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import NormMode, mmse, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
-    delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs)
+    delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs, calc_vtf, interp_vtf)
 
 
 def _conv_pmfs(p1: Rvec, p2: Rvec) -> Rvec:
@@ -53,6 +58,16 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
     """
     Encoding of the IEEE 802.3-22 Annex 93A/178A 'Channel Operating Margin' (COM) specification.
     """
+
+    #: How channel data get onto the system frequency grid (see ``add_pkg()``):
+    #:
+    #: - "vtf": as MATLAB COM, the end-to-end transfer function, Ht * H21 * Hr, formed at the channel's own
+    #:   frequencies, is interpolated (``interp_vtf()``) and its impulse response truncated at 1e-3 of its peak.
+    #: - "t" / "s": (legacy) the raw channel is interpolated as T (or S) parameters, then cascaded w/ the packages.
+    chnl_interp: str = "vtf"
+
+    #: Impulse response truncation threshold, relative to its peak, for ``chnl_interp`` = "vtf" (as MATLAB COM).
+    ir_trunc_thresh: float = 1e-3
 
     def __init__(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements
         self,
@@ -98,6 +113,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         """
 
         # General
+        if com_params.zp_cases and tx_device is None:  # Start w/ the first package test case.
+            com_params = replace(com_params, **cast(dict[str, Any], com_params.zp_cases[0]))
         self.com_params: COMParams = com_params
         self.debug: bool = debug
         self.do_init: bool = do_init
@@ -128,6 +145,10 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.zp_sel: int = 0            #: Package length selector.
         self._sPkgTx: list[rf.Network] = []
         self._sPkgRx: list[rf.Network] = []
+        self._sPkgNext: list[rf.Network] = []
+        self._sPkgFext: list[rf.Network] = []
+        self._pkg_cache: dict[tuple[int, float, float], tuple[rf.Network, rf.Network, rf.Network, rf.Network]] = {}
+        self._devices: tuple[Optional[DeviceModel], Optional[DeviceModel], Optional[DeviceModel]] = (None, None, None)
 
         if not do_init:
             return
@@ -157,6 +178,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                     ntwks.append((sdd_21(rf.Network(str(fname))), chtype))
         else:
             raise TypeError(f"`channels` must be of type 'str' or 'dict', not '{type(channels)}'!")
+        self._ntwks: list[COMNtwk] = ntwks
 
         # Create the system time & frequency vectors.
         fb = com_params.fb * 1e9
@@ -175,23 +197,19 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
         # Pre-calculate constant responses.
         self._Xsinc = int(ui / t[1]) * np.sinc(ui * f)
-        self._Ht = np.exp(-2 * (PI * (f / 1e9) * com_params.T_r / 1.6832)**2)  # 93A-46 calls for f in GHz.
-        _f = f / (com_params.f_r * fb)
-        H_Butterworth   = 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
-        self._Hr = H_Butterworth
+        self._Ht = self.calc_Ht(f)
+        self._Hr = self.calc_Hr(f)
         Rd = com_params.R_d
         R0 = com_params.R_0
         self._gamma1: Rvec = (Rd - R0) / (Rd + R0)
         self.use_devices = tx_device is not None and rx_device is not None
+        self._devices = (tx_device, rx_device, next_device)
         if self.use_devices:
             assert tx_device is not None and rx_device is not None  # (for type checkers)
             self._gamma1 = array([gamma_term(tx_device.Rd, R0), gamma_term(rx_device.Rd, R0)])
-            self._sPkgTx = [s_tx_model(self.freqs, tx_device, R0)]
-            self._sPkgRx = [s_rx_model(self.freqs, rx_device, R0)]
-            self._sPkgNext = [s_tx_model(self.freqs, next_device or tx_device, R0)]
-            self.chnls = list(map(self.add_pkg, ntwks))
-        else:
-            self._build_legacy_pkg(ntwks)
+        sPkgTx, sPkgNext, sPkgFext, sPkgRx = self._pkg_models(self.freqs)
+        self._sPkgTx, self._sPkgNext, self._sPkgFext, self._sPkgRx = [sPkgTx], [sPkgNext], [sPkgFext], [sPkgRx]
+        self.chnls = list(map(self.add_pkg, ntwks))
         if debug:
             self.chnls_noPkg = [(ntwks[0], calc_H21(f, ntwks[0][0], self.gamma1_Tx, self.gamma2_Rx))]
             self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=[self.chnls_noPkg[0]], apply_eq=False)
@@ -249,7 +267,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 Default: None
 
         Returns:
-            COM: The calculated COM value (dB).
+            COM: The calculated COM value (dB): with several package test cases (``com_params.zp_cases``),
+            the lowest, as in MATLAB COM. ``com_rslts["case_coms"]`` holds each case's COM, and
+            ``com_rslts["pkg_case"]`` the (0-based) index of the lowest, whose results this instance keeps.
 
         Raises:
             RuntimeError if throughput channel is missing.
@@ -266,6 +286,35 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         if dbg_dict is not None:
             self.dbg_dict  = dbg_dict
 
+        # Each package test case in turn (as MATLAB COM), keeping the lowest COM and the state that gave it.
+        cases: list[Optional[dict[str, list[float]]]] = [None]
+        if self.com_params.zp_cases and not self.use_devices:
+            cases = list(self.com_params.zp_cases)
+        case_rslts: list[tuple[float, dict[str, Any]]] = []
+        for n, case in enumerate(cases):
+            if n and case:  # (The first case's packages were added at initialization.)
+                self._set_pkg_case(case)
+            com = self._calc_com()
+            case_rslts.append((com, {nm: getattr(self, nm) for nm in self._case_state if hasattr(self, nm)}))
+        case_coms = [com for com, _ in case_rslts]
+        worst = int(np.argmin(case_coms))
+        for nm, val in case_rslts[worst][1].items():
+            setattr(self, nm, val)
+        com = case_coms[worst]
+        self.com_rslts["case_coms"] = case_coms
+        self.com_rslts["pkg_case"] = worst
+        self.set_status(f"Ready; COM = {com: 5.1f} dB")
+        return com
+
+    #: Instance state that depends on the package test case (restored to the worst case's, by ``__call__()``).
+    _case_state = ("com_params", "chnls", "_sPkgTx", "_sPkgNext", "_sPkgFext", "_sPkgRx", "_pkg_cache",
+                   "tx_ix", "gDC", "gDC2", "rx_taps", "dfe_taps", "cursor_ix", "com_rslts", "fom_rslts",
+                   "theNoiseCalc", "mmse_rslt", "n_fom_evals")
+
+    def _calc_com(self) -> float:
+        "Optimize EQ and calculate COM, for the current package test case."
+        self.com_rslts = {}
+        self.fom_rslts = {}
         self.set_status("Optimizing EQ...")
         assert self.opt_eq(), RuntimeError("EQ optimization failed!")
         self.set_status("Calculating noise...")
@@ -273,29 +322,134 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             cursor_ix=self.fom_rslts['cursor_ix'])
         com = 20 * np.log10(As / Ani)
         self.com_rslts["COM"] = com
-        self.set_status(f"Ready; COM = {com: 5.1f} dB")
+        if self.com_params.mlsd and self.opt_mode == OptMode.MMSE:
+            self.com_rslts["COM_DFE"] = com
+            com = self.calc_mlsd(com)
+            self.com_rslts["COM"] = com
         return com
 
-    # Instance Properties
-    def _build_legacy_pkg(self, ntwks: list[COMNtwk]) -> None:
-        "Build the (pre-178A) package model from `com_params`, and add it to the channels."
-        com_params = self.com_params
-        z_pairs = list(zip(com_params.z_c, [com_params.z_p[self.zp_sel], com_params.z_pB]))
-        sPkgTx_SE = rf.network.cascade_list([
-            self.sDie(False),
-            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-                      self.com_params.tau, self.com_params.gamma0, z_pairs),
-            self.sC(self.com_params.C_p[0] / 1e9)])
-        self._sPkgTx = [sdd_21(rf.network.concat_ports([sPkgTx_SE, sPkgTx_SE], port_order='first'))]
-        cp_rx_ix = min(1, len(com_params.C_p) - 1)
-        sPkgRx_SE = rf.network.cascade_list([
-            self.sC(self.com_params.C_p[cp_rx_ix] / 1e9),
-            sPkgTline(self.freqs, self.com_params.R_0, self.com_params.a1, self.com_params.a2,
-                      self.com_params.tau, self.com_params.gamma0, z_pairs),
-            self.sDie(True)])
-        self._sPkgRx = [sdd_21(rf.network.concat_ports([sPkgRx_SE, sPkgRx_SE], port_order='first'))]
+    def calc_mlsd(self, com_dfe: float) -> float:  # pylint: disable=too-many-locals
+        """
+        COM for the MLSD-based reference receiver, as per 178A.1.10 (178A-49): COM_DFE plus the MLSD's advantage.
 
-        self.chnls = list(map(self.add_pkg, ntwks))
+        Args:
+            com_dfe: COM for the DFE-based reference receiver (dB), from ``calc_noise()``, whose results it uses.
+
+        Returns:
+            COM (dB): no less than ``com_dfe``.
+
+        Notes:
+            1. Fills in ``com_rslts`` keys "g_an", "DER_MLSD", "mlsd_terms", and "delta_COM_mlsd".
+        """
+        rslts = self.com_rslts
+        cp = self.com_params
+        nc = self.theNoiseCalc
+        As = rslts["As"]
+        ystep = rslts["y"][1] - rslts["y"][0]
+        b = float(rslts["dfe_taps"][0]) if len(rslts["dfe_taps"]) else 0.0
+        varX = nc.varX
+
+        # Noise and residual ISI at the FFE output (178A-56), w/o the added noise (below), and the Rx noise alone.
+        Sn = nc.Sn()
+        N = 2 * (len(Sn) - 1)
+        Hw2 = abs(np.fft.rfft(self.rx_taps if self.nRxTaps else np.ones(1), N))**2
+        Srn_w = nc.Srn[:len(Sn)] * Hw2
+        Sisi = varX * abs(np.fft.rfft(rslts["hISI"], N))**2 * nc.Tb
+
+        # Added Rx noise (178A.1.10.1), on a grid wide enough for its larger Gaussian noise.
+        Ani = rslts["Ani"]
+        pad = int(np.ceil(4 * Ani * 10**(cp.dCOM_an / 20) / ystep))
+        p_rest = np.pad(_conv_pmfs(_conv_pmfs(_conv_pmfs(rslts["pISI"], rslts["pJ"]), rslts["pXT"]), rslts["pQ"]),
+                        pad)
+        g_an, p_an = solve_g_an(p_rest, ystep, rslts["sigma_G"]**2, nc.variance(Srn_w), cp.DER_0, cp.dCOM_an)
+
+        # MLSD detector error ratio (178A-50), and COM (178A-49).
+        Sni = Sn * Hw2 + g_an * Srn_w + Sisi                                                    # (178A-56)
+        Rni = np.fft.irfft(Sni)
+        der, n_terms = der_mlsd(p_an, ystep, As, b, Rni / Rni[0], cp.L)
+        delta = 20 * np.log10(-inv_cdf(p_an, ystep, der) / As)                                  # (178A-49)
+        rslts["g_an"] = g_an
+        rslts["DER_MLSD"] = der
+        rslts["mlsd_terms"] = n_terms
+        rslts["delta_COM_mlsd"] = delta
+        return max(com_dfe, com_dfe + delta)
+
+    def _set_pkg_case(self, case: dict[str, list[float]]) -> None:
+        "Rebuild the packages, and the channels w/ them, for the given package test case (see ``COMParams.zp_cases``)."
+        self.com_params = replace(self.com_params, **cast(dict[str, Any], case))
+        self._pkg_cache = {}
+        sPkgTx, sPkgNext, sPkgFext, sPkgRx = self._pkg_models(self.freqs)
+        self._sPkgTx, self._sPkgNext, self._sPkgFext, self._sPkgRx = [sPkgTx], [sPkgNext], [sPkgFext], [sPkgRx]
+        self.chnls = list(map(self.add_pkg, self._ntwks))
+
+    # Instance Properties
+    def _pkg_models(self, freqs: Rvec) -> tuple[rf.Network, rf.Network, rf.Network, rf.Network]:
+        """
+        Device package models at the given frequencies: (Tx, NEXT, FEXT, Rx), cached per frequency vector.
+
+        Notes:
+            1. With device models (178A), these are ``s_tx_model()``/``s_rx_model()``.
+            Otherwise, they're built from ``com_params`` (93A.1.2), w/ each end's own package lengths,
+            and include any host boards (``com_params.include_pcb``; see ``_board()``).
+        """
+        key = (len(freqs), float(freqs[0]), float(freqs[-1]))
+        if key in self._pkg_cache:
+            return self._pkg_cache[key]
+        com_params = self.com_params
+        R0 = com_params.R_0
+        if self.use_devices:
+            tx_device, rx_device, next_device = self._devices
+            assert tx_device is not None and rx_device is not None  # (for type checkers)
+            sTx = s_tx_model(freqs, tx_device, R0)
+            rslt = (sTx, s_tx_model(freqs, next_device or tx_device, R0), sTx, s_rx_model(freqs, rx_device, R0))
+        else:
+            def tline(z_p: Optional[list[float]], isRx: bool = False) -> rf.Network:
+                "Package transmission line, w/ the given segment lengths (default: ``[z_p[zp_sel], z_pB]``)."
+                if z_p is None:
+                    z_p = [com_params.z_p[self.zp_sel], com_params.z_pB]
+                z_c = com_params.z_c_rx if isRx and com_params.z_c_rx is not None else com_params.z_c
+                return sPkgTline(freqs, R0, com_params.a1, com_params.a2,
+                                 com_params.tau, com_params.gamma0, list(zip(z_c, z_p)))
+
+            def diff(sPkg_SE: rf.Network) -> rf.Network:
+                "Differential version of the given single-ended package model."
+                return sdd_21(rf.network.concat_ports([sPkg_SE, sPkg_SE], port_order='first'))
+
+            def tx_pkg(z_p: Optional[list[float]]) -> rf.Network:
+                "Transmitter-end package model."
+                return diff(rf.network.cascade_list([
+                    self.sDie(False, freqs), tline(z_p), self.sC(com_params.C_p[0] / 1e9, freqs)]))
+
+            cp_rx_ix = min(1, len(com_params.C_p) - 1)
+            rslt = (tx_pkg(com_params.zp_tx), tx_pkg(com_params.zp_next), tx_pkg(com_params.zp_fext),
+                    diff(rf.network.cascade_list([
+                        self.sC(com_params.C_p[cp_rx_ix] / 1e9, freqs), tline(com_params.zp_rx, True),
+                        self.sDie(True, freqs)])))
+            if com_params.include_pcb:  # Host boards, between the packages and the channel.
+                sTx, sNext, sFext, sRx = rslt
+                if com_params.include_pcb == 1:
+                    sTx = sTx ** self._board(freqs, com_params.zbp_tx, False)
+                    sNext = sNext ** self._board(freqs, com_params.zbp_next, False)
+                    sFext = sFext ** self._board(freqs, com_params.zbp_fext, False)
+                rslt = (sTx, sNext, sFext, self._board(freqs, com_params.zbp_rx, True) ** sRx)
+        self._pkg_cache[key] = rslt
+        return rslt
+
+    def _board(self, freqs: Rvec, zbp: float, isRx: bool) -> rf.Network:
+        """
+        Host board of length ``zbp`` (mm), as MATLAB COM's ``add_brd()`` (and P802.3dj's partial host channel, 178A-12):
+        C_0 at the package, a transmission line, and C_1 at the channel, w/ the transmitter's (or receiver's) values.
+        Port 1 faces the transmitter, as for the channel.
+        """
+        cp = self.com_params
+        end = 1 if isRx else 0
+        gamma0, a1, a2 = cp.brd_gamma0_a1_a2
+        host = PartialHost(C0=cp.brd_C0[end], C1=cp.brd_C1[end],
+                           tline=TlineStage(zc=cp.brd_Z_c[end], zp=zbp, gamma0=gamma0, a1=a1, a2=a2, tau=cp.brd_tau))
+        brd = s_partial_host(freqs, host, cp.R_0)
+        if isRx:
+            brd.flip()
+        return brd
 
     @property
     def fb(self) -> float:
@@ -386,7 +540,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         if gDC2 is None:
             gDC2 = self.gDC2
         return calc_Hctle(self.freqs, self.com_params.f_z * 1e9, self.com_params.f_p1 * 1e9,
-                          self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2)
+                          self.com_params.f_p2 * 1e9, self.com_params.f_LF * 1e9, gDC, gDC2,
+                          fp3=None if self.com_params.f_p3 is None else self.com_params.f_p3 * 1e9)
 
     @property
     def gamma1_Tx(self) -> float:
@@ -408,21 +563,33 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         "Reflection coefficient looking out of the right end of the channel."
         return self._gamma1[min(1, len(self._gamma1) - 1)]
 
-    def sDie(self, isRx: bool) -> rf.Network:
-        "On-die parasitic capacitance/inductance ladder network, including bump."
+    def calc_Ht(self, f: Rvec) -> Rvec:
+        "Tx rise time filter (93A-46), at the given frequencies (Hz)."
+        return np.exp(-2 * (PI * (f / 1e9) * self.com_params.T_r / 1.6832)**2)  # 93A-46 calls for f in GHz.
+
+    def calc_Hr(self, f: Rvec) -> Cvec:
+        "Rx AFE (Butterworth) filter (93A-20), at the given frequencies (Hz)."
+        _f = f / (self.com_params.f_r * self.fb)
+        return 1 / (1 - 3.414214 * _f**2 + _f**4 + 2.613126j * (_f - _f**3))
+
+    def sDie(self, isRx: bool, freqs: Optional[Rvec] = None) -> rf.Network:
+        "On-die parasitic capacitance/inductance ladder network, including bump (default: at ``self.freqs``)."
+        if freqs is None:
+            freqs = self.freqs
         ix = 1 if isRx else 0
         # C_d[ix], L_s[ix], C_b[ix] may be scalars (single-segment die model);
         # use atleast_1d so zip/len work regardless of whether the config
         # supplies one value or a list of per-segment values.
-        # L_s and C_b configs may have fewer than 2 elements — fall back to [0].
+        # A config w/ one entry (not a [Tx, Rx] pair) uses it at both ends.
+        cd_ix = min(ix, len(self.com_params.C_d) - 1)
         ls_ix = min(ix, len(self.com_params.L_s) - 1)
         cb_ix = min(ix, len(self.com_params.C_b) - 1)
-        Cd = np.atleast_1d(np.array(self.com_params.C_d[ix], dtype=float) / 1e9)
+        Cd = np.atleast_1d(np.array(self.com_params.C_d[cd_ix], dtype=float) / 1e9)
         Ls = np.atleast_1d(np.array(self.com_params.L_s[ls_ix], dtype=float) / 1e9)
         R0 = [self.com_params.R_0] * len(Cd)  # type: ignore
         rslt = rf.network.cascade_list(
-            [sDieLadderSegment(self.freqs, trip) for trip in zip(R0, Cd, Ls)])  # type: ignore
-        rslt = rslt ** self.sC(self.com_params.C_b[cb_ix] / 1e9)
+            [sDieLadderSegment(freqs, trip) for trip in zip(R0, Cd, Ls)])  # type: ignore
+        rslt = rslt ** self.sC(self.com_params.C_b[cb_ix] / 1e9, freqs)
         if isRx:
             rslt.flip()
         return rslt
@@ -440,22 +607,38 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
     @property
     def sPkgNEXT(self) -> rf.Network:
         "NEXT package response."
-        if self.use_devices:
-            return self._sPkgNext[0]
-        return self._sPkgTx[0]
+        return self._sPkgNext[0]
+
+    @property
+    def sPkgFEXT(self) -> rf.Network:
+        "FEXT package response."
+        return self._sPkgFext[0]
 
     # Package modeling
     def add_pkg(self, ntwk: COMNtwk) -> COMChnl:
         """
-        Add package response to raw channel and pre-calculate H21.
+        Add package response to raw channel and pre-calculate H21, on the system frequency grid.
 
-        ToDo:
-            1. (Important) Eliminate the S->T translation, i.e. - interpolate as S parameters always.
-            Its 1/S21 fails wherever S21 vanishes (hence the fallback below), and it's needlessly
-            ill-conditioned for weakly coupled aggressors. But first, comprehensively compare the
-            results of the two bases (pulse responses, FOM, COM, chosen EQ), across all channel groups,
-            and against MATLAB COM, before committing to that path.
+        Args:
+            ntwk: Raw channel network and its type ("THRU", "NEXT", or "FEXT").
+
+        Returns:
+            The channel w/ packages, and its voltage transfer function, H21, at ``self.freqs``.
+
+        Notes:
+            1. How depends on ``chnl_interp``. With "vtf" (the default), as MATLAB COM: the packages are cascaded
+            w/ the channel, and the voltage transfer function (93A-18) formed, at the channel's own frequencies;
+            then Ht * H21 * Hr is interpolated (``interp_vtf()``), its impulse response truncated at
+            ``ir_trunc_thresh`` of its peak, and Ht * Hr divided back out (``H()`` restores them). The returned
+            network is then at the channel's own frequencies.
+
+            2. With "t" or "s" (legacy), the raw channel is interpolated onto the system grid as T or S parameters
+            (T falls back to S where S21 vanishes, since T needs 1/S21), held constant above its last frequency,
+            and then cascaded w/ the packages.
         """
+        if self.chnl_interp == "vtf":
+            return self._add_pkg_vtf(ntwk)
+        assert self.chnl_interp in ("t", "s"), ValueError(f"Unknown `chnl_interp`: '{self.chnl_interp}'!")
 
         # Pre-interpolate channel model to system frequency vector, to prevent noisy non-causal artifacts.
         freqs = self.freqs
@@ -463,7 +646,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         sChnlDC = sChnl.extrapolate_to_dc()
         # T parameters need 1/S21, so fall back to S parameters if S21 vanishes anywhere. (Weakly coupled aggressors'
         # S21 can, when written with too few decimal places: e.g., -240 dB near 100 GHz, to 1e-12, cancels to zero.)
-        basis = 't' if np.all(sChnlDC.s[:, 1, 0]) else 's'
+        basis = 't' if self.chnl_interp == 't' and np.all(sChnlDC.s[:, 1, 0]) else 's'
         # (`interpolate()` is typed `Network | ndarray`; it returns the latter only when given `return_array=True`.)
         sChnlInterp = cast(rf.Network, sChnlDC.interpolate(
             freqs[freqs <= sChnl.f[-1]], kind='cubic', coords='polar', basis=basis, assume_sorted=True))
@@ -477,12 +660,46 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         if self.use_devices:  # Transform to the reference impedance of the device models (178A-4).
             sChnlInterp = renormalize_to(sChnlInterp, 2 * self.com_params.R_0)
 
-        ntype = ntwk[1]
-        if ntype == 'NEXT':
-            _ntwk = self.sPkgNEXT ** sChnlInterp ** self.sPkgRx
-        else:
-            _ntwk = self.sPkgTx   ** sChnlInterp ** self.sPkgRx
-        return ((_ntwk, ntype), calc_H21(self.freqs, _ntwk, self.gamma1_Tx, self.gamma2_Rx))
+        _ntwk = self._cascade_pkgs(sChnlInterp, ntwk[1], freqs)
+        return ((_ntwk, ntwk[1]), calc_H21(self.freqs, _ntwk, self.gamma1_Tx, self.gamma2_Rx))
+
+    def _cascade_pkgs(self, sChnl: rf.Network, ntype: str, freqs: Rvec) -> rf.Network:
+        "Cascade the given channel (at ``freqs``) w/ the packages appropriate to its type."
+        sPkgTx, sPkgNext, sPkgFext, sPkgRx = self._pkg_models(freqs)
+        match ntype:
+            case 'NEXT':
+                sPkgIn = sPkgNext
+            case 'FEXT':
+                sPkgIn = sPkgFext
+            case _:
+                sPkgIn = sPkgTx
+        return sPkgIn ** sChnl ** sPkgRx
+
+    def _add_pkg_vtf(self, ntwk: COMNtwk) -> COMChnl:
+        "``add_pkg()``, w/ ``chnl_interp`` = \"vtf\": as MATLAB COM (``s21_pkg()``, ``s21_to_impulse_DC()``)."
+        sChnl, ntype = ntwk
+        f_ch = sChnl.f
+        if self.use_devices:  # Transform to the reference impedance of the device models (178A-4).
+            sChnl = renormalize_to(sChnl, 2 * self.com_params.R_0)
+        _ntwk = self._cascade_pkgs(sChnl, ntype, f_ch)
+        P = interp_vtf(self.calc_Ht(f_ch) * calc_vtf(_ntwk, self.gamma1_Tx, self.gamma2_Rx) * self.calc_Hr(f_ch),
+                       f_ch, self.freqs)
+
+        # Truncate the impulse response after its last sample above `ir_trunc_thresh` of its peak.
+        h = np.fft.irfft(P)
+        abs_h = abs(h)
+        h[np.nonzero(abs_h > self.ir_trunc_thresh * abs_h.max())[0][-1] + 1:] = 0
+        P = np.fft.rfft(h)
+
+        # Divide out Ht * Hr, which `H()` (and `NoiseCalc`) restore. (Neither has zeros; but Ht can underflow.)
+        HtHr = self.Ht * self.Hr
+        ok = abs(HtHr) > 1e-250
+        if np.any(abs(P[~ok]) > 1e-9 * abs(P).max()):
+            warnings.warn(f"'{ntwk[0].name}': the channel response above {self.freqs[~ok][0] / 1e9:.0f} GHz is lost, "
+                          "since Ht * Hr underflows there.", stacklevel=2)
+        H21 = np.zeros(len(P), dtype=complex)
+        H21[ok] = P[ok] / HtHr[ok]
+        return ((_ntwk, ntype), H21)
 
     # Logging / Debugging
     def set_status(self, status: str) -> None:
@@ -493,7 +710,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             pass
 
     # General functions
-    def sC(self, c: float) -> rf.Network:
+    def sC(self, c: float, freqs: Optional[Rvec] = None) -> rf.Network:
         """
         Return the 2-port network corresponding to a shunt capacitance,
         according to (93A-8).
@@ -501,10 +718,14 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         Args:
             c: Value of shunt capacitance (F).
 
+        Keyword Args:
+            freqs: Frequencies at which to calculate it (Hz).
+                Default: None (i.e. - ``self.freqs``)
+
         Returns:
             2-port network equivalent to shunt capacitance, calculated at given frequencies.
         """
-        return sCshunt(self.freqs, c, self.com_params.R_0)
+        return sCshunt(self.freqs if freqs is None else freqs, c, self.com_params.R_0)
 
     def Htx(self, tx_taps_ix: int) -> Cvec:
         """
@@ -600,7 +821,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         Hr   = self.Hr
         if Hctf is None:
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
-        rslt = Htx * H21 * Hr * Hctf
+        rslt = Htx * self.Ht * H21 * Hr * Hctf  # (178A-14): includes Ht, the Tx rise time filter (93A-46).
         nRxTaps = len(rx_taps)
         if nRxTaps:
             Hrx = self.Hffe_Rx(rx_taps)
@@ -691,8 +912,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 if ntype == 'NEXT':
                     tx_ix = 0
                 pr = self.pulse_resp(self.H(H21, tx_ix, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
-            else:
-                pr = self.pulse_resp(H21)
+            else:  # Unequalized, but w/ the Tx and Rx filters (as MATLAB COM's `uneq_pulse_response`).
+                pr = self.pulse_resp(self.Ht * H21 * self.Hr)
 
             if ntype == 'THRU':
                 pr *= self.com_params.A_v
@@ -829,7 +1050,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
                 # Step f - Jitter noise.
-                hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, M)
+                hJ = calc_hJ(vic_pulse_resp, cursor_ix, M)
                 varJ = (self.com_params.A_DD**2 + self.com_params.sigma_Rj**2) * varX * (hJ**2).sum()   # (93A-32)
 
                 # Step g - Crosstalk.
@@ -850,10 +1071,14 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                     L, tb, 0, times, pulse_resps_preFFE[0], pulse_resps_preFFE[1:],
                     freqs, self.Ht, self.chnls[0][1], self.Hr, Hctf,
                     self.com_params.eta_0, self.com_params.A_v, self.com_params.SNR_TX,
-                    self.com_params.A_DD, self.com_params.sigma_Rj)
+                    self.com_params.A_DD, self.com_params.sigma_Rj,
+                    Nqb=self.com_params.N_qb, Pqc=self.com_params.P_qc)
                 rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, len(self.com_params.dfe_min), self.com_params.RLM,
                             self.com_params.L, bmin, bmax, rx_taps_min, rx_taps_max,
-                            norm_mode=norm_mode, ts_window=ts_window, ts_center=ts_center)
+                            norm_mode=norm_mode, ts_window=ts_window, ts_center=ts_center,
+                            ts_range=self.com_params.ts_sample_adj,
+                            n_fix=self.com_params.Nfix, n_float_groups=self.com_params.Nwg,
+                            n_float_taps=self.com_params.Nwf)
                 fom = rslt["fom"]
                 rx_taps = rslt["rx_taps"]
                 dfe_tap_weights = rslt["dfe_tap_weights"]
@@ -1094,20 +1319,18 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         else:
             Stx = self.theNoiseCalc.Stn(Hrx=Hrx)
             varTx = self.theNoiseCalc.variance(Stx)                                 # (178A-17)
-        hJ = calc_hJ(vic_pulse_resp, As, cursor_ix, self.nspui)
+        hJ = calc_hJ(vic_pulse_resp, cursor_ix, self.nspui)
         hDD = filt_pr_samps(self.com_params.A_DD * hJ, As)
         varJ = self.com_params.sigma_Rj**2 * varX * (hJ**2).sum()                   # (93A-31)
         varG = varTx + varJ + varN                                                  # (93A-41)
 
         # Sec. 93A.1.7.3
         self.set_status("Sec. 93A.1.7.3")
-        # - ISI (Inconsistent w/ IEEE 802.3-22, but consistent w/ v2.60 of MATLAB code.)
-        n_pre = min(5, curs_uis)
-        # Sample every M points, such that we include our identified cursor sample.
+        # - ISI: every sample at the cursor's phase, pre-cursors included, as per (178A-42) and MATLAB COM's `get_pdf()`.
+        n_pre = curs_uis
         isi_sample_slice = slice(curs_ofst, len(vic_pulse_resp), M)
-        isi_select_slice = slice(curs_uis - n_pre, curs_uis + 2048)
-        tISI = self.times[isi_sample_slice][isi_select_slice]
-        hISI = vic_pulse_resp[isi_sample_slice][isi_select_slice].copy()
+        tISI = self.times[isi_sample_slice]
+        hISI = vic_pulse_resp[isi_sample_slice].copy()
         hISI[n_pre] = 0  # No ISI at cursor.
         dfe_slice = slice(n_pre + 1, n_pre + 1 + nDFE)
         dfe_tap_weights = np.maximum(                                               # (93A-26)
@@ -1118,17 +1341,36 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         hISI[dfe_slice] -= dfe_tap_weights * vic_curs_val                                       # (93A-27)
         varISI = varX * (hISI**2).sum()                                                         # (93A-31)
         hISI_filt = filt_pr_samps(hISI, As)
-        # - Crosstalk: each aggressor's samples at its own worst phase.
+        # - Crosstalk: each aggressor's samples at its own worst phase. Under MMSE, that's the phase chosen at the
+        #   Rx FFE input (178A-20), as in MATLAB COM. (The Rx FFE's taps are whole UIs apart; so, it keeps phases.)
         hXTs = []
-        for pulse_resp in pulse_resps[1:]:                                                      # (93A-44)
-            i = np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)])                      # (93A-33)
+        xt_phases = []
+        for k, pulse_resp in enumerate(pulse_resps[1:]):                                        # (93A-44)
+            if self.opt_mode == OptMode.MMSE and nRxTaps:
+                i = self.theNoiseCalc.agg_phase(self.theNoiseCalc.agg_pulse_resps[k])           # (178A-20)
+            else:
+                i = int(np.argmax([(pulse_resp[m::M]**2).sum() for m in range(M)]))             # (93A-33)
+            xt_phases.append(int(i))
             hXTs.append(filt_pr_samps(pulse_resp[i::M], As))
+
+        # - Quantization (178A.1.9): the step size, Delta, from the noisy signal at the quantizer (Rx FFE input),
+        #   with crosstalk and dual-Dirac jitter as delta-PMFs and the rest Gaussian (178A-44).
+        quant_step = 0.0
+        rx_taps = self.rx_taps if nRxTaps else np.ones(1)
+        if self.com_params.N_qb and self.opt_mode == OptMode.MMSE:
+            nc = self.theNoiseCalc
+            hXTs_pre = [nc.sampled_agg_pr(pr) for pr in nc.agg_pulse_resps]
+            hDD_pre = self.com_params.A_DD * calc_hJ(nc.vic_pulse_resp, nc.ts_ix, M)
+            varGn = nc.variance(nc.Srn) + nc.variance(nc.Stn()) + nc.variance(nc.Sjn_rj)       # (178A-44)
+            quant_step = nc.quant_step(varGn, noise_samps=hXTs_pre + [hDD_pre], npts=8001)      # (178A-29)
+        varQ = (rx_taps**2).sum() * quant_step**2 / 12
 
         # Voltage grid, as MATLAB COM: bin size As/1000, but no larger than 10 uV (its default "PDF bin size"),
         # spanning the full support of every distribution below (a sum of |samples| for each delta-PMF, plus
         # Gaussian tails), so none is clipped and, so, `Ani` isn't capped (e.g. at 1.1 * As, i.e. COM >= -0.83 dB).
         ystep = min(As / 1000, 1e-5)
         support = abs(hISI_filt).sum() + sum(abs(h).sum() for h in hXTs) + abs(hDD).sum()
+        support += abs(rx_taps).sum() * quant_step / 2
         ymax = max(1.1 * As, support + 10 * np.sqrt(varG) + 2 * ystep)
         npts = 2 * int(np.ceil(ymax / ystep)) + 1  # MUST BE ODD!
         y = (np.arange(npts) - npts // 2) * ystep
@@ -1144,9 +1386,17 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             _, pk = delta_pmf(hXT, L=L, y=y)
             pXT = _conv_pmfs(pXT, pk)
         varXT = sum(_y**2 * p for (_y, p) in zip(y, pXT))
+        # - Quantization noise at the detector: Delta's uniform PMF (178A-43), through each Rx FFE tap (178A-46).
+        pQ = pDelta
+        if quant_step:
+            for w in rx_taps:
+                n = int(round(abs(w) * quant_step / 2 / ystep))
+                pw = np.zeros(npts)
+                pw[npts // 2 - n: npts // 2 + n + 1] = 1 / (2 * n + 1)
+                pQ = _conv_pmfs(pQ, pw)
 
         # Final calculation
-        py = _conv_pmfs(_conv_pmfs(pISI, pN), pXT)                                                # (93A-45)
+        py = _conv_pmfs(_conv_pmfs(_conv_pmfs(pISI, pN), pXT), pQ)                                # (93A-45)
         Py = np.cumsum(py)
         Py /= Py[-1]  # Enforce cumulative probability distribution.
         Ani = -y[np.where(Py >= self.com_params.DER_0)[0][0]]
@@ -1173,14 +1423,18 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.com_rslts['Py']          = Py
         self.com_rslts['y']           = y
         self.com_rslts['dfe_taps']    = dfe_tap_weights
+        self.com_rslts['xt_phases']   = xt_phases
+        self.com_rslts['quant_step']  = quant_step
+        self.com_rslts['sigma_Q']     = np.sqrt(varQ)
+        self.com_rslts['pQ']          = pQ
 
         return (As, Ani, cursor_ix)
 
-    about_str = """
+    about_str = f"""
       <H2><em>PyChOpMarg</em> - A Python implementation of COM, as per IEEE 802.3-22 Annex 93A/178A.</H2>\n
       <strong>By:</strong> David Banas <capn.freako@gmail.com><p>\n
       <strong>On:</strong> January 20, 2025<p>\n
-      <strong>At:</strong> v3.1.0\n
+      <strong>At:</strong> v{version("PyChOpMarg")}\n
       <H3>Useful Links</H3>\n
       (You'll probably need to: right click, select <em>Copy link address</em>, and paste into your browser.)
         <UL>\n

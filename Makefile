@@ -7,28 +7,13 @@
 
 .PHONY: dflt help check format lint lint-fix type-check docs build upload upload_test test clean distclean
 
-# PROJ_NAME := PyChOpMarg
-# PROJ_FILE := pyproject.toml
-# PROJ_INFO := src/PyChOpMarg.egg-info/PKG-INFO
-# VER_FILE := .proj_ver
-# VER_GETTER := ./get_proj_ver.py
-# SHELL_EXEC := bash
-# PYTHON_EXEC := python -I
-# TOX_EXEC := tox
-# TOX_SKIP_ENV := format
-# PYVERS := 310 311 312 313
-# PLATFORMS := lin mac win
-# NOTEBOOK_DIR := notebook
-# NOTEBOOKS := PyChOpMarg_vs_MATLAB
-# NOTEBOOK_EXT := .ipynb
-# REPORT_EXT := .html
-# PYTHON_SRCS := $(wildcard src/pychopmarg/*.py src/pychopmarg/*/*.py)
-
 SRC_DIR := src/pychopmarg
 DOCS_DIR := docs
 UV_EXEC := uv
 UVX_EXEC := uvx
 PYVERS := 3.10 3.11 3.12 3.13
+# One test environment per Python version (see `test`), so they don't replace each other.
+VENV_DIR := $(CURDIR)/.venvs
 PROJ_VER := $(shell ${UV_EXEC} version | cut -f 2 -d ' ') 
 TEST_EXP ?= tests
 
@@ -37,24 +22,6 @@ dflt: help
 
 # Prevent implicit rule searching for makefiles.
 $(MAKEFILE_LIST): ;
-
-# ${VER_FILE}: ${PROJ_INFO}
-# 	${PYTHON_EXEC} ${VER_GETTER} ${PROJ_NAME} $@
-
-# ${PROJ_INFO}: ${PROJ_FILE}
-# 	${PYTHON_EXEC} -m build
-# 	${PYTHON_EXEC} -m pip install -e .
-
-reports: ${NOTEBOOK_DIR}/$(addsuffix ${REPORT_EXT},${NOTEBOOKS})
-
-%${REPORT_EXT}: %${NOTEBOOK_EXT}
-	${TOX_EXEC} run -e report -- $<
-
-%${NOTEBOOK_EXT}: ${PYTHON_SRCS}
-	${TOX_EXEC} run -e notebook -- $@
-
-# tox:
-# 	TOX_SKIP_ENV="${TOX_SKIP_ENV}" ${TOX_EXEC} -m test
 
 check:
 	${UVX_EXEC} -w packaging>=24.2 validate-pyproject pyproject.toml
@@ -75,7 +42,7 @@ type-check:
 	${UV_EXEC} run mypy --follow-untyped-imports ${SRC_DIR}
 
 docs:
-	pushd ${DOCS_DIR}; PROJ_VER=${PROJ_VER} ${UV_EXEC} run sphinx-build -j auto -b html source/ build/; popd
+	pushd ${DOCS_DIR}; PROJ_VER=${PROJ_VER} ${UV_EXEC} run sphinx-build -j auto -b html . build/; popd
 
 requirements.txt:
 	${UV_EXEC} export --package pychopmarg --no-dev --no-hashes --no-emit-project -o requirements.txt
@@ -91,34 +58,34 @@ upload_test: build
 
 test:
 	@for VERSION in $(PYVERS); do \
-        $(UV_EXEC) run --python $$VERSION pytest -vv \
-            --cov=pyibisami --cov-report=html \
-            --cov-report=term-missing $(TEST_EXP); \
+        UV_PROJECT_ENVIRONMENT=$(VENV_DIR)/py$$VERSION $(UV_EXEC) run --python $$VERSION pytest -vv \
+            --cov=pychopmarg --cov-report=html \
+            --cov-report=term-missing $(TEST_EXP) || exit 1; \
     done
 
 clean:
-	rm -rf .tox build/ docs/build/ .mypy_cache .pytest_cache .venv src/*.egg-info
+	rm -rf .tox build/ docs/build/ .mypy_cache .pytest_cache .venv $(VENV_DIR) src/*.egg-info
 
 distclean: clean
 	rm -rf dist/
 
 help:
 	@echo "Available targets:"
-	@echo "  tox: Run all Tox environments."
 	@echo "  check: Validate the 'pyproject.toml' file."
-	@echo "  format: Run Tox 'format' environment."
+	@echo "  format: Reformats the source code."
 	@echo "    This will run EXTREME reformatting on the code. Use with caution!"
-	@echo "  lint: Run Tox 'lint' environment. (Runs 'pylint' on the source code.)"
-	@echo "  flake8: Run Tox 'flake8' environment. (Runs 'flake8' on the source code.)"
-	@echo "  type-check: Run Tox 'type-check' environment. (Runs 'mypy' on the source code.)"
-	@echo "  docs: Run Tox 'docs' environment. (Runs 'sphinx' on the source code.)"
+	@echo "  lint: Runs 'ruff' & 'flake8' on the source code."
+	@echo "  lint-fix: Runs 'ruff' & 'flake8' on the source code, passing the '--fix' option to 'ruff'."
+	@echo "  type-check: Checks the Python source code for type errors, by running 'mypy' over it."
+	@echo "  docs: Generates the package documentation, by running 'sphinx' on the source code."
 	@echo "    To view the resultant API documentation, open 'docs/build/index.html' in a browser."
-	@echo "  build: Run Tox 'build' environment."
-	@echo "    Builds source tarball and wheel, for installing or uploading to PyPi."
-	@echo "  upload: Run Tox 'upload' environment."
-	@echo "    Uploads source tarball and wheel to PyPi."
+	@echo "  requirements.txt: Generates a 'requirements.txt' file consistent with the current contents of 'uv.lock'."
+	@echo "  build: Build the project wheel and source tarball files, for distribution."
+	@echo "  upload: Uploads source tarball and wheel to PyPi."
 	@echo "    (Only David Banas can do this.)"
-	@echo "  test: Run Tox testing for all supported Python versions."
+	@echo "  upload_test: Uploads source tarball and wheel to TestPyPi."
+	@echo "    (Only David Banas can do this.)"
+	@echo "  test: Run testing for all supported Python versions, each in its own environment under '.venvs/'."
+	@echo "    Define environment variable 'TEST_EXP' for focused testing."
 	@echo "  clean: Remove all previous build results, virtual environments, and cache contents."
-	@echo "  reports: Generate reports from selected Jupyter notebooks."
-	@echo "    To view the resultant reports, open 'notebook/<report_name>.html' in a browser."
+	@echo "  distclean: Run a normal 'clean' and remove all distribution targets."

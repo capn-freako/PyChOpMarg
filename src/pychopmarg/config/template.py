@@ -8,7 +8,8 @@ Original date:   November 6 2024
 Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Optional
 import numpy as np
 from pychopmarg.common import Rvec
 
@@ -62,7 +63,7 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     f_z: float                  # (GHz)
     f_p1: float                 # (GHz)
     f_p2: float                 # (GHz)
-    f_LF: float                 # (GHz)
+    f_LF: float                 # (GHz) second stage zero, `fz2` (and pole, `fp3`, unless `f_p3` is given)
     g_DC: list[float]           # (dB)
     g_DC2: list[float]          # (dB)
     # Tx FFE
@@ -84,10 +85,12 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     # Die & Package (Class A Test 1) Sec. 178.10.1
     # R_d: list[float]            # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
     R_d: Rvec                   # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
-    C_d: list[float]            # (nF)
+    # Per device, [Tx, Rx] (or one value for both): `C_d` and `L_s` entries are a value each, or a list of one per die
+    # ladder segment, as the sheet's "C_d" ("[Tx segments ; Rx segments]").
+    C_d: list[float] | list[list[float]]    # (nF)
     C_b: list[float]            # (nF)
     C_p: list[float]            # (nF)
-    L_s: list[float]            # (nH)
+    L_s: list[float] | list[list[float]]    # (nH)
     z_c: list[float]            # (Ohms)
     z_p: list[float]            # (mm)
     gamma0: float               # (1/mm)
@@ -96,10 +99,52 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     tau: float                  # (ns/mm)
     # New as of 802.3dj
     z_pB: float = 1.8           # (mm)
+    # Per-end package segment lengths (mm), for the selected test case (MATLAB COM's "z_p (TX)", etc.):
+    # one per package transmission line segment; `None` means ``[z_p[zp_sel], z_pB]``.
+    zp_tx: Optional[list[float]] = None
+    zp_rx: Optional[list[float]] = None
+    zp_next: Optional[list[float]] = None
+    zp_fext: Optional[list[float]] = None
+    # Receiver package segment impedances (Ohms), when they differ from the transmitter's, `z_c`
+    # (MATLAB COM's "package_Z_c" column 2). `None`: `z_c`.
+    z_c_rx: Optional[list[float]] = None
+    # Every package test case to evaluate (MATLAB COM's "z_p select"): each a dict of any of "zp_tx", "zp_rx", "zp_next",
+    # and "zp_fext" (as above), overriding those fields. COM is the lowest over them, as in MATLAB COM.
+    # `None`: one case, given by `zp_tx`, etc.
+    zp_cases: Optional[list[dict[str, list[float]]]] = None
     # EQ search control (MATLAB COM's "I/O control" settings of the same names)
     local_search: int = 0           # "Local Search": EQ grid search radius (grid steps); 0 = full search.
     ts_srch_mode: str = "full-sweep"  # "TS_SRCH_MODE": cursor timing search, "full-sweep" or "middle".
     ts_track: bool = False          # (PyChOpMarg only) Centre each "middle" timing search on the best so far.
+    # "sample_adjustment": cursor timing search range, (first, last) offsets from the pulse peak (samples, inclusive).
+    # `None`: +/-UI/2. (MATLAB COM's default, without the row, is [0 0]: no search.)
+    ts_sample_adj: Optional[tuple[int, int]] = None
+    # D3.3's CTLE second stage pole, `fp3` (GHz), when it differs from its zero, `fz2` (`f_LF`). (PyChOpMarg only:
+    # MATLAB COM's "f_HP_PZ" ties them.) `None`: `f_LF`, as (93A-22).
+    f_p3: Optional[float] = None
+    # Quantization noise (178A.1.7.6), as MATLAB COM's "N_qb" and "P_qc"
+    N_qb: int = 0                   # noise-equivalent quantization bits; 0 = no quantization noise
+    P_qc: float = 1e-7              # quantization clipping probability
+    # Floating Rx FFE taps (178A.1.8.1): with `Nwg` > 0, `rx_taps_min`/`rx_taps_max` span every tap position up to
+    # `Nmax` (their length), of which the first `Nfix` are fixed and the rest available to `Nwg` groups of `Nwf`.
+    Nfix: Optional[int] = None      # number of fixed-position taps; `None`: all
+    Nwg: int = 0                    # number of floating tap groups
+    Nwf: int = 0                    # number of taps per floating tap group
+    # MLSD reference receiver (178A.1.10), as MATLAB COM's "MLSD"/"MLSE" and "add_rx_noise"
+    mlsd: bool = False              # include MLSD
+    dCOM_an: float = 3.0            # penalty for added receiver noise (dB); D3.3: the minimum COM limit
+    # Host boards (MATLAB COM's "Include PCB"), added between each package and the channel: C_0 at the package,
+    # a transmission line, and C_1 at the channel (as `devmodel.PartialHost`). Defaults are MATLAB COM's.
+    include_pcb: int = 0            # 0: none; 1: at both ends; 2: at the receiver only
+    zbp_tx: float = 151.0           # victim transmitter board length (mm)
+    zbp_rx: float = 151.0           # victim receiver board length (mm)
+    zbp_next: float = 72.0          # NEXT aggressor transmitter board length (mm)
+    zbp_fext: float = 72.0          # FEXT aggressor transmitter board length (mm)
+    brd_Z_c: list[float] = field(default_factory=lambda: [109.8, 109.8])  # (Ohms) [Tx, Rx]
+    brd_gamma0_a1_a2: list[float] = field(default_factory=lambda: [0.0, 4.114e-4, 2.547e-4])  # (1/mm, ...)
+    brd_tau: float = 6.191e-3       # (ns/mm)
+    brd_C0: list[float] = field(default_factory=lambda: [0.0, 0.0])  # (nF) [Tx, Rx]
+    brd_C1: list[float] = field(default_factory=lambda: [0.0, 0.0])  # (nF) [Tx, Rx]
 
     def __post_init__(self):  # pylint: disable=too-many-statements
         "Validate incoming COM parameters."
@@ -150,10 +195,20 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("SNR_TX", self.SNR_TX, 25, 35)
         check_range("eta_0", self.eta_0, 1e-10, 1e-6)
         check_range("sigma_Rj", self.sigma_Rj, 0.0, 1.0)
+        check_range("N_qb", self.N_qb, 0, 16)
+        assert self.include_pcb in (0, 1, 2), ValueError(f"`include_pcb` ({self.include_pcb}) must be 0, 1, or 2!")
+        if self.Nwg:
+            assert self.Nfix is not None and self.dw < self.Nfix and self.Nwf > 0 \
+                and self.Nfix + self.Nwg * self.Nwf <= len(self.rx_taps_max), ValueError(
+                    f"Floating Rx FFE taps (`Nwg` = {self.Nwg}, `Nwf` = {self.Nwf}) need `Nfix` ({self.Nfix}) > `dw` "
+                    f"({self.dw}), and room for them among the {len(self.rx_taps_max)} tap positions!")
+        check_range("P_qc", self.P_qc, 1e-15, 0.1)
         check_range("f_z", self.f_z, 1.0, 1000)
         check_range("f_p1", self.f_p1, 1.0, 1000)
         check_range("f_p2", self.f_p2, 1.0, 1000)
         check_range("f_LF", self.f_LF, 0.1, 10.)
+        if self.f_p3 is not None:
+            check_range("f_p3", self.f_p3, 0.1, 10.)
         check_range("g_DC", self.g_DC, -30, 0)
         check_range("g_DC2", self.g_DC2, -20, 0)
         check_range("tx_taps_min", self.tx_taps_min, -1, 1)
@@ -182,7 +237,17 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("C_p", self.C_p, 1e-6, 1e-2)  # (nF)
         check_range("L_s", self.L_s, 0.01, 10.)
         check_range("z_c", self.z_c, 25, 100)
+        if self.z_c_rx is not None:
+            check_range("z_c_rx", self.z_c_rx, 25, 100)
         check_range("z_p", self.z_p, 0.001, 100.)
+        for nm in ("zp_tx", "zp_rx", "zp_next", "zp_fext"):
+            if getattr(self, nm) is not None:
+                check_range(nm, getattr(self, nm), 0.001, 100.)
+        for n, case in enumerate(self.zp_cases or []):
+            for nm, zp in case.items():
+                assert nm in ("zp_tx", "zp_rx", "zp_next", "zp_fext"), ValueError(
+                    f"`zp_cases[{n}]` has an unknown key: {nm}!")
+                check_range(f"zp_cases[{n}][{nm}]", zp, 0.001, 100.)
         check_range("gamma0", self.gamma0, 1e-7, 1e-3)
         check_range("a1", self.a1, 1e-7, 1e-3)
         check_range("a2", self.a2, 1e-7, 1e-3)

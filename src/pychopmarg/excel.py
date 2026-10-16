@@ -49,6 +49,9 @@ com_fields: dict[str, str] = {
     "Delta_f": "fstep",
     "g_DC_HP": "g_DC2",
     "f_HP_PZ": "f_LF",
+    "R_LM": "RLM",
+    "sigma_RJ": "sigma_Rj",
+    "package_tl_tau": "tau",
 }
 ignored_fields = [
     "Operational control",
@@ -59,6 +62,58 @@ ignored_fields = [
     "PMD_type",
     "Histogram_Window_Weight",
 ]
+# MATLAB COM rows that don't affect COM (reports, plots, other analyses, input checks).
+report_fields = {
+    "DIAGNOSTICS", "DISPLAY_WINDOW", "Display frequency domain", "CSV_REPORT", "SAVE_FIGURE_to_CSV", "RESULT_DIR",
+    "SAVE_FIGURES", "SAVE_TD", "BREAD_CRUMBS", "TDR", "ERL", "EW", "Sigma BBN step", "f_min",
+}
+# MATLAB COM options PyChOpMarg doesn't model, w/ the values it matches (see ``docs/SpecDeviations.md``, B5).
+# A sheet setting any other value gets a warning.
+matlab_only_fields: dict[str, tuple[Any, ...]] = {
+    "ts_anchor": (1,),
+    "Raised_Cosine": (0,),
+    "FORCE_TR": (1,),
+    "INC_PACKAGE": (1,),
+    "IDEAL_TX_TERM": (0,),
+    "IDEAL_RX_TERM": (0,),
+    "INCLUDE_CTLE": (1,),
+    "INCLUDE_TX_RX_FILTER": (1,),
+    "RX_CALIBRATION": (0,),
+    "CTLE_type": ("CL120d",),
+    "Port Order": ("[1 3 2 4]",),
+    "ffe_tap_step_size": (0,),
+    "ffe_main_cursor_min": (1,),
+    "PKG_Tx_FFE_preset": (0,),
+    "AC_CM_RMS": (0,),
+}
+
+
+class UsageDict(dict):
+    "A ``dict`` that records which keys have been looked up (w/ ``[]``, ``get()``, or ``in``), in ``used``."
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.used: set[Any] = set()
+
+    def __getitem__(self, key):
+        self.used.add(key)
+        return super().__getitem__(key)
+
+    def __contains__(self, key):
+        self.used.add(key)
+        return super().__contains__(key)
+
+    def get(self, key, default=None):
+        self.used.add(key)
+        return super().get(key, default)
+
+
+def same_setting(val: Any, ok: Any) -> bool:
+    "Is the sheet value ``val`` the setting ``ok``? (Numbers compare as numbers; anything else, as whitespace-free text.)"
+    try:
+        return float(val) == float(ok)
+    except (TypeError, ValueError):
+        return "".join(str(val).split()).lower() == "".join(str(ok).split()).lower()
 
 
 def first(f: Callable[[T1], T2]) -> Callable[[tuple[T1, T3]], tuple[T2, T3]]:
@@ -173,7 +228,7 @@ com_params_dict: dict[Any, Any] = {}  # pylint: disable=global-statement
 
 
 def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
-    "Read a COM configuration spreadsheet (*.xls or *.xlsx) and return an equivalent ``COMParams`` instance."
+    "Read a COM configuration spreadsheet (``*.xls`` or ``*.xlsx``) and return an equivalent ``COMParams`` instance."
 
     global com_params_dict  # pylint: disable=global-statement
 
@@ -183,20 +238,43 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     com_cfg1 = _com_cfg[:, range(2)]
     com_cfg2 = _com_cfg[:, range(9, 11)]
 
-    com_params_dict = vars(IEEE_8023dj).copy()
-    com_params_dict.update(cfg_trans(com_cfg1))
-    com_params_dict.update(cfg_trans(com_cfg2))
+    sheet_params = UsageDict(cfg_trans(com_cfg1))
+    sheet_params.update(cfg_trans(com_cfg2))
+    # Rows `cfg_trans()` ignores (`ignored_fields`), but some of which we read, as is.
+    raw_params = {name.strip(): val for name, val in np.concatenate((com_cfg1, com_cfg2))
+                  if isinstance(name, str) and not pd.isna(val)}
+    com_params_dict = UsageDict(vars(IEEE_8023dj))
+    com_params_dict.update(sheet_params)
+
+    # Package transmission lines (MATLAB COM's names): "package_Z_c" has one row per segment, of [Tx Rx] impedances.
+    if "package_tl_gamma0_a1_a2" in sheet_params:
+        com_params_dict["gamma0"], com_params_dict["a1"], com_params_dict["a2"] = (
+            np.asarray(sheet_params["package_tl_gamma0_a1_a2"], dtype=float).ravel().tolist())
+    z_c_rx = None
+    if "package_Z_c" in sheet_params:
+        z_c = np.atleast_1d(np.asarray(sheet_params["package_Z_c"], dtype=float))
+        if z_c.ndim == 1:  # One segment: [Tx Rx], or one impedance for both.
+            z_c = z_c.reshape(1, -1)
+        com_params_dict["z_c"] = z_c[:, 0].tolist()
+        if not np.array_equal(z_c[:, -1], z_c[:, 0]):
+            z_c_rx = z_c[:, -1].tolist()
 
     # EQ search control, from the "I/O control" columns (MATLAB COM's settings of the same names).
-    io_ctl: dict[str, Any] = {}
+    io_ctl = UsageDict()
     if _com_cfg.shape[1] > 6:
-        io_ctl = {name.strip(): val for name, val in _com_cfg[:, range(5, 7)]
-                  if isinstance(name, str) and not pd.isna(val)}
+        io_ctl.update({name.strip(): val for name, val in _com_cfg[:, range(5, 7)]
+                       if isinstance(name, str) and not pd.isna(val)})
+    if "T_r" in io_ctl and "T_r" not in sheet_params:  # (MATLAB COM's sheets keep it in the I/O column.)
+        com_params_dict["T_r"] = float(io_ctl["T_r"])
     search_ctl: dict[str, Any] = {}
     if "Local Search" in io_ctl:
         search_ctl["local_search"] = float(io_ctl["Local Search"])
     if "TS_SRCH_MODE" in io_ctl:
         search_ctl["ts_srch_mode"] = str(io_ctl["TS_SRCH_MODE"]).strip().lower()
+    if "sample_adjustment" in io_ctl:
+        adj = np.atleast_1d(parse_Mmatrix(io_ctl["sample_adjustment"]) if isinstance(io_ctl["sample_adjustment"], str)
+                            else io_ctl["sample_adjustment"]).astype(int).ravel()
+        search_ctl["ts_sample_adj"] = (int(adj[0]), int(adj[-1]))
 
     # Set the Tx tap ranges/steps: c(-4), ..., c(-1), c(1), ..., c(3), as MATLAB COM (cursor excluded).
     N_TX_PRE     = 4
@@ -225,9 +303,14 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
         if pKey in com_params_dict:
             set_tap(N_TX_PRE + n, com_params_dict[pKey])
 
-    # Set Rx FFE config.
-    if "dw" in com_params_dict:
-        assert "ffe_post_tap_len" in com_params_dict, ValueError(
+    # Set Rx FFE config. Without its rows, there's none (only the cursor tap), as in MATLAB COM.
+    if "dw" not in sheet_params:
+        assert "ffe_post_tap_len" not in sheet_params, ValueError(
+            "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")
+        com_params_dict["dw"] = 0
+        rx_taps_min = rx_taps_max = array([1.0])
+    else:
+        assert "ffe_post_tap_len" in sheet_params, ValueError(
             "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")
         nRxPreTaps = com_params_dict["dw"]
         nRxPostTaps = com_params_dict["ffe_post_tap_len"]
@@ -269,9 +352,10 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
             if "b_max1" in com_params_dict:
                 dfe_max[0] = float(com_params_dict["b_max1"])
             dfe_min[0] = float(com_params_dict.get("b_min1", -dfe_max[0]))  # As MATLAB COM, defaults to `-b_max`.
+            b_maxN, b_minN = com_params_dict.get("b_maxN", 0.2), com_params_dict.get("b_minN")
             if N_b > 1:  # Taps 2..N_b, as MATLAB COM: `b_max` defaults to 0.2, `b_min` to `-b_max`; each may be per tap.
-                dfe_max[1:] = np.asarray(com_params_dict.get("b_maxN", 0.2), dtype=float).ravel()
-                dfe_min[1:] = np.asarray(com_params_dict.get("b_minN", -dfe_max[1:]), dtype=float).ravel()
+                dfe_max[1:] = np.asarray(b_maxN, dtype=float).ravel()
+                dfe_min[1:] = -dfe_max[1:] if b_minN is None else np.asarray(b_minN, dtype=float).ravel()
 
     rslt = COMParams(
         com_params_dict["fb"],
@@ -320,4 +404,81 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
     )
     if "z_pB" in com_params_dict:
         rslt.z_pB = com_params_dict["z_pB"]
+    rslt.z_c_rx = z_c_rx
+    if "f_p3" in sheet_params:
+        rslt.f_p3 = float(sheet_params["f_p3"])
+
+    # Floating Rx FFE taps, as MATLAB COM: `N_bg` groups of `N_bf` taps (default 6), within +/-`bmaxg` (default 0.2),
+    # as late as post-cursor tap `N_f`. (MATLAB COM uses them for the DFE instead, without an Rx FFE.)
+    n_bg = int(sheet_params.get("N_bg", 0))
+    n_f = sheet_params.get("N_f")
+    n_bf = int(sheet_params.get("N_bf", 6))
+    bmaxg = float(sheet_params.get("bmaxg", 0.2))
+    if n_bg and len(rx_taps_max):
+        nfix = len(rx_taps_max)
+        nmax = rslt.dw + int(n_f) + 1
+        rslt.rx_taps_min = np.concatenate((rx_taps_min, -bmaxg * ones(nmax - nfix)))
+        rslt.rx_taps_max = np.concatenate((rx_taps_max, bmaxg * ones(nmax - nfix)))
+        rslt.Nfix, rslt.Nwg, rslt.Nwf = nfix, n_bg, n_bf
+
+    # MLSD: MATLAB COM's "MLSD" (or "MLSE") switch, wherever it appears; `add_rx_noise` defaults to the
+    # "COM Pass threshold", as in MATLAB COM (and D3.3: the minimum COM limit).
+    mlsd_flag = sheet_params.get("MLSD", sheet_params.get("MLSE", io_ctl.get("MLSD", io_ctl.get("MLSE", 0))))
+    rslt.mlsd = bool(float(mlsd_flag))
+    rslt.dCOM_an = float(sheet_params.get("add_rx_noise", raw_params.get("COM Pass threshold", 3.0)))
+
+    # Host boards: MATLAB COM's "Include PCB", w/ its board rows (and its defaults, where they're missing).
+    rslt.include_pcb = int(float(raw_params.get("Include PCB", 0)))
+    for key in ("zbp_tx", "zbp_rx", "zbp_next", "zbp_fext"):
+        if key in sheet_params:
+            setattr(rslt, key, float(sheet_params[key]))
+
+    def per_end(val: Any) -> list[float]:
+        "A [Tx, Rx] pair, from a scalar (used at both ends) or a pair."
+        vals = np.atleast_1d(np.asarray(val, dtype=float)).ravel().tolist()
+        return vals * 2 if len(vals) == 1 else vals[:2]
+
+    if "board_Z_c" in sheet_params:
+        rslt.brd_Z_c = per_end(sheet_params["board_Z_c"])
+    if "board_tl_gamma0_a1_a2" in sheet_params:
+        rslt.brd_gamma0_a1_a2 = np.asarray(sheet_params["board_tl_gamma0_a1_a2"], dtype=float).ravel().tolist()
+    if "board_tl_tau" in sheet_params:
+        rslt.brd_tau = float(sheet_params["board_tl_tau"])
+    for key, name in (("brd_C0", "C_0"), ("brd_C1", "C_1")):
+        if name in sheet_params:
+            setattr(rslt, key, per_end(sheet_params[name]))
+
+    # Quantization noise: off unless the sheet sets `N_qb`, and `P_qc` defaults to 2 * DER_0, as in MATLAB COM.
+    rslt.N_qb = int(sheet_params.get("N_qb", 0))
+    rslt.P_qc = float(sheet_params.get("P_qc", 2 * rslt.DER_0))
+
+    # Per-end package lengths: MATLAB COM's "z_p (TX)", etc. have one row per package segment and one column per
+    # test case; "z_p select" (1-based) lists the cases to evaluate. `zp_tx`, etc. hold the first; `zp_cases`, all of
+    # them, when there are several.
+    zp_sel = np.atleast_1d(com_params_dict.get("zp_sel", 1)).astype(int)
+    cases: list[dict[str, list[float]]] = [{} for _ in zp_sel]
+    for key in ("zp_tx", "zp_rx", "zp_next", "zp_fext"):
+        if key in com_params_dict:
+            zp = np.asarray(com_params_dict[key], dtype=float)
+            if zp.ndim < 2:  # One segment, possibly several cases.
+                zp = zp.reshape(1, -1)
+            for case, sel in zip(cases, zp_sel):
+                case[key] = zp[:, sel - 1].tolist()
+            setattr(rslt, key, cases[0][key])
+    if len(cases) > 1 and cases[0]:
+        rslt.zp_cases = cases
+
+    # Warn of sheet rows we don't read, and of MATLAB COM options set to values we don't model.
+    used = com_params_dict.used | sheet_params.used | io_ctl.used
+    unread = []
+    for name, val in list(raw_params.items()) + list(io_ctl.items()):
+        if name in matlab_only_fields:
+            if not any(same_setting(val, ok) for ok in matlab_only_fields[name]):
+                warnings.warn(f"'{name}' is {val!r} in '{cfg_file}', but PyChOpMarg doesn't model that option; "
+                              f"it matches MATLAB COM w/ '{name}' = {matlab_only_fields[name][0]!r}.", stacklevel=2)
+        elif not (com_fields.get(name, name) in used or name in report_fields or match_ignored_field_name_prefix(name)):
+            unread.append(name)
+    if unread:
+        warnings.warn(f"PyChOpMarg doesn't read these rows of '{cfg_file}', and ignores them: "
+                      f"{', '.join(repr(nm) for nm in unread)}.", stacklevel=2)
     return rslt
