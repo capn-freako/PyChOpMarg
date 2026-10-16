@@ -85,6 +85,8 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     # Die & Package (Class A Test 1) Sec. 178.10.1
     # R_d: list[float]            # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
     R_d: Rvec                   # (Ohms); as per config_com_ieee8023_93a=100GBASE-KR4.xls
+    # Per device, [Tx, Rx] (or one value for both): `C_d` and `L_s` entries are a value each, or a list of one per die
+    # ladder segment, as the sheet's "C_d" ("[Tx segments ; Rx segments]").
     C_d: list[float]            # (nF)
     C_b: list[float]            # (nF)
     C_p: list[float]            # (nF)

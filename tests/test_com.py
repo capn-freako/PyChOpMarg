@@ -13,6 +13,7 @@ import skrf as rf
 
 import pychopmarg.optimize as optimize
 from pychopmarg.com import COM
+from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.excel import get_com_params
 from pychopmarg.utility import sdd_21
 
@@ -431,6 +432,17 @@ def test_floating_rx_ffe_taps():
     assert not com.rx_taps[unused].any()
     curs = com.rx_taps[cp.dw]
     assert all(abs(com.rx_taps[c]) <= 0.05 * abs(curs) * (1 + 1e-9) for c in floats)
+
+
+def test_default_die_models_per_device():
+    "`IEEE_8023dj`'s `C_d`/`L_s` give each device the sheet's 3-segment die ladder, not one segment of it per device."
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    cp = get_com_params(CFG)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(dataclasses.replace(cp, C_d=IEEE_8023dj.C_d, L_s=IEEE_8023dj.L_s), ch_set)
+        sheet = COM(cp, ch_set)
+    for isRx in (False, True):
+        assert np.allclose(com.sDie(isRx).s, sheet.sDie(isRx).s)
 
 
 def test_rx_package_impedances():

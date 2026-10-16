@@ -303,9 +303,14 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
         if pKey in com_params_dict:
             set_tap(N_TX_PRE + n, com_params_dict[pKey])
 
-    # Set Rx FFE config.
-    if "dw" in com_params_dict:
-        assert "ffe_post_tap_len" in com_params_dict, ValueError(
+    # Set Rx FFE config. Without its rows, there's none (only the cursor tap), as in MATLAB COM.
+    if "dw" not in sheet_params:
+        assert "ffe_post_tap_len" not in sheet_params, ValueError(
+            "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")
+        com_params_dict["dw"] = 0
+        rx_taps_min = rx_taps_max = array([1.0])
+    else:
+        assert "ffe_post_tap_len" in sheet_params, ValueError(
             "Either both or neither of: 'ffe_pre_tap_len' & 'ffe_post_tap_len' must be given in the configuration spreadsheet!")
         nRxPreTaps = com_params_dict["dw"]
         nRxPostTaps = com_params_dict["ffe_post_tap_len"]

@@ -237,3 +237,15 @@ def test_unread_rows_warn(tmp_path):
     assert len(msgs) == 2
     assert "'ts_anchor' is 0" in msgs[0]
     assert "ignores them: 'N-g', 'N-max', 'bogus_row'." in msgs[1]
+
+
+def test_no_rx_ffe_rows(tmp_path):
+    "Without the `ffe_*` rows, there's no Rx FFE (only the cursor tap), as in MATLAB COM; one length alone is an error."
+    sheet = pd.read_excel(CFG, header=None)
+    cfg = tmp_path / "no_ffe.xlsx"
+    sheet[~sheet[0].astype(str).str.startswith("ffe_")].to_excel(cfg, header=False, index=False)
+    p = get_com_params(cfg)
+    assert p.dw == 0 and list(p.rx_taps_min) == list(p.rx_taps_max) == [1.0]
+    sheet[sheet[0] != "ffe_post_tap_len"].to_excel(cfg, header=False, index=False)
+    with pytest.raises(AssertionError):
+        get_com_params(cfg)

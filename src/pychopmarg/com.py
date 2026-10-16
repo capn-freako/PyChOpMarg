@@ -577,10 +577,11 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         # C_d[ix], L_s[ix], C_b[ix] may be scalars (single-segment die model);
         # use atleast_1d so zip/len work regardless of whether the config
         # supplies one value or a list of per-segment values.
-        # L_s and C_b configs may have fewer than 2 elements — fall back to [0].
+        # A config w/ one entry (not a [Tx, Rx] pair) uses it at both ends.
+        cd_ix = min(ix, len(self.com_params.C_d) - 1)
         ls_ix = min(ix, len(self.com_params.L_s) - 1)
         cb_ix = min(ix, len(self.com_params.C_b) - 1)
-        Cd = np.atleast_1d(np.array(self.com_params.C_d[ix], dtype=float) / 1e9)
+        Cd = np.atleast_1d(np.array(self.com_params.C_d[cd_ix], dtype=float) / 1e9)
         Ls = np.atleast_1d(np.array(self.com_params.L_s[ls_ix], dtype=float) / 1e9)
         R0 = [self.com_params.R_0] * len(Cd)  # type: ignore
         rslt = rf.network.cascade_list(
