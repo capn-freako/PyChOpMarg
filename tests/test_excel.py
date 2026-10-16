@@ -201,3 +201,39 @@ def test_host_board_params(tmp_path, params):
 def test_timing_search_range(params):
     "MATLAB COM's `sample_adjustment` (I/O control column) sets the cursor timing search range (samples, inclusive)."
     assert params.ts_sample_adj == (-16, 16)
+
+
+def test_matlab_row_names(tmp_path, params):
+    """MATLAB COM's names for the level mismatch, Rj, and package transmission line rows are read, as is `T_r` from
+    the I/O control column; "package_Z_c" has one row per segment, of [Tx Rx] impedances."""
+    assert params.z_c == [87.5, 92.5] and params.z_c_rx is None  # (The sheet's ends match.)
+    sheet = pd.read_excel(CFG, header=None)
+    for col, name, val in ((0, "R_LM", 0.9), (0, "sigma_RJ", 0.02), (5, "T_r", 0.006), (9, "package_tl_tau", 0.007),
+                           (9, "package_tl_gamma0_a1_a2", "[1e-4 1e-3 3e-4]"), (9, "package_Z_c", "[80 85 ; 90 95]")):
+        assert (sheet[col] == name).any()
+        sheet.loc[sheet[col] == name, col + 1] = val
+    cfg = tmp_path / "names.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    p = get_com_params(cfg)
+    assert (p.RLM, p.sigma_Rj, p.T_r, p.tau) == pytest.approx((0.9, 0.02, 0.006, 0.007))
+    assert (p.gamma0, p.a1, p.a2) == pytest.approx((1e-4, 1e-3, 3e-4))
+    assert p.z_c == [80.0, 90.0] and p.z_c_rx == [85.0, 95.0]
+
+
+def test_unread_rows_warn(tmp_path):
+    """Rows PyChOpMarg doesn't read, and MATLAB COM options it doesn't model set to other values than it matches,
+    get warnings; report and display rows don't."""
+    sheet = pd.read_excel(CFG, header=None)
+    sheet.loc[sheet[5] == "ts_anchor", 6] = 0
+    sheet.loc[sheet[5] == "Raised_Cosine", 6] = 0
+    sheet.loc[sheet[5] == "DIAGNOSTICS", 6] = 1
+    sheet = pd.concat([sheet, pd.DataFrame([["bogus_row", 1] + [np.nan] * (sheet.shape[1] - 2)],
+                                           columns=sheet.columns)], ignore_index=True)
+    cfg = tmp_path / "unread.xlsx"
+    sheet.to_excel(cfg, header=False, index=False)
+    with pytest.warns(UserWarning) as record:
+        get_com_params(cfg)
+    msgs = [str(w.message) for w in record]
+    assert len(msgs) == 2
+    assert "'ts_anchor' is 0" in msgs[0]
+    assert "ignores them: 'N-g', 'N-max', 'bogus_row'." in msgs[1]

@@ -433,6 +433,19 @@ def test_floating_rx_ffe_taps():
     assert all(abs(com.rx_taps[c]) <= 0.05 * abs(curs) * (1 + 1e-9) for c in floats)
 
 
+def test_rx_package_impedances():
+    "`z_c_rx` (MATLAB COM's \"package_Z_c\" column 2) sets the receiver package's line impedances; `None`: `z_c`."
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    cp = get_com_params(CFG)
+    with contextlib.redirect_stdout(io.StringIO()):
+        coms = [COM(dataclasses.replace(cp, z_c_rx=z_c_rx), ch_set) for z_c_rx in (None, cp.z_c, [80.0, 95.0])]
+    f = coms[0].freqs
+    base, same, other = (com._pkg_models(f) for com in coms)  # pylint: disable=protected-access
+    assert all(np.array_equal(a.s, b.s) for a, b in zip(base, same))
+    assert all(np.array_equal(a.s, b.s) for a, b in zip(base[:3], other[:3]))
+    assert not np.allclose(base[3].s, other[3].s)
+
+
 @pytest.mark.parametrize("include_pcb", [1, 2])
 def test_host_boards_join_the_packages(include_pcb):
     """With "Include PCB" (1: both ends; 2: the receiver only), each end's host board (C_0, line, C_1, as MATLAB COM's

@@ -545,13 +545,38 @@ otherwise, which PyChOpMarg doesn't do.
 
 ## E. Hazard: sheet rows silently ignored because of name mismatches
 
-### [ ] E1. Sheet names that don't map to PyChOpMarg parameters
+### [x] E1. Sheet names that don't map to PyChOpMarg parameters
 
 - **Where:** `src/pychopmarg/excel.py`
-- These sheet rows are ignored, and the `IEEE_8023dj` defaults are used instead:
+- These sheet rows were ignored, and the `IEEE_8023dj` defaults used instead:
 
   | Sheet row | PyChOpMarg field |
   |---|---|
+  | `R_LM` | `RLM` |
+  | `sigma_RJ` | `sigma_Rj` |
+  | `package_tl_tau` | `tau` |
+  | `package_tl_gamma0_a1_a2` | `gamma0`, `a1`, `a2` |
+  | `package_Z_c` | `z_c` |
+  | `T_r` (I/O column) | `T_r` |
+
+- Their values equalled the defaults, which hid the problem: editing any of them changed MATLAB's results but not
+  PyChOpMarg's.
+- **Fixed (2026-10-16):** all six are read now. `package_Z_c` has one row per package segment, of [Tx Rx]
+  impedances, as MATLAB COM reads it; a differing Rx column goes to the new `COMParams.z_c_rx`. The comparison
+  sheet's parameters are unchanged, so its results are too.
+- `get_com_params()` now warns:
+  - once, listing every row it doesn't read (other than report and display rows, and those it already skipped on
+    purpose);
+  - for each MATLAB COM option PyChOpMarg doesn't model (B5's list, plus `FORCE_TR`, `INC_PACKAGE`, `IDEAL_TX_TERM`,
+    `IDEAL_RX_TERM`, `INCLUDE_CTLE`, `INCLUDE_TX_RX_FILTER`, `RX_CALIBRATION`, `CTLE_type` and `Port Order`) set to
+    any value other than the one PyChOpMarg matches.
+- Both sheets warn about `N-g` and `N-max`. These aren't MATLAB COM names (`N_bg` and `N_bmax` are), so both
+  tools ignore them; delete them from the sheets, or rename them if floating taps are meant. The tests' copy of the
+  sheet also warns about `Raised_Cosine` = 1.
+- The stray `com_params.ts_track` row is no longer in the comparison sheet; any such row now gets the warning.
+  A sheet `f_p3` row (PyChOpMarg only, B6) is now read.
+
+---|---|
   | `R_LM` | `RLM` |
   | `sigma_RJ` | `sigma_Rj` |
   | `package_tl_tau` | `tau` |

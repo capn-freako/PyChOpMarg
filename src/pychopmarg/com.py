@@ -400,12 +400,13 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             sTx = s_tx_model(freqs, tx_device, R0)
             rslt = (sTx, s_tx_model(freqs, next_device or tx_device, R0), sTx, s_rx_model(freqs, rx_device, R0))
         else:
-            def tline(z_p: Optional[list[float]]) -> rf.Network:
+            def tline(z_p: Optional[list[float]], isRx: bool = False) -> rf.Network:
                 "Package transmission line, w/ the given segment lengths (default: ``[z_p[zp_sel], z_pB]``)."
                 if z_p is None:
                     z_p = [com_params.z_p[self.zp_sel], com_params.z_pB]
+                z_c = com_params.z_c_rx if isRx and com_params.z_c_rx is not None else com_params.z_c
                 return sPkgTline(freqs, R0, com_params.a1, com_params.a2,
-                                 com_params.tau, com_params.gamma0, list(zip(com_params.z_c, z_p)))
+                                 com_params.tau, com_params.gamma0, list(zip(z_c, z_p)))
 
             def diff(sPkg_SE: rf.Network) -> rf.Network:
                 "Differential version of the given single-ended package model."
@@ -419,7 +420,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             cp_rx_ix = min(1, len(com_params.C_p) - 1)
             rslt = (tx_pkg(com_params.zp_tx), tx_pkg(com_params.zp_next), tx_pkg(com_params.zp_fext),
                     diff(rf.network.cascade_list([
-                        self.sC(com_params.C_p[cp_rx_ix] / 1e9, freqs), tline(com_params.zp_rx),
+                        self.sC(com_params.C_p[cp_rx_ix] / 1e9, freqs), tline(com_params.zp_rx, True),
                         self.sDie(True, freqs)])))
             if com_params.include_pcb:  # Host boards, between the packages and the channel.
                 sTx, sNext, sFext, sRx = rslt

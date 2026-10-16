@@ -103,6 +103,9 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     zp_rx: Optional[list[float]] = None
     zp_next: Optional[list[float]] = None
     zp_fext: Optional[list[float]] = None
+    # Receiver package segment impedances (Ohms), when they differ from the transmitter's, `z_c`
+    # (MATLAB COM's "package_Z_c" column 2). `None`: `z_c`.
+    z_c_rx: Optional[list[float]] = None
     # Every package test case to evaluate (MATLAB COM's "z_p select"): each a dict of any of "zp_tx", "zp_rx", "zp_next",
     # and "zp_fext" (as above), overriding those fields. COM is the lowest over them, as in MATLAB COM.
     # `None`: one case, given by `zp_tx`, etc.
@@ -232,6 +235,8 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
         check_range("C_p", self.C_p, 1e-6, 1e-2)  # (nF)
         check_range("L_s", self.L_s, 0.01, 10.)
         check_range("z_c", self.z_c, 25, 100)
+        if self.z_c_rx is not None:
+            check_range("z_c_rx", self.z_c_rx, 25, 100)
         check_range("z_p", self.z_p, 0.001, 100.)
         for nm in ("zp_tx", "zp_rx", "zp_next", "zp_fext"):
             if getattr(self, nm) is not None:
