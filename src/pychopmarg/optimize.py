@@ -409,7 +409,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
     ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj,
-    ts_window: int = 0, ts_center: int = 0,
+    ts_window: int = 0, ts_center: int = 0, ts_range: Optional[tuple[int, int]] = None,
     n_fix: Optional[int] = None, n_float_groups: int = 0, n_float_taps: int = 0
 ) -> dict[str, Any]:
     """
@@ -436,6 +436,9 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Default: 0
         ts_center: Cursor timing search starting point, relative to the peak (vector samples). (See Note 2.)
             Default: 0
+        ts_range: Cursor timing search range, (first, last) offsets from the peak (vector samples, inclusive),
+            as MATLAB COM's ``sample_adjustment``; overrides ``ts_sweep``.
+            Default: None (``ts_sweep``)
         n_fix: Number of fixed-position Rx FFE taps (``Nfix``); the rest of the ``Nw`` (= ``Nmax``) positions
             are for floating taps. (See Note 3.)
             Default: None (``Nw``, i.e. - no floating taps)
@@ -482,12 +485,16 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     nspui       = theNoiseCalc.nspui
     vic_pr      = theNoiseCalc.vic_pulse_resp
     curs_ix     = int(argmax(vic_pr))
-    ts_sweep_ix = int(ts_sweep * nspui)
+    if ts_range is None:
+        ts_sweep_ix = int(ts_sweep * nspui)
+        ts_range = (-ts_sweep_ix, ts_sweep_ix)
+    ts_first, ts_last = int(ts_range[0]), int(ts_range[1])
+    assert ts_first <= ts_last, ValueError(f"Empty cursor timing search range: {ts_range}!")
 
     # Confirm sufficient room for `ts` sweeping.
-    assert curs_ix >= ts_sweep_ix, ValueError(
+    assert curs_ix + ts_first >= 0, ValueError(
         f"Insufficient room at beginning of pulse response: {curs_ix}!\nvic_pr: {vic_pr}")
-    assert curs_ix < len(vic_pr) - ts_sweep_ix, ValueError(
+    assert curs_ix + ts_last < len(vic_pr), ValueError(
         f"Insufficient room at end of pulse response: {len(vic_pr) - curs_ix}!")
 
     # Initialize and run the search for optimum `ts` and Rx FFE tap weights.
@@ -496,7 +503,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     varX = theNoiseCalc.varX
     _n_fix = Nw if n_fix is None else n_fix
     if Nw:
-        ts_ofsts = list(range(-ts_sweep_ix, ts_sweep_ix + 1))  # Inclusive, as MATLAB COM's `sample_adjustment`.
+        ts_ofsts = list(range(ts_first, ts_last + 1))  # Inclusive, as MATLAB COM's `sample_adjustment`.
         if ts_window:  # Work outward from `ts_center` (a stable sort, like MATLAB's).
             ts_center = min(max(ts_center, ts_ofsts[0]), ts_ofsts[-1])
             ts_ofsts.sort(key=lambda k: abs(k - ts_center))

@@ -1071,6 +1071,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 rslt = mmse(theNoiseCalc, nRxTaps, nRxPreTaps, len(self.com_params.dfe_min), self.com_params.RLM,
                             self.com_params.L, bmin, bmax, rx_taps_min, rx_taps_max,
                             norm_mode=norm_mode, ts_window=ts_window, ts_center=ts_center,
+                            ts_range=self.com_params.ts_sample_adj,
                             n_fix=self.com_params.Nfix, n_float_groups=self.com_params.Nwg,
                             n_float_taps=self.com_params.Nwf)
                 fom = rslt["fom"]

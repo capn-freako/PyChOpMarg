@@ -456,3 +456,18 @@ def test_host_boards_join_the_packages(include_pcb):
     tx_brd = com._board(f, 40.0, False)  # pylint: disable=protected-access
     tx_brd.flip()
     assert np.allclose(rx_brd.s, tx_brd.s)
+
+
+def test_timing_search_range_as_matlab_sample_adjustment(example2_com):
+    """`ts_range` (MATLAB COM's `sample_adjustment`; `COMParams.ts_sample_adj`) sets the cursor offsets tried, from
+    the pulse peak, inclusive, and may be asymmetric."""
+    nc = copy.copy(example2_com.theNoiseCalc)
+    cp = example2_com.com_params
+    args = (nc, example2_com.nRxTaps, example2_com.nRxPreTaps, len(cp.dfe_min), cp.RLM, cp.L,
+            cp.dfe_min, cp.dfe_max, cp.rx_taps_min, cp.rx_taps_max)
+    peak = int(np.argmax(nc.vic_pulse_resp))
+    rslt = optimize.mmse(*args, ts_range=(-3, 5))
+    assert rslt["n_ts_evals"] == 9
+    assert -3 <= rslt["cursor_ix"] - peak <= 5
+    wide = optimize.mmse(*args, ts_range=(-32, 32))
+    assert wide["n_ts_evals"] == 65 and wide["fom"] >= optimize.mmse(*args)["fom"]

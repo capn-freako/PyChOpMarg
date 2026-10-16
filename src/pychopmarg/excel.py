@@ -201,6 +201,10 @@ def get_com_params(cfg_file: Path) -> COMParams:  # pylint: disable=too-many-loc
         search_ctl["local_search"] = float(io_ctl["Local Search"])
     if "TS_SRCH_MODE" in io_ctl:
         search_ctl["ts_srch_mode"] = str(io_ctl["TS_SRCH_MODE"]).strip().lower()
+    if "sample_adjustment" in io_ctl:
+        adj = np.atleast_1d(parse_Mmatrix(io_ctl["sample_adjustment"]) if isinstance(io_ctl["sample_adjustment"], str)
+                            else io_ctl["sample_adjustment"]).astype(int).ravel()
+        search_ctl["ts_sample_adj"] = (int(adj[0]), int(adj[-1]))
 
     # Set the Tx tap ranges/steps: c(-4), ..., c(-1), c(1), ..., c(3), as MATLAB COM (cursor excluded).
     N_TX_PRE     = 4

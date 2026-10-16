@@ -196,3 +196,8 @@ def test_host_board_params(tmp_path, params):
     p = get_com_params(cfg)
     assert p.include_pcb == 2 and p.dCOM_an == 2.5
     assert p.brd_C0 == pytest.approx([1e-5, 2e-5]) and p.brd_C1 == pytest.approx([3e-5, 3e-5])
+
+
+def test_timing_search_range(params):
+    "MATLAB COM's `sample_adjustment` (I/O control column) sets the cursor timing search range (samples, inclusive)."
+    assert params.ts_sample_adj == (-16, 16)

@@ -483,6 +483,27 @@ otherwise, which PyChOpMarg doesn't do.
 - Both tools search only ±0.5 UI around the peak.
 - PyChOpMarg's Local Search and `middle` / `track` timing search are speed-ups that can miss the optimum.
   Measured: 1.4–2.5× faster, FOM changes ≤ 0.003 dB.
+- **Search range now configurable (2026-10-15):** new `COMParams.ts_sample_adj` (first, last offset from the pulse
+  peak, in samples, inclusive; may be asymmetric), read from MATLAB's `sample_adjustment` row (the comparison sheet
+  has [-16 16], i.e. ±½ UI, PyChOpMarg's default when the row is missing; MATLAB's own default is [0 0], no search).
+  `mmse()` takes it as `ts_range`. Tests: `test_timing_search_range_as_matlab_sample_adjustment`
+  (`tests/test_com.py`), `test_timing_search_range` (`tests/test_excel.py`).
+- **Measured, ±1 UI ([-32 32]) vs. ±½ UI, on the reference set, in both tools:**
+
+  | | PyChOpMarg | MATLAB |
+  |---|---|---|
+  | COM change, mean (range) | +0.002 dB (−0.30 … +0.19) | +0.006 dB (0 … +0.26) |
+  | Channels whose cursor offset moved | 5 (all CR, all beyond ±16) | 1 (`li_dj`, −2 → −20) |
+  | PyChOpMarg − MATLAB COM | −0.172 ± 0.095 → −0.177 ± 0.111 dB | |
+
+  - On `li_dj_CR_Design_C_Rev1`, MATLAB moves to −20, near PyChOpMarg's −19 (from −16); its optimum lies beyond
+    ±½ UI in both tools (see A8).
+  - On `HH_5in_DAC_X_0p5m_HN_3in_thru_TP0_Tx7_…` (CR), PyChOpMarg's COM *falls* 0.30 dB (FOM too, −0.30 dB), its
+    offset moving −2 → −22: with more offsets, the Local Search / `track` path changes and settles on a worse
+    local maximum. So these speed-ups can cost ~0.3 dB on some channels, more than first measured.
+  - MATLAB's `middle` search stops early (its `LOCAL_SEARCH` window), so it rarely reaches the new offsets: it
+    stayed at −16 / −15 on the two `sma_…_1500mm` channels, where PyChOpMarg moved to −23 / −22.
+  - Keep ±½ UI (the comparison sheet's, and MATLAB's practice): the bound matters little on average.
 
 ---
 

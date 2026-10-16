@@ -111,6 +111,9 @@ class COMParams:  # pylint: disable=too-many-instance-attributes
     local_search: int = 0           # "Local Search": EQ grid search radius (grid steps); 0 = full search.
     ts_srch_mode: str = "full-sweep"  # "TS_SRCH_MODE": cursor timing search, "full-sweep" or "middle".
     ts_track: bool = False          # (PyChOpMarg only) Centre each "middle" timing search on the best so far.
+    # "sample_adjustment": cursor timing search range, (first, last) offsets from the pulse peak (samples, inclusive).
+    # `None`: +/-UI/2. (MATLAB COM's default, without the row, is [0 0]: no search.)
+    ts_sample_adj: Optional[tuple[int, int]] = None
     # D3.3's CTLE second stage pole, `fp3` (GHz), when it differs from its zero, `fz2` (`f_LF`). (PyChOpMarg only:
     # MATLAB COM's "f_HP_PZ" ties them.) `None`: `f_LF`, as (93A-22).
     f_p3: Optional[float] = None
