@@ -143,7 +143,7 @@ def calc_Hffe(
     return bs @ phase_matrix  # 50% perf. improvement
 
 
-def ffe_phase_matrix(freqs: Rvec, td: float, n_taps: int) -> Cmat:
+def ffe_phase_matrix(freqs: Rvec, td: float, n_taps: int, tap_ixs: Optional[list[int]] = None) -> Cmat:
     """
     The matrix, **F**, of ``calc_Hffe()``: ``exp(-j 2 pi n td f)``, one row per tap, ``n``, one column per ``f``.
 
@@ -152,10 +152,14 @@ def ffe_phase_matrix(freqs: Rvec, td: float, n_taps: int) -> Cmat:
         td: Tap delay time (s).
         n_taps: Number of FFE taps (cursor included).
 
+    Keyword Args:
+        tap_ixs: Only these taps' rows (identical to the full matrix's).
+            Default: None (All ``n_taps`` rows.)
+
     Returns:
         The FFE phase matrix.
     """
-    return np.exp(np.outer(np.arange(n_taps), -1j * TWOPI * td * freqs))
+    return np.exp(np.outer(np.arange(n_taps) if tap_ixs is None else tap_ixs, -1j * TWOPI * td * freqs))
 
 
 def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:

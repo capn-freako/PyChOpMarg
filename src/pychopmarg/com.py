@@ -131,8 +131,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.nRxPreTaps: int = 0        #: `dw` from `com_params`
         self.gDC: float = 0.0           #: Choices are in `com_params.g_DC`.
         self.gDC2: float = 0.0          #: Choices are in `com_params.g_DC2`.
-        self.rx_ffe_phase_matrix: Cmat = array([])
-        self._Htx_cache: dict[int, Cvec] = {}  # Tx FFE frequency responses, by `tx_taps_ix` (see `Htx()`).
+        self._rx_ffe_phase_matrix: Optional[Cmat] = None  # (See `rx_ffe_phase_matrix`.)
+        self._Htx_last: Optional[tuple[int, Cvec]] = None  # The last Tx FFE frequency response (see `Htx()`).
         self._tx_phase_matrix: Optional[Cmat] = None  # Tx FFE phase matrix, once calculated (see `Htx()`).
         self._next_pr_cache: tuple[Optional[Cvec], dict[int, tuple[Cvec, Rvec]]] = (None, {})  # (`gen_pulse_resps()`)
 
@@ -235,7 +235,6 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         # Set Rx FFE quantities.
         self.nRxTaps = len(com_params.rx_taps_max)
         self.nRxPreTaps = com_params.dw
-        self.rx_ffe_phase_matrix = np.exp(np.outer(np.arange(self.nRxTaps), -1j * TWOPI * ui * f))
         self.null_rx_ffe: Rvec = array([0] * self.nRxPreTaps + [1.0] + [0] * (self.nRxTaps - self.nRxPreTaps - 1))
         self._Hrx_null: Optional[Cvec] = None  # `Hffe_Rx(self.null_rx_ffe)`, once calculated.
         self.empty_array: Rvec = array([])
@@ -490,6 +489,18 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         return self.f
 
     @property
+    def rx_ffe_phase_matrix(self) -> Cmat:
+        "Rx FFE phase matrix (see ``utility.filter.ffe_phase_matrix()``), calculated when first needed."
+        if self._rx_ffe_phase_matrix is None:  # (~230 MB, for P802.3dj's 87 taps; so, not kept in pickles.)
+            self._rx_ffe_phase_matrix = ffe_phase_matrix(self.freqs, self.ui, self.nRxTaps)
+        return self._rx_ffe_phase_matrix
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = self.__dict__.copy()
+        state["_rx_ffe_phase_matrix"] = None  # (Recalculated when needed; see `rx_ffe_phase_matrix`.)
+        return state
+
+    @property
     def Xsinc(self) -> Rvec:
         """Frequency domain sinc(f) corresponding to Rect(ui) in time domain."""
         return self._Xsinc
@@ -742,14 +753,15 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         """
         assert 0 <= tx_taps_ix < self.num_tx_combs, ValueError(
             f"tx_taps_ix ({tx_taps_ix}) must be an integer in: [0, {self.num_tx_combs})!")
-        # Cached per instance: `functools.cache` on a method would keep every `COM` alive, via its `self` keys.
-        if tx_taps_ix not in self._Htx_cache:
+        # Only the last is kept (each EQ candidate's channels share it): all of them would take ~3.5 GB
+        # for P802.3dj's 1,279 Tx FFE combinations; and each is cheap, from the shared phase matrix.
+        if self._Htx_last is None or self._Htx_last[0] != tx_taps_ix:
             taps = array(self._tx_combs[tx_taps_ix])
             if self._tx_phase_matrix is None:  # (Same for every combination; cursor tap included.)
                 self._tx_phase_matrix = ffe_phase_matrix(self.freqs, 1 / self.fb, len(taps) + 1)
-            self._Htx_cache[tx_taps_ix] = calc_Hffe(
-                self.freqs, 1 / self.fb, taps, 3, phase_matrix=self._tx_phase_matrix)
-        return self._Htx_cache[tx_taps_ix]
+            self._Htx_last = (tx_taps_ix, calc_Hffe(
+                self.freqs, 1 / self.fb, taps, 3, phase_matrix=self._tx_phase_matrix))
+        return self._Htx_last[1]
 
     def Hffe_Rx(self, taps: Optional[Rvec] = None) -> Cvec:
         """
@@ -775,7 +787,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         # so, it's calculated once (read-only, for safety).
         if taps is self.null_rx_ffe:
             if self._Hrx_null is None:
-                self._Hrx_null = taps @ self.rx_ffe_phase_matrix
+                # Its one tap's row, which is identical to `taps @ self.rx_ffe_phase_matrix`, w/o forming
+                # that whole matrix (~230 MB, for P802.3dj's 87 taps), which EQ optimization doesn't otherwise need.
+                self._Hrx_null = ffe_phase_matrix(self.freqs, self.ui, self.nRxTaps, tap_ixs=[self.nRxPreTaps])[0]
                 self._Hrx_null.flags.writeable = False
             return self._Hrx_null
         return taps @ self.rx_ffe_phase_matrix
