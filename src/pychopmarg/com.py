@@ -38,7 +38,7 @@ from pychopmarg.devmodel import (
     DeviceModel, PartialHost, TlineStage, gamma_term, renormalize_to, s_partial_host, s_rx_model, s_tx_model)
 from pychopmarg.mlsd     import der_mlsd, inv_cdf, solve_g_an
 from pychopmarg.noise    import NoiseCalc
-from pychopmarg.optimize import NormMode, mmse, przf
+from pychopmarg.optimize import NormMode, mmse, mmse_noise_vars, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
     delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs, calc_vtf, interp_vtf)
@@ -937,7 +937,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         unit_amp: Optional[bool] = None,
         n_pre: Optional[int] = None,
         ts_window: int = 0,
-        ts_center: int = 0
+        ts_center: int = 0,
+        noise_vars: bool = True
     ) -> float:
         """
         Calculate the **figure of merit** (FOM), given the existing linear EQ settings.
@@ -963,6 +964,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 Default: 0
             ts_center: MMSE cursor timing search starting point, relative to the pulse peak (vector samples).
                 Default: 0
+            noise_vars: Calculate the MMSE solution's noise variance breakdown ("varTx", "varJ", "varXT", "varN")
+                when True; else, leave them ``None``. (See ``optimize.mmse_noise_vars()``.)
+                Default: True
 
         Returns:
             The resultant figure of merit.
@@ -1000,6 +1004,10 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         pulse_resps_preFFE = self.gen_pulse_resps(  # Assumes no Rx FFE/DFE.
             tx_ix=tx_ix, Hctf=Hctf,
             rx_taps=self.null_rx_ffe, dfe_taps=self.empty_array)
+        varTx: Optional[float]  # (`None` from `mmse()`, w/ `noise_vars` False; likewise below.)
+        varJ: Optional[float]
+        varXT: Optional[float]
+        varN: Optional[float]
         match opt_mode:
             case OptMode.PRZF:
                 # Step a - Pulse response construction.
@@ -1078,7 +1086,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                             norm_mode=norm_mode, ts_window=ts_window, ts_center=ts_center,
                             ts_range=self.com_params.ts_sample_adj,
                             n_fix=self.com_params.Nfix, n_float_groups=self.com_params.Nwg,
-                            n_float_taps=self.com_params.Nwf)
+                            n_float_taps=self.com_params.Nwf, noise_vars=noise_vars)
                 fom = rslt["fom"]
                 rx_taps = rslt["rx_taps"]
                 dfe_tap_weights = rslt["dfe_tap_weights"]
@@ -1087,11 +1095,11 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 vic_peak_loc = np.argmax(vic_pulse_resp)
                 cursor_ix = rslt["cursor_ix"]
                 As = vic_pulse_resp[cursor_ix]
-                varTx = rslt["varTx"]
+                varTx = rslt.get("varTx")
                 varISI = rslt["varISI"]
-                varJ = rslt["varJ"]
-                varXT = rslt["varXT"]
-                varN = rslt["varN"]
+                varJ = rslt.get("varJ")
+                varXT = rslt.get("varXT")
+                varN = rslt.get("varN")
                 self.fom_rslts['mse'] = rslt.get('mse')
                 self.theNoiseCalc = theNoiseCalc  # pylint: disable=attribute-defined-outside-init
                 self.mmse_rslt = rslt             # pylint: disable=attribute-defined-outside-init
@@ -1208,7 +1216,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                     fom = self.calc_fom(
                         _tx_ix, _Hctle,
                         opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp,
-                        ts_window=ts_window, ts_center=ts_center)
+                        ts_window=ts_window, ts_center=ts_center, noise_vars=False)
                     self.n_fom_evals += 1
                     if fom > fom_max:
                         fom_max = fom
@@ -1229,6 +1237,12 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         # Check for error and save the best results.
         if best is None:
             return False  # Flags the caller that the following settings have NOT been made.
+        # The winner's MMSE noise variance breakdown, skipped above, since it's reported, not optimized.
+        # (Its noise calculator was left at its chosen sampling time.)
+        if best['mmse_rslt'] is not None and best['varTx'] is None:
+            noise_vars = mmse_noise_vars(best['theNoiseCalc'], best['mmse_rslt']['rx_taps_raw'], self.nRxPreTaps)
+            for d in (best, best['fom_rslts'], best['mmse_rslt']):
+                d.update(noise_vars)
         # Note the normalization of the Rx FFE tap weights, to produce a unit amplitude cursor tap.
         # This is not dictated by the spec., but is what the MATLAB code does.
         self.gDC2     = best['gDC2']

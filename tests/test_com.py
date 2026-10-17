@@ -144,6 +144,16 @@ def test_fom_and_com_tx_noise_agree(example2_com):
     assert com.fom_rslts["sigma_Tx"] == pytest.approx(scale * com.com_rslts["sigma_Tx"], rel=1e-6)
 
 
+def test_opt_eq_noise_vars_are_the_winners(example2_com):
+    """`opt_eq()` skips each candidate's MMSE noise variance breakdown, calculating it for the winner alone
+    (it's ~40% of the search time w/ an 87-tap Rx FFE). That gives the winner's own, as calculated in its search."""
+    com = copy.deepcopy(example2_com)
+    sigmas = {k: com.fom_rslts[k] for k in ('sigma_Tx', 'sigma_J', 'sigma_XT', 'sigma_N')}
+    com.calc_fom(com.tx_ix, com.calc_Hctf(com.gDC, com.gDC2), noise_vars=True)
+    for k, v in sigmas.items():
+        assert v == np.sqrt(com.fom_rslts['var' + k[6:]]), k
+
+
 def test_tx_noise_pulse_has_the_signals_phase(example2_com):
     """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.
     (It was once formed w/ a causal moving sum, which delayed it ~half a UI.) Here, w/ no Tx FFE, it's the victim's

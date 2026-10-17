@@ -405,12 +405,43 @@ def float_tap_cols(
     return list(range(n_fix)) + sorted(chosen)
 
 
+def mmse_noise_vars(theNoiseCalc: NoiseCalc, rx_taps: Optional[Rvec] = None, dw: int = 0) -> dict[str, float]:
+    """
+    Noise variance breakdown of an ``mmse()`` solution, at ``theNoiseCalc``'s current sampling time.
+
+    Args:
+        theNoiseCalc: The ``NoiseCalc`` instance ``mmse()`` was given, left at its chosen sampling time.
+
+    Keyword Args:
+        rx_taps: The Rx FFE tap weights (before any normalization), spanning all ``Nw`` positions.
+            Default: None (no Rx FFE)
+        dw: Number of pre-cursor taps in ``rx_taps``.
+            Default: 0
+
+    Returns:
+        The Tx ("varTx"), jitter ("varJ"), crosstalk ("varXT"), and Rx ("varN") noise variances.
+
+    Notes:
+        1. These are reported, not optimized; so, they're calculated only for the chosen solution.
+        (The Tx noise's Rx FFE response alone costs ~0.1 s, w/ a long Rx FFE and a fine frequency grid.)
+    """
+    Hrx = None if rx_taps is None else calc_Hffe(
+        theNoiseCalc.f, theNoiseCalc.Tb, rx_taps, len(rx_taps) - dw - 1, hasCurs=True)
+    return {
+        "varTx": theNoiseCalc.variance(theNoiseCalc.Stn(Hrx)),
+        "varJ": theNoiseCalc.variance(theNoiseCalc.Sjn),
+        "varXT": sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps]),
+        "varN": theNoiseCalc.variance(theNoiseCalc.Srn),
+    }
+
+
 def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals,too-many-statements,too-many-branches
     theNoiseCalc: NoiseCalc, Nw: int, dw: int, Nb: int, Rlm: float, L: int,
     b_min: Rvec, b_max: Rvec, w_min: Rvec, w_max: Rvec,
     ts_sweep: float = 0.5, norm_mode: NormMode = NormMode.P8023dj,
     ts_window: int = 0, ts_center: int = 0, ts_range: Optional[tuple[int, int]] = None,
-    n_fix: Optional[int] = None, n_float_groups: int = 0, n_float_taps: int = 0
+    n_fix: Optional[int] = None, n_float_groups: int = 0, n_float_taps: int = 0,
+    noise_vars: bool = True
 ) -> dict[str, Any]:
     """
     Optimize Rx FFE tap weights, via *Minimum Mean Squared Error* (MMSE).
@@ -446,6 +477,9 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             Default: 0
         n_float_taps: Number of taps per floating tap group (``Nwf``).
             Default: 0
+        noise_vars: Include the solution's noise variance breakdown (``mmse_noise_vars()``) when True.
+            (Searches over many candidates can skip it, and calculate it for the winner alone.)
+            Default: True
 
     Returns:
         A dictionary containing
@@ -476,6 +510,9 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         3. With floating taps, their positions are chosen at each sampling time (``float_tap_cols()``), and the
         returned "rx_taps" span all ``Nw`` positions, w/ zeros at those unused. Their positions are returned in
         the "rx_tap_cols" key. (``w_min``/``w_max`` also span all ``Nw`` positions.)
+
+        4. The "rx_taps_raw" key holds the Rx FFE tap weights before ``norm_mode``'s normalization,
+        as ``mmse_noise_vars()`` wants them.
     """
 
     assert Nw == 0 or Nw > dw, ValueError(
@@ -563,11 +600,7 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["dfe_tap_weights"] = b_lim
                 rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
                 rslt["cursor_ix"] = ts_ix
-                rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn(calc_Hffe(theNoiseCalc.f, theNoiseCalc.Tb, w_full, Nw - dw - 1, hasCurs=True)))
                 rslt["varISI"] = varISI
-                rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
-                rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
-                rslt["varN"] = theNoiseCalc.variance(theNoiseCalc.Srn)
                 rslt["quant_step"] = theNoiseCalc.quant_step_size  # From `Rn()`, above.
                 # DEBUGGING:
                 rslt["h"] = h
@@ -584,8 +617,11 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                 rslt["Rn"] = Rn
         rslt["n_ts_evals"] = n_ts_evals
         theNoiseCalc.ts_ix = rslt["cursor_ix"]  # Leave the noise calculator at the chosen sampling time.
-        # Apply desired normalization to tap weights.
         w = rslt["rx_taps"]
+        rslt["rx_taps_raw"] = w
+        if noise_vars:
+            rslt.update(mmse_noise_vars(theNoiseCalc, w, dw))
+        # Apply desired normalization to tap weights.
         match norm_mode:
             case NormMode.P8023dj:
                 w_lim = w  # Done above as part of optimization loop.
@@ -622,11 +658,10 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
         rslt["vic_pulse_resp"] = vic_pr  # Note: Does not include Rx FFE/DFE!
         rslt["h"] = h
         rslt["cursor_ix"] = curs_ix
-        rslt["varTx"] = theNoiseCalc.variance(theNoiseCalc.Stn())
+        rslt["rx_taps_raw"] = None  # (No Rx FFE.)
         rslt["varISI"] = 0
-        rslt["varJ"] = theNoiseCalc.variance(theNoiseCalc.Sjn)
-        rslt["varXT"] = sum([theNoiseCalc.variance(theNoiseCalc.Sxn(pr)) for pr in theNoiseCalc.agg_pulse_resps])
-        rslt["varN"] = theNoiseCalc.variance(theNoiseCalc.Srn)
+        if noise_vars:
+            rslt.update(mmse_noise_vars(theNoiseCalc))
         rslt["quant_step"] = theNoiseCalc.quant_step_size  # From `Rn()`, above.
 
     return rslt
