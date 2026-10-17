@@ -15,7 +15,7 @@ from typing     import Any, Optional
 import numpy as np
 # pylint: disable=redefined-builtin
 from numpy import (
-    argmax, array, array_equal, concatenate, dot, einsum, identity, ix_,
+    arange, argmax, array, array_equal, concatenate, dot, einsum, identity, ix_,
     log10, maximum, minimum, ones, pad, sqrt, sum, vectorize, where, zeros)
 from numpy.linalg import lstsq, solve as np_solve
 from numpy.typing import NDArray
@@ -559,20 +559,24 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
             dh, first_samp = divmod(ts_ix, nspui)  # `dh`: number of pre-cursor samples in `h`
             h = vic_pr[first_samp::nspui].copy()
             d = dh + dw
-            first_col = concatenate((h, zeros(Nw - 1)))
-            H_all = convolution_matrix(first_col, Nw, mode='full')[:len(first_col)]
+            # The pulse response's (full) convolution matrix, `H_all[n, i] = h[n - i]`, is never formed:
+            # `H_all.T @ H_all` is Toeplitz, w/ `h`'s autocorrelation on its diagonals; and the solutions
+            # need only its cursor's and DFE taps' rows, `H_rows` (rows `d .. d + Nb`).
+            n_h = len(h)
+            r_hh = array([h[:n_h - k] @ h[k:] if k < n_h else 0.0 for k in range(Nw)])
+            row_ixs = (d + arange(Nb + 1))[:, None] - arange(Nw)[None, :]
+            H_rows = where((row_ixs >= 0) & (row_ixs < n_h), h[row_ixs.clip(0, n_h - 1)], 0.0)
             Rn = theNoiseCalc.Rn()[:Nw]
-            R_all = H_all.T @ H_all + toeplitz(Rn) / varX
+            R_all = toeplitz(r_hh) + toeplitz(Rn) / varX
 
             if _n_fix < Nw and n_float_groups:
                 cols = float_tap_cols(
                     _n_fix, Nw, n_float_groups, n_float_taps,
-                    partial(_mmse_fom_batch, H_all, R_all, d=d, Nb=Nb, dw=dw, b_min=b_min, b_max=b_max,
+                    partial(_mmse_fom_batch, H_rows, R_all, d=0, Nb=Nb, dw=dw, b_min=b_min, b_max=b_max,
                             w_min=w_min, w_max=w_max, norm_mode=norm_mode, varX=varX, Rlm=Rlm, L=L))
             else:
                 cols = list(range(_n_fix))
-            # (`_mmse_solve()` needs only the cursor's and DFE taps' rows.)
-            sol = _mmse_solve(H_all[d: d + 1 + Nb][:, cols], R_all[ix_(cols, cols)], 0, Nb, dw,
+            sol = _mmse_solve(H_rows[:, cols], R_all[ix_(cols, cols)], 0, Nb, dw,
                               b_min, b_max, w_min[cols], w_max[cols], norm_mode, varX, Rlm, L)
             fom = sol["fom"]
 
@@ -581,7 +585,8 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                     if side not in side_best or fom > side_best[side][0]:
                         side_best[side] = (fom, ts_ofst)
             if fom > max_fom:
-                H = H_all[:, cols]
+                first_col = concatenate((h, zeros(Nw - 1)))
+                H = convolution_matrix(first_col, Nw, mode='full')[:len(first_col), cols]
                 w_lim = sol["w_lim"]
                 b_lim = sol["b_lim"]
                 w_full = zeros(Nw)

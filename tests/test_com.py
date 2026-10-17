@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import skrf as rf
+from scipy.linalg import toeplitz
 
 import pychopmarg.optimize as optimize
 from pychopmarg.com import COM
@@ -142,6 +143,15 @@ def test_fom_and_com_tx_noise_agree(example2_com):
     com = example2_com
     scale = com.mmse_rslt["rx_taps"][com.nRxPreTaps] / com.rx_taps[com.nRxPreTaps]
     assert com.fom_rslts["sigma_Tx"] == pytest.approx(scale * com.com_rslts["sigma_Tx"], rel=1e-6)
+
+
+def test_mmse_r_is_h_t_h_plus_noise(example2_com):
+    """`mmse()` forms (178A-33)'s `R = H.T @ H + Rnn / varX` w/o the pulse response's convolution matrix, `H`:
+    `H.T @ H` is Toeplitz, w/ the pulse response's autocorrelation on its diagonals."""
+    r = example2_com.mmse_rslt
+    cols = r["rx_tap_cols"]
+    H, Rnn = r["H"], toeplitz(r["Rn"])[np.ix_(cols, cols)]
+    assert np.allclose(r["R"], H.T @ H + Rnn / r["varX"], rtol=1e-12, atol=0)
 
 
 def test_opt_eq_noise_vars_are_the_winners(example2_com):
