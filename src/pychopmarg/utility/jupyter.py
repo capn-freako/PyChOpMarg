@@ -13,21 +13,31 @@ from pathlib      import Path
 import subprocess
 from typing         import Optional
 
+from pychopmarg.common import PROCS_ENV_VAR
 
-def execute_notebook(notebook_path: Path) -> None:
+
+def execute_notebook(notebook_path: Path, n_procs: Optional[int] = None) -> None:
     """
     Executes a Jupyter notebook.
 
     Args:
         notebook_path: Path to the notebook.
+
+    Keyword Args:
+        n_procs: Number of processes for each EQ optimization in the notebook; 0 for one per CPU.
+            (Passed to its kernel in the ``PYCHOPMARG_PROCS`` environment variable; see ``COM.n_procs``.)
+            Default: None (Leave the environment as is.)
     """
 
     if not os.path.exists(notebook_path):
         raise FileNotFoundError(f"The notebook {notebook_path} was not found!")
 
+    env = None
+    if n_procs is not None:
+        env = {**os.environ, PROCS_ENV_VAR: str(n_procs)}
     subprocess.run([
         'jupyter', 'nbconvert', '--to', 'notebook', '--execute', '--inplace', notebook_path],
-        check=True)
+        check=True, env=env)
 
 
 def convert_notebook_to_html(notebook_path: Path, results_path: Optional[Path] = None) -> None:

@@ -59,11 +59,16 @@ def cli(ctx):
 # @cli.command(context_settings=dict(help_option_names=["-h", "--help"]))
 @cli.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.argument("notebook-file", type=click.Path(exists=True))
-def run_notebook(notebook_file: Path):
+@click.option("--procs", "-p", type=click.IntRange(min=0), default=None,
+              help="Processes per EQ optimization (0: one per CPU). Default: $PYCHOPMARG_PROCS, else 1.")
+def run_notebook(notebook_file: Path, procs: Optional[int] = None):
     """
     Run a Jupyter notebook in place w/o opening a browser tab.
+
+    With --procs, each COM calculation's EQ optimization runs in that many processes,
+    when it's a full search (no "Local Search"), giving the same results, faster.
     """
-    execute_notebook(notebook_file)
+    execute_notebook(notebook_file, n_procs=procs)
 
 
 # @cli.command(context_settings=dict(help_option_names=["-h", "--help"]))

@@ -13,7 +13,8 @@ import skrf as rf
 from scipy.linalg import toeplitz
 
 import pychopmarg.optimize as optimize
-from pychopmarg.com import COM
+from pychopmarg.com import COM, default_n_procs
+from pychopmarg.common import PROCS_ENV_VAR
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.excel import get_com_params
 from pychopmarg.utility import sdd_21
@@ -596,3 +597,20 @@ def test_timing_search_range_as_matlab_sample_adjustment(example2_com):
     assert -3 <= rslt["cursor_ix"] - peak <= 5
     wide = optimize.mmse(*args, ts_range=(-32, 32))
     assert wide["n_ts_evals"] == 65 and wide["fom"] >= optimize.mmse(*args)["fom"]
+
+
+@pytest.mark.parametrize("val, n_procs", [(None, 1), ("", 1), ("4", 4), ("0", 0), (" 2 ", 2)])
+def test_default_n_procs_from_environment(monkeypatch, val, n_procs):
+    "``COM.n_procs`` defaults to ``PYCHOPMARG_PROCS`` (as set by ``run-notebook --procs``), else 1."
+    if val is None:
+        monkeypatch.delenv(PROCS_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(PROCS_ENV_VAR, val)
+    assert default_n_procs() == n_procs
+
+
+@pytest.mark.parametrize("val", ["-1", "four", "2.5"])
+def test_default_n_procs_ignores_bad_values(monkeypatch, val):
+    monkeypatch.setenv(PROCS_ENV_VAR, val)
+    with pytest.warns(UserWarning, match=PROCS_ENV_VAR):
+        assert default_n_procs() == 1

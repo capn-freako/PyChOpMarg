@@ -33,7 +33,7 @@ from numpy             import array, arange
 from scipy.signal       import fftconvolve  # type: ignore
 
 from pychopmarg.common import (
-    PI, TWOPI, Cvec, Rvec, Cmat, OptMode,
+    PI, PROCS_ENV_VAR, TWOPI, Cvec, Rvec, Cmat, OptMode,
     COMChnl, COMNtwk, ChnlSet, ChnlGrpName, ChnlSetName)
 from pychopmarg.config.template    import COMParams
 from pychopmarg.devmodel import (
@@ -44,6 +44,24 @@ from pychopmarg.optimize import NormMode, mmse, mmse_noise_vars, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
     delta_pmf, mk_combs, calc_Hffe, ffe_phase_matrix, calc_Hctle, calc_H21, calc_hJ, loc_curs, calc_vtf, interp_vtf)
+
+
+def default_n_procs() -> int:
+    """
+    The default number of EQ optimization processes (``COM.n_procs``): the value of the ``PYCHOPMARG_PROCS``
+    environment variable (0 for one per CPU), if set to a non-negative integer; otherwise, 1 (a serial search).
+    """
+    val = os.environ.get(PROCS_ENV_VAR, "").strip()
+    if not val:
+        return 1
+    try:
+        n_procs = int(val)
+        if n_procs < 0:
+            raise ValueError
+    except ValueError:
+        warnings.warn(f"Ignoring {PROCS_ENV_VAR}={val!r}: not a non-negative integer.", stacklevel=2)
+        return 1
+    return n_procs
 
 
 _WORKER_COM: Optional["COM"] = None  # This worker process's copy of the `COM` (see `COM.opt_eq()`'s `n_procs`).
@@ -152,7 +170,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.gDC: float = 0.0           #: Choices are in `com_params.g_DC`.
         self.gDC2: float = 0.0          #: Choices are in `com_params.g_DC2`.
         self._rx_ffe_phase_matrix: Optional[Cmat] = None  # (See `rx_ffe_phase_matrix`.)
-        self.n_procs: int = 1  #: Number of processes for EQ optimization; 0 for one per CPU. (See `opt_eq()`.)
+        #: Number of processes for EQ optimization; 0 for one per CPU. (See `opt_eq()` and `default_n_procs()`.)
+        self.n_procs: int = default_n_procs()
         self._Htx_last: Optional[tuple[int, Cvec]] = None  # The last Tx FFE frequency response (see `Htx()`).
         self._tx_phase_matrix: Optional[Cmat] = None  # Tx FFE phase matrix, once calculated (see `Htx()`).
         self._next_pr_cache: tuple[Optional[Cvec], dict[int, tuple[Cvec, Rvec]]] = (None, {})  # (`gen_pulse_resps()`)
@@ -1587,7 +1606,8 @@ def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     opt_mode: OptMode = OptMode.MMSE,
     norm_mode: NormMode = NormMode.P8023dj,
     unit_amp: bool = True,
-    dbg_dict: Optional[dict[str, Any]] = None
+    dbg_dict: Optional[dict[str, Any]] = None,
+    n_procs: Optional[int] = None
 ) -> dict[ChnlGrpName, dict[ChnlSetName, COM]]:
     """
     Run COM on a list of grouped channel sets.
@@ -1606,6 +1626,8 @@ def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         dbg_dict: Optional dictionary into which debugging values may be stashed,
             for later analysis.
             Default: None
+        n_procs: Number of processes for each EQ optimization; 0 for one per CPU. (See ``COM.opt_eq()``.)
+            Default: None (``default_n_procs()``)
 
     Returns:
         2D dictionary indexed by channel group name, then by channel set name,
@@ -1620,6 +1642,8 @@ def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             theCOM = COM(com_params, ch_set, debug=True)
         else:
             theCOM = COM(com_params, ch_set)
+        if n_procs is not None:
+            theCOM.n_procs = n_procs
 
         # Calling the object calculates the COM value, as well as many other intermediate results.
         theCOM(opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp, dbg_dict=dbg_dict)
