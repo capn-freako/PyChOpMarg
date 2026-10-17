@@ -51,7 +51,7 @@ def mk_combs(trips: list[tuple[float, float, float]]) -> list[Rvec]:
     for trip in trips:
         if trip[2]:  # non-zero step?
             # (Not `arange(min, max + step, step)`, which rounding can extend past `max`: [0:0.1:0.2] => 0, ..., 0.3.)
-            n_vals = int(round((trip[1] - trip[0]) / trip[2])) + 1
+            n_vals = int(np.rint((trip[1] - trip[0]) / trip[2])) + 1
             ranges.append(list(trip[0] + trip[2] * np.arange(n_vals)))
         else:
             ranges.append([0.0])  # type: ignore

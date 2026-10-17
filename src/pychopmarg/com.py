@@ -1555,7 +1555,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         pQ = pDelta
         if quant_step:
             for w in rx_taps:
-                n = int(round(abs(w) * quant_step / 2 / ystep))
+                n = int(np.rint(abs(w) * quant_step / 2 / ystep))
                 pw = np.zeros(npts)
                 pw[npts // 2 - n: npts // 2 + n + 1] = 1 / (2 * n + 1)
                 pQ = _conv_pmfs(pQ, pw)
