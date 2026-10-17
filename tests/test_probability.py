@@ -65,6 +65,27 @@ class TestDeltaPmf:
         assert p[np.isclose(self.Y, -0.5)] == pytest.approx(0.25)
         assert p.sum() == pytest.approx(1.0)
 
+    def test_is_convolution_of_per_sample_pmfs(self):
+        """(93A-40): the convolution of each sample's PMF, equiprobable over its L levels' (93A-39) nonzero shifts.
+        (Its convolution is carried out only over the growing support of the PMF, which mustn't lose probability.)"""
+        rng = np.random.default_rng(0)
+        y = np.arange(-500, 501) * 0.001
+        h = rng.normal(0, 0.02, 30)
+        h[[3, 17]] = 0.0002  # Too small to shift: skipped.
+        L = 4
+        expected = np.zeros(len(y))
+        expected[500] = 1.0
+        for hn in h:
+            shifts = [s for s in np.round((np.arange(L) * 2 / (L - 1) - 1) * hn / 0.001).astype(int) if s]
+            if shifts:
+                kernel = np.zeros(2 * max(map(abs, shifts)) + 1)
+                for s in shifts:
+                    kernel[len(kernel) // 2 + s] += 1 / len(shifts)
+                expected = np.convolve(expected, kernel, mode="same")
+        _, p = delta_pmf(h, L=L, y=y)
+        assert np.allclose(p, expected, rtol=0, atol=1e-15)
+        assert p.sum() == pytest.approx(1.0)
+
     def test_support_beyond_grid_raises(self):
         """Support beyond the grid is an error. (`np.roll()` once silently wrapped that probability around to the
         grid's opposite edge, corrupting COM's interference PMFs whenever they outgrew it.)"""
