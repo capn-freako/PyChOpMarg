@@ -222,6 +222,45 @@ def test_jitter_noise_variance_per_178a_23(example2_com, phase):
     assert nc.variance(nc.Sjn) == pytest.approx(nc.varX * (nc.Add**2 + nc.sigma_Rj**2) * (hJ**2).sum(), rel=1e-3)
 
 
+def test_parallel_eq_search_is_the_serial_one():
+    """With `n_procs` > 1 (and no local search), `opt_eq()` evaluates the EQ candidates in worker processes, and
+    gives exactly the serial search's results."""
+    cp = dataclasses.replace(get_com_params(CFG), local_search=0, g_DC=[-12.0, -8.0, -4.0], g_DC2=[-3.0, -1.5, 0.0])
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [CHNL / "example2_FEXT1.s4p"],
+              "NEXT": [CHNL / "example2_NEXT1.s4p"]}
+    rslts = []
+    for n_procs in (1, 2):
+        with contextlib.redirect_stdout(io.StringIO()):
+            com = COM(cp, ch_set)
+            assert com.opt_eq(n_procs=n_procs)
+        rslts.append(com)
+    serial, parallel = rslts
+    assert parallel.n_fom_evals == serial.n_fom_evals == 9
+    assert (parallel.gDC, parallel.gDC2, parallel.tx_ix) == (serial.gDC, serial.gDC2, serial.tx_ix)
+    assert np.array_equal(parallel.rx_taps, serial.rx_taps)
+    assert set(parallel.fom_rslts) == set(serial.fom_rslts)
+    for k, v in serial.fom_rslts.items():
+        assert np.array_equal(parallel.fom_rslts[k], v) if isinstance(v, (np.ndarray, list)) else \
+            parallel.fom_rslts[k] == v, k
+
+
+def test_parallel_eq_search_needs_a_full_search(monkeypatch):
+    "With a local search, the candidates aren't independent; so, `opt_eq()` searches serially, w/ a warning."
+    com = COM(get_com_params(CFG), {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []})
+    assert com.com_params.local_search
+    monkeypatch.setattr(com, "_parallel_foms", lambda *_: pytest.fail("Searched in parallel!"))
+    monkeypatch.setattr(com, "calc_Hctf", lambda gDC, gDC2: (gDC, gDC2))
+
+    def fake_calc_fom(tx_ix, Hctf, **_):
+        com.fom_rslts = {k: np.ones(com.nRxTaps) for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'vic_pulse_resp')}
+        com.fom_rslts.update({k: 0 for k in ('cursor_ix', 'vic_peak_loc', 'As', 'varTx', 'varISI', 'varJ', 'varXT', 'varN')})
+        return -sum(np.abs(Hctf))
+
+    monkeypatch.setattr(com, "calc_fom", fake_calc_fom)
+    with pytest.warns(UserWarning, match="EQ optimization is serial"):
+        assert com.opt_eq(n_procs=4)
+
+
 def test_local_search_follows_matlab(monkeypatch):
     """With `local_search` > 0, `opt_eq()` visits exactly the (g_DC, g_DC_HP, Tx FFE) candidates that MATLAB COM's
     `optimize_fom()` loop does, under its `OptFom_Local_Search()` rule, and picks the same one, for a synthetic FOM."""

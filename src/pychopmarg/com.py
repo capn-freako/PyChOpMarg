@@ -21,6 +21,8 @@ ToDo:
 
 from dataclasses import replace
 from importlib.metadata import version
+import multiprocessing
+import os
 from pathlib import Path
 from typing  import Any, Optional, cast
 import warnings
@@ -42,6 +44,24 @@ from pychopmarg.optimize import NormMode, mmse, mmse_noise_vars, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
     delta_pmf, mk_combs, calc_Hffe, ffe_phase_matrix, calc_Hctle, calc_H21, calc_hJ, loc_curs, calc_vtf, interp_vtf)
+
+
+_WORKER_COM: Optional["COM"] = None  # This worker process's copy of the `COM` (see `COM.opt_eq()`'s `n_procs`).
+
+
+def _init_worker(com: "COM") -> None:
+    "Keep this worker process's copy of the ``COM``, for ``_worker_foms()``."
+    global _WORKER_COM  # pylint: disable=global-statement
+    _WORKER_COM = com
+
+
+def _worker_foms(task: tuple[float, float, list[int], dict[str, Any]]) -> list[float]:
+    "The FOM of each of the given Tx FFE candidates (``calc_fom()``), for one CTLE setting, in a worker process."
+    gDC, gDC2, tx_ixs, kwargs = task
+    com = _WORKER_COM
+    assert com is not None, RuntimeError("Worker process not initialized!")
+    Hctf = com.calc_Hctf(gDC, gDC2)
+    return [com.calc_fom(tx_ix, Hctf, noise_vars=False, **kwargs) for tx_ix in tx_ixs]
 
 
 def _conv_pmfs(p1: Rvec, p2: Rvec) -> Rvec:
@@ -132,6 +152,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.gDC: float = 0.0           #: Choices are in `com_params.g_DC`.
         self.gDC2: float = 0.0          #: Choices are in `com_params.g_DC2`.
         self._rx_ffe_phase_matrix: Optional[Cmat] = None  # (See `rx_ffe_phase_matrix`.)
+        self.n_procs: int = 1  #: Number of processes for EQ optimization; 0 for one per CPU. (See `opt_eq()`.)
         self._Htx_last: Optional[tuple[int, Cvec]] = None  # The last Tx FFE frequency response (see `Htx()`).
         self._tx_phase_matrix: Optional[Cmat] = None  # Tx FFE phase matrix, once calculated (see `Htx()`).
         self._next_pr_cache: tuple[Optional[Cvec], dict[int, tuple[Cvec, Rvec]]] = (None, {})  # (`gen_pulse_resps()`)
@@ -1164,11 +1185,33 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
         return fom
 
-    def opt_eq(  # pylint: disable=too-many-locals,too-many-branches
+    def _parallel_foms(
+        self, cands: list[tuple[int, float, float, int]], n_procs: int, fom_kwargs: dict[str, Any]
+    ) -> list[float]:
+        """
+        The FOM of each EQ candidate, ``(i_gDC2, gDC, gDC2, tx_ix)``, calculated in ``n_procs`` worker processes.
+
+        Notes:
+            1. The candidates are dealt out in runs of those sharing a CTLE setting, about four per worker;
+            so, each run's CTLE response is calculated once, and its NEXT pulse responses are reused.
+        """
+        chunk = max(1, -(-len(cands) // (4 * n_procs)))
+        tasks: list[tuple[float, float, list[int], dict[str, Any]]] = []
+        for _, gDC, gDC2, tx_ix in cands:
+            if tasks and tasks[-1][:2] == (gDC, gDC2) and len(tasks[-1][2]) < chunk:
+                tasks[-1][2].append(tx_ix)
+            else:
+                tasks.append((gDC, gDC2, [tx_ix], fom_kwargs))
+        n_procs = min(n_procs, len(tasks))
+        with multiprocessing.get_context("spawn").Pool(n_procs, initializer=_init_worker, initargs=(self,)) as pool:
+            return [fom for foms in pool.map(_worker_foms, tasks, chunksize=1) for fom in foms]
+
+    def opt_eq(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
         self,
         opt_mode: Optional[OptMode] = None,
         norm_mode: Optional[NormMode] = None,
-        unit_amp: Optional[bool] = None
+        unit_amp: Optional[bool] = None,
+        n_procs: Optional[int] = None
     ) -> bool:
         """
         Find and set the optimum values for the linear equalization parameters:
@@ -1183,6 +1226,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             unit_amp: Enforce unit pulse response amplitude when True.
                 (For comparing ``przf()`` results to ``mmse()`` results.)
                 Default: None (i.e. - Use ``self.unit_amp``.)
+            n_procs: Number of processes to evaluate EQ candidates in; 0 for one per CPU. (See Note 5.)
+                Default: None (i.e. - Use ``self.n_procs``.)
 
         Returns:
             True if no errors encountered; False otherwise.
@@ -1203,6 +1248,13 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             4. With ``com_params.ts_srch_mode`` == "middle", each candidate's cursor timing search
             works outward from the pulse peak, as MATLAB COM's (see ``optimize.mmse()``);
             with ``com_params.ts_track`` also, from the best cursor offset so far, after a full search for the first.
+
+            5. With ``n_procs`` > 1, the candidates' FOMs are calculated in that many worker processes,
+            each w/ its own copy of this instance; then, the winner's results are recalculated here.
+            The outcome is identical to a serial search's. Since that needs the candidates to be independent,
+            it's done only w/o a local search (``com_params.local_search`` = 0); otherwise, the search is serial.
+            The workers are spawned; so, a script using this must guard its top level code,
+            w/ ``if __name__ == "__main__":``.
         """
 
         # Honor any mode overrides.
@@ -1210,6 +1262,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         norm_mode = norm_mode or self.norm_mode
         if unit_amp is None:  # Don't try the more Pythonic syntax above; it doesn't work for Boolean values.
             unit_amp = self.unit_amp
+        if n_procs is None:
+            n_procs = self.n_procs
+        n_procs = n_procs or os.cpu_count() or 1
 
         cp = self.com_params
         local_search = cp.local_search
@@ -1235,45 +1290,71 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                         return True
             return i_gDC > 0 and abs(i_gDC2 - best['i_gDC2']) > local_search
 
-        # Run the nested optimization loops, keeping the best candidate's results.
+        def record(i_gDC2: int, gDC: float, gDC2: float, tx_ix: int) -> dict[str, Any]:
+            "The results the last ``calc_fom()`` left behind, for the given candidate."
+            rslts = self.fom_rslts
+            return {
+                'gDC2': gDC2, 'gDC': gDC, 'tx_ix': tx_ix,
+                'i_gDC2': i_gDC2, 'tx_grid_ixs': self._tx_grid_ixs[tx_ix],
+                **{k: rslts[k] for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'cursor_ix', 'As',
+                                         'varTx', 'varISI', 'varJ', 'varXT', 'varN', 'vic_pulse_resp')},
+                'mse': rslts.get('mse', 0),
+                # Everything `calc_fom()` leaves behind for this candidate, overwritten by later ones;
+                # notably its MMSE noise model, which `calc_noise()` takes the Tx noise from.
+                'fom_rslts': dict(rslts),
+                'theNoiseCalc': getattr(self, 'theNoiseCalc', None),
+                'mmse_rslt': getattr(self, 'mmse_rslt', None),
+            }
+
+        fom_kwargs: dict[str, Any] = {"opt_mode": opt_mode, "norm_mode": norm_mode, "unit_amp": unit_amp}
         fom_max = -1000.0
         best: Optional[dict[str, Any]] = None
         self.n_fom_evals = 0  # pylint: disable=attribute-defined-outside-init
-        for i_gDC, _gDC in enumerate(cp.g_DC):
-            for i_gDC2, _gDC2 in enumerate(cp.g_DC2):
-                _Hctle: Optional[Cvec] = None
-                for _tx_ix in tx_ixs:
-                    if skip(i_gDC, i_gDC2, _tx_ix, best):
-                        continue
-                    if _Hctle is None:
-                        _Hctle = self.calc_Hctf(_gDC, _gDC2)
-                    ts_window = local_search if middle else 0
-                    ts_center = 0
-                    if middle and cp.ts_track:
-                        if best is None:
-                            ts_window = 0
-                        else:
-                            ts_center = int(best['fom_rslts']['cursor_ix'] - best['fom_rslts']['vic_peak_loc'])
-                    fom = self.calc_fom(
-                        _tx_ix, _Hctle,
-                        opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp,
-                        ts_window=ts_window, ts_center=ts_center, noise_vars=False)
-                    self.n_fom_evals += 1
-                    if fom > fom_max:
-                        fom_max = fom
-                        rslts = self.fom_rslts
-                        best = {
-                            'gDC2': _gDC2, 'gDC': _gDC, 'tx_ix': _tx_ix,
-                            'i_gDC2': i_gDC2, 'tx_grid_ixs': self._tx_grid_ixs[_tx_ix],
-                            **{k: rslts[k] for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'cursor_ix', 'As',
-                                                     'varTx', 'varISI', 'varJ', 'varXT', 'varN', 'vic_pulse_resp')},
-                            'mse': rslts.get('mse', 0),
-                            # Everything `calc_fom()` leaves behind for this candidate, overwritten by later ones;
-                            # notably its MMSE noise model, which `calc_noise()` takes the Tx noise from.
-                            'fom_rslts': dict(rslts),
-                            'theNoiseCalc': getattr(self, 'theNoiseCalc', None),
-                            'mmse_rslt': getattr(self, 'mmse_rslt', None),
-                        }
+        if n_procs > 1 and local_search:
+            warnings.warn(f"EQ optimization is serial: parallel search ({n_procs} processes) "
+                          f"needs a full search (`local_search` = 0, not {local_search}).", stacklevel=2)
+        if n_procs > 1 and not local_search:
+            # Every candidate, in the serial search's order, w/ its FOM calculated in the worker processes.
+            # (W/o a local search, the timing search is full, so independent of the best so far.)
+            cands = [(i_gDC2, _gDC, _gDC2, _tx_ix)
+                     for _gDC in cp.g_DC for i_gDC2, _gDC2 in enumerate(cp.g_DC2) for _tx_ix in tx_ixs]
+            foms = self._parallel_foms(cands, n_procs, {**fom_kwargs, "ts_window": 0, "ts_center": 0})
+            self.n_fom_evals = len(cands)
+            winner = None
+            for cand, fom in zip(cands, foms):
+                if fom > fom_max:  # (The first of any equal ones, as the serial search.)
+                    fom_max, winner = fom, cand
+            if winner is not None:  # Recalculate the winner's results, here.
+                i_gDC2, _gDC, _gDC2, _tx_ix = winner
+                fom = self.calc_fom(_tx_ix, self.calc_Hctf(_gDC, _gDC2), **fom_kwargs,
+                                    ts_window=0, ts_center=0, noise_vars=False)
+                assert fom == fom_max, RuntimeError(
+                    f"The winning EQ's FOM ({fom} dB) differs from its worker's ({fom_max} dB)!")
+                best = record(i_gDC2, _gDC, _gDC2, _tx_ix)
+        else:
+            # Run the nested optimization loops, keeping the best candidate's results.
+            for i_gDC, _gDC in enumerate(cp.g_DC):
+                for i_gDC2, _gDC2 in enumerate(cp.g_DC2):
+                    _Hctle: Optional[Cvec] = None
+                    for _tx_ix in tx_ixs:
+                        if skip(i_gDC, i_gDC2, _tx_ix, best):
+                            continue
+                        if _Hctle is None:
+                            _Hctle = self.calc_Hctf(_gDC, _gDC2)
+                        ts_window = local_search if middle else 0
+                        ts_center = 0
+                        if middle and cp.ts_track:
+                            if best is None:
+                                ts_window = 0
+                            else:
+                                ts_center = int(best['fom_rslts']['cursor_ix'] - best['fom_rslts']['vic_peak_loc'])
+                        fom = self.calc_fom(
+                            _tx_ix, _Hctle, **fom_kwargs,
+                            ts_window=ts_window, ts_center=ts_center, noise_vars=False)
+                        self.n_fom_evals += 1
+                        if fom > fom_max:
+                            fom_max = fom
+                            best = record(i_gDC2, _gDC, _gDC2, _tx_ix)
 
         # Check for error and save the best results.
         if best is None:
