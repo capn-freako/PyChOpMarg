@@ -167,6 +167,24 @@ def test_noise_calc_cache_follows_its_inputs(example2_com):
     assert example2_com.theNoiseCalc.variance(example2_com.theNoiseCalc.Srn) == var_rn  # (The original's intact.)
 
 
+def test_fext_after_next_keeps_tx_eq():
+    """Only NEXT aggressors' pulse responses lack the Tx EQ, whatever the channel order. (`import_s32p()` interleaves
+    NEXT and FEXT aggressors; every channel after the first NEXT once lost its Tx EQ.)"""
+    cp = dataclasses.replace(get_com_params(CFG), c0_min=0.54)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(cp, {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [CHNL / "example2_FEXT1.s4p"],
+                       "NEXT": [CHNL / "example2_NEXT1.s4p"]})
+    tx_ix = com.num_tx_combs - 1
+    assert not np.allclose(com._tx_combs[tx_ix], 0)  # (Else, this test can't tell.)  pylint: disable=protected-access
+    _, fext, next_ = com.chnls
+    kwargs = {"Hctf": com.calc_Hctf(cp.g_DC[0], cp.g_DC2[0]), "tx_ix": tx_ix, "rx_taps": com.null_rx_ffe,
+              "dfe_taps": com.empty_array}
+    in_order = com.gen_pulse_resps(chnls=[fext, next_], **kwargs)
+    next_first = com.gen_pulse_resps(chnls=[next_, fext], **kwargs)
+    assert np.array_equal(in_order[0], next_first[1])  # FEXT
+    assert np.array_equal(in_order[1], next_first[0])  # NEXT
+
+
 def test_tx_noise_pulse_has_the_signals_phase(example2_com):
     """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.
     (It was once formed w/ a causal moving sum, which delayed it ~half a UI.) Here, w/ no Tx FFE, it's the victim's

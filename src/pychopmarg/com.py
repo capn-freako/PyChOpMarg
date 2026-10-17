@@ -917,9 +917,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         pulse_resps = []
         for (_, ntype), H21 in chnls:
             if apply_eq:
-                if ntype == 'NEXT':
-                    tx_ix = 0
-                pr = self.pulse_resp(self.H(H21, tx_ix, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
+                # NEXT aggressors have no Tx EQ. (Only they: `import_s32p()` interleaves NEXT and FEXT aggressors.)
+                ix = 0 if ntype == 'NEXT' else tx_ix
+                pr = self.pulse_resp(self.H(H21, ix, Hctf=Hctf, rx_taps=rx_taps, dfe_taps=dfe_taps))
             else:  # Unequalized, but w/ the Tx and Rx filters (as MATLAB COM's `uneq_pulse_response`).
                 pr = self.pulse_resp(self.Ht * H21 * self.Hr)
 
