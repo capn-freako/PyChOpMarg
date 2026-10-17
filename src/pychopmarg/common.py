@@ -31,6 +31,10 @@ COMChnl: TypeAlias = tuple[COMNtwk, Cvec]
 PI    = math.pi     #: Value of Pi (`math.pi`, a plain float; `np.pi` made autodoc barf)
 TWOPI = 2.0 * PI    #: 2 * Pi
 
+#: Environment variable giving the default number of EQ optimization processes (``COM.n_procs``);
+#: set by ``pychopmarg run-notebook --procs``.
+PROCS_ENV_VAR = "PYCHOPMARG_PROCS"
+
 ChnlGrpName: TypeAlias = str  # channel group name
 ChnlSetName: TypeAlias = str  # channel set name (the stem of the thru channel s4p file name)
 ChnlTypName: TypeAlias = str  # channel type name ("thru", "next", or "fext")

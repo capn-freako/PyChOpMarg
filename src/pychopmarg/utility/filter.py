@@ -14,7 +14,7 @@ import warnings
 import numpy as np  # type: ignore
 import skrf  as rf  # type: ignore
 
-from pychopmarg.common import Rvec, Cvec, PI, TWOPI
+from pychopmarg.common import Rvec, Cvec, Cmat, PI, TWOPI
 
 
 def from_dB(x: float) -> float:
@@ -58,7 +58,7 @@ def calc_Hctle(  # pylint: disable=too-many-arguments,too-many-positional-argume
 def calc_Hffe(
     freqs: Rvec, td: float,
     tap_weights: Rvec, n_post: int,
-    hasCurs: bool = False
+    hasCurs: bool = False, phase_matrix: Optional[Cmat] = None
 ) -> Cvec:
     """
     Calculate the voltage transfer function, H(f), for a digital FFE, according to (93A-21).
@@ -72,6 +72,9 @@ def calc_Hffe(
     Keyword Args:
         hasCurs: ``tap_weights`` includes the cursor tap weight when True.
             Default: False (Cursor tap weight will be calculated.)
+        phase_matrix: **F**, below, pre-calculated (``ffe_phase_matrix()``), for the same ``freqs``, ``td``,
+            and number of taps (cursor included).
+            Default: None (Calculate it here.)
 
     Returns:
         The complex voltage transfer function, H(f), for the FFE.
@@ -135,7 +138,28 @@ def calc_Hffe(
     if not hasCurs:
         b0 = 1 - abs(tap_weights).sum()
         bs = np.insert(bs, -n_post, b0)
-    return bs @ np.exp(np.outer(np.arange(len(bs)), -1j * TWOPI * td * freqs))  # 50% perf. improvement
+    if phase_matrix is None:
+        phase_matrix = ffe_phase_matrix(freqs, td, len(bs))
+    return bs @ phase_matrix  # 50% perf. improvement
+
+
+def ffe_phase_matrix(freqs: Rvec, td: float, n_taps: int, tap_ixs: Optional[list[int]] = None) -> Cmat:
+    """
+    The matrix, **F**, of ``calc_Hffe()``: ``exp(-j 2 pi n td f)``, one row per tap, ``n``, one column per ``f``.
+
+    Args:
+        freqs: Frequencies at which to calculate it (Hz).
+        td: Tap delay time (s).
+        n_taps: Number of FFE taps (cursor included).
+
+    Keyword Args:
+        tap_ixs: Only these taps' rows (identical to the full matrix's).
+            Default: None (All ``n_taps`` rows.)
+
+    Returns:
+        The FFE phase matrix.
+    """
+    return np.exp(np.outer(np.arange(n_taps) if tap_ixs is None else tap_ixs, -1j * TWOPI * td * freqs))
 
 
 def calc_Hdfe(freqs: Rvec, td: float, tap_weights: Rvec) -> Cvec:

@@ -10,9 +10,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 import skrf as rf
+from scipy.linalg import toeplitz
 
 import pychopmarg.optimize as optimize
-from pychopmarg.com import COM
+from pychopmarg.com import COM, default_n_procs, run_com
+from pychopmarg.common import PROCS_ENV_VAR
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.excel import get_com_params
 from pychopmarg.utility import sdd_21
@@ -144,6 +146,66 @@ def test_fom_and_com_tx_noise_agree(example2_com):
     assert com.fom_rslts["sigma_Tx"] == pytest.approx(scale * com.com_rslts["sigma_Tx"], rel=1e-6)
 
 
+def test_mmse_r_is_h_t_h_plus_noise(example2_com):
+    """`mmse()` forms (178A-33)'s `R = H.T @ H + Rnn / varX` w/o the pulse response's convolution matrix, `H`:
+    `H.T @ H` is Toeplitz, w/ the pulse response's autocorrelation on its diagonals."""
+    r = example2_com.mmse_rslt
+    cols = r["rx_tap_cols"]
+    H, Rnn = r["H"], toeplitz(r["Rn"])[np.ix_(cols, cols)]
+    assert np.allclose(r["R"], H.T @ H + Rnn / r["varX"], rtol=1e-12, atol=0)
+
+
+def test_opt_eq_noise_vars_are_the_winners(example2_com):
+    """`opt_eq()` skips each candidate's MMSE noise variance breakdown, calculating it for the winner alone
+    (it's ~40% of the search time w/ an 87-tap Rx FFE). That gives the winner's own, as calculated in its search."""
+    com = copy.deepcopy(example2_com)
+    sigmas = {k: com.fom_rslts[k] for k in ('sigma_Tx', 'sigma_J', 'sigma_XT', 'sigma_N')}
+    com.calc_fom(com.tx_ix, com.calc_Hctf(com.gDC, com.gDC2), noise_vars=True)
+    for k, v in sigmas.items():
+        assert v == np.sqrt(com.fom_rslts['var' + k[6:]]), k
+
+
+def test_noise_calc_cache_follows_its_inputs(example2_com):
+    """`NoiseCalc` caches the noise terms independent of the sampling time; reassigning an input clears that cache,
+    and the cached arrays are read-only (so, can't be changed in place behind its back)."""
+    nc = copy.copy(example2_com.theNoiseCalc)
+    var_rn, var_tn = nc.variance(nc.Srn), nc.variance(nc.Stn())
+    with pytest.raises(ValueError):
+        nc.Srn[0] = 0
+    nc.Hctf = 2 * nc.Hctf
+    assert nc.variance(nc.Srn) == pytest.approx(4 * var_rn)
+    assert nc.variance(nc.Stn()) == pytest.approx(4 * var_tn)
+    assert example2_com.theNoiseCalc.variance(example2_com.theNoiseCalc.Srn) == var_rn  # (The original's intact.)
+
+
+def test_fext_after_next_keeps_tx_eq():
+    """Only NEXT aggressors' pulse responses lack the Tx EQ, whatever the channel order. (`import_s32p()` interleaves
+    NEXT and FEXT aggressors; every channel after the first NEXT once lost its Tx EQ.)"""
+    cp = dataclasses.replace(get_com_params(CFG), c0_min=0.54)
+    with contextlib.redirect_stdout(io.StringIO()):
+        com = COM(cp, {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [CHNL / "example2_FEXT1.s4p"],
+                       "NEXT": [CHNL / "example2_NEXT1.s4p"]})
+    tx_ix = com.num_tx_combs - 1
+    assert not np.allclose(com._tx_combs[tx_ix], 0)  # (Else, this test can't tell.)  pylint: disable=protected-access
+    _, fext, next_ = com.chnls
+    kwargs = {"Hctf": com.calc_Hctf(cp.g_DC[0], cp.g_DC2[0]), "tx_ix": tx_ix, "rx_taps": com.null_rx_ffe,
+              "dfe_taps": com.empty_array}
+    in_order = com.gen_pulse_resps(chnls=[fext, next_], **kwargs)
+    next_first = com.gen_pulse_resps(chnls=[next_, fext], **kwargs)
+    assert np.array_equal(in_order[0], next_first[1])  # FEXT
+    assert np.array_equal(in_order[1], next_first[0])  # NEXT
+
+    # NEXT pulse responses are cached for the last CTLE (they're the same for every Tx EQ), read-only.
+    assert next_first[0] is in_order[1]
+    with pytest.raises(ValueError):
+        next_first[0][0] = 0
+    kwargs["Hctf"] = com.calc_Hctf(cp.g_DC[-1], cp.g_DC2[-1])
+    other_ctle = com.gen_pulse_resps(chnls=[next_], **kwargs)[0]
+    assert not np.allclose(other_ctle, next_first[0])
+    com._next_pr_cache = (None, {})  # pylint: disable=protected-access
+    assert np.array_equal(com.gen_pulse_resps(chnls=[next_], **kwargs)[0], other_ctle)
+
+
 def test_tx_noise_pulse_has_the_signals_phase(example2_com):
     """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.
     (It was once formed w/ a causal moving sum, which delayed it ~half a UI.) Here, w/ no Tx FFE, it's the victim's
@@ -169,6 +231,45 @@ def test_jitter_noise_variance_per_178a_23(example2_com, phase):
     ixs = ixs[(ixs >= 1) & (ixs < len(pr) - 1)]
     hJ = (pr[ixs + 1] - pr[ixs - 1]) / 2 * nspui
     assert nc.variance(nc.Sjn) == pytest.approx(nc.varX * (nc.Add**2 + nc.sigma_Rj**2) * (hJ**2).sum(), rel=1e-3)
+
+
+def test_parallel_eq_search_is_the_serial_one():
+    """With `n_procs` > 1 (and no local search), `opt_eq()` evaluates the EQ candidates in worker processes, and
+    gives exactly the serial search's results."""
+    cp = dataclasses.replace(get_com_params(CFG), local_search=0, g_DC=[-12.0, -8.0, -4.0], g_DC2=[-3.0, -1.5, 0.0])
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [CHNL / "example2_FEXT1.s4p"],
+              "NEXT": [CHNL / "example2_NEXT1.s4p"]}
+    rslts = []
+    for n_procs in (1, 2):
+        with contextlib.redirect_stdout(io.StringIO()):
+            com = COM(cp, ch_set)
+            assert com.opt_eq(n_procs=n_procs)
+        rslts.append(com)
+    serial, parallel = rslts
+    assert parallel.n_fom_evals == serial.n_fom_evals == 9
+    assert (parallel.gDC, parallel.gDC2, parallel.tx_ix) == (serial.gDC, serial.gDC2, serial.tx_ix)
+    assert np.array_equal(parallel.rx_taps, serial.rx_taps)
+    assert set(parallel.fom_rslts) == set(serial.fom_rslts)
+    for k, v in serial.fom_rslts.items():
+        assert np.array_equal(parallel.fom_rslts[k], v) if isinstance(v, (np.ndarray, list)) else \
+            parallel.fom_rslts[k] == v, k
+
+
+def test_parallel_eq_search_needs_a_full_search(monkeypatch):
+    "With a local search, the candidates aren't independent; so, `opt_eq()` searches serially, w/ a warning."
+    com = COM(get_com_params(CFG), {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []})
+    assert com.com_params.local_search
+    monkeypatch.setattr(com, "_parallel_foms", lambda *_: pytest.fail("Searched in parallel!"))
+    monkeypatch.setattr(com, "calc_Hctf", lambda gDC, gDC2: (gDC, gDC2))
+
+    def fake_calc_fom(tx_ix, Hctf, **_):
+        com.fom_rslts = {k: np.ones(com.nRxTaps) for k in ('rx_taps', 'pr_samps', 'dfe_tap_weights', 'vic_pulse_resp')}
+        com.fom_rslts.update({k: 0 for k in ('cursor_ix', 'vic_peak_loc', 'As', 'varTx', 'varISI', 'varJ', 'varXT', 'varN')})
+        return -sum(np.abs(Hctf))
+
+    monkeypatch.setattr(com, "calc_fom", fake_calc_fom)
+    with pytest.warns(UserWarning, match="EQ optimization is serial"):
+        assert com.opt_eq(n_procs=4)
 
 
 def test_local_search_follows_matlab(monkeypatch):
@@ -346,6 +447,16 @@ def test_quantization_noise_in_fom_and_com(example2_com, example2_com_quant):
     assert rslts["sigma_Q"] == pytest.approx(np.sqrt((com.rx_taps**2).sum() / 12) * rslts["quant_step"])
 
 
+def test_unequalized_pulse_responses_without_debug():
+    """The victim's unequalized pulse responses (w/ and w/o its packages) are calculated w/o ``debug`` too: they're
+    COM results (MATLAB COM reports the first's peak, ``peak_uneq_pulse_mV``). They once needed ``debug=True``."""
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    plain, dbg = (COM(get_com_params(CFG), ch_set, debug=debug) for debug in (False, True))
+    for attr in ("pulse_resps_noeq", "pulse_resps_nopkg"):
+        assert len(getattr(plain, attr)) == 1 and max(getattr(plain, attr)[0]) > 0, attr
+        assert np.array_equal(getattr(plain, attr)[0], getattr(dbg, attr)[0]), attr
+
+
 def test_com_is_lowest_over_package_test_cases():
     """With several package test cases, COM is the lowest of them, as MATLAB COM, each case evaluated as if alone
     (its own packages and EQ), and the instance keeps the lowest case's results."""
@@ -367,6 +478,8 @@ def test_com_is_lowest_over_package_test_cases():
     assert com.com_params.zp_tx == cases[worst]["zp_tx"]
     assert com.fom_rslts["FOM"] == pytest.approx(
         alone.fom_rslts["FOM"]) if worst == 1 else com.fom_rslts["FOM"] != alone.fom_rslts["FOM"]
+    # The unequalized pulse response (w/ the packages) is the lowest case's too. (It was once the first case's.)
+    assert np.array_equal(com.pulse_resps_noeq[0], alone.pulse_resps_noeq[0]) == (worst == 1)
 
 
 def test_float_tap_cols_greedy_as_matlab():
@@ -496,3 +609,57 @@ def test_timing_search_range_as_matlab_sample_adjustment(example2_com):
     assert -3 <= rslt["cursor_ix"] - peak <= 5
     wide = optimize.mmse(*args, ts_range=(-32, 32))
     assert wide["n_ts_evals"] == 65 and wide["fom"] >= optimize.mmse(*args)["fom"]
+
+
+@pytest.mark.parametrize("val, n_procs", [(None, 1), ("", 1), ("4", 4), ("0", 0), (" 2 ", 2)])
+def test_default_n_procs_from_environment(monkeypatch, val, n_procs):
+    "``COM.n_procs`` defaults to ``PYCHOPMARG_PROCS`` (as set by ``run-notebook --procs``), else 1."
+    if val is None:
+        monkeypatch.delenv(PROCS_ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(PROCS_ENV_VAR, val)
+    assert default_n_procs() == n_procs
+
+
+@pytest.mark.parametrize("val", ["-1", "four", "2.5"])
+def test_default_n_procs_ignores_bad_values(monkeypatch, val):
+    monkeypatch.setenv(PROCS_ENV_VAR, val)
+    with pytest.warns(UserWarning, match=PROCS_ENV_VAR):
+        assert default_n_procs() == 1
+
+
+def test_run_com_parallel_over_channel_sets():
+    """With `n_procs` > 1, `run_com()` runs its channel sets in worker processes, one each at a time, each w/ a serial
+    EQ search (so, w/ the test sheet's local search, too), giving exactly the serial run's results, in order."""
+    cp = get_com_params(CFG)
+    assert cp.local_search  # (This works w/ a local search, unlike the EQ search's own parallelism.)
+    thru = [CHNL / "example2_THRU.s4p"]
+    chnl_sets = [("A", {"THRU": thru, "FEXT": [], "NEXT": []}),
+                 ("B", {"THRU": thru, "FEXT": [CHNL / "example2_FEXT1.s4p"], "NEXT": []}),
+                 ("C", {"THRU": thru, "FEXT": [], "NEXT": [CHNL / "example2_NEXT1.s4p"]})]
+    dbg_dict: dict = {}
+    runs = []
+    for n_procs in (1, 2):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            runs.append(run_com(chnl_sets, cp, dbg_dict=dbg_dict, n_procs=n_procs))
+        assert out.getvalue().splitlines() == ["A : example2_THRU", "B : example2_THRU", "C : example2_THRU"]
+    serial, parallel = runs
+    assert list(parallel) == ["A", "B", "C"]
+    for grp in serial:
+        s, p = serial[grp]["example2_THRU"], parallel[grp]["example2_THRU"]
+        assert p.dbg_dict is dbg_dict
+        assert (p.gDC, p.gDC2, p.tx_ix, p.n_fom_evals) == (s.gDC, s.gDC2, s.tx_ix, s.n_fom_evals)
+        for rslts in ("com_rslts", "fom_rslts"):
+            sr, pr = getattr(s, rslts), getattr(p, rslts)
+            assert set(sr) == set(pr), (grp, rslts)
+            for k, v in sr.items():
+                assert np.array_equal(pr[k], v) if isinstance(v, (np.ndarray, list)) else pr[k] == v, (grp, rslts, k)
+
+
+def test_run_com_one_channel_set_parallelizes_its_eq_search(monkeypatch):
+    "With one channel set, `run_com()`'s `n_procs` goes to that set's EQ search (its own parallelism), in-process."
+    monkeypatch.setattr(COM, "__call__", lambda self, **_: 0.0)
+    with contextlib.redirect_stdout(io.StringIO()):
+        coms = run_com([("A", {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []})], get_com_params(CFG),
+                       n_procs=3)
+    assert coms["A"]["example2_THRU"].n_procs == 3

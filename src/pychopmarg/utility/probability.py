@@ -98,34 +98,38 @@ def delta_pmf(  # pylint: disable=too-many-arguments,too-many-positional-argumen
         dbg_dict.update({"ystep":        ystep})
 
     # Pre-calculated constant values.
-    delta = np.zeros(npts)
     zero_ix = npts // 2
-    delta[zero_ix] = 1.0
     sig_step = 2.0 / (L - 1)
     sig_shifts = (np.arange(L) * sig_step - 1) / ystep
 
-    def shifted(p: Rvec, n: int) -> Rvec:
-        "`p` shifted by `n` bins, without wrapping around (unlike `np.roll()`)."
-        out = np.zeros_like(p)
-        if n >= 0:
-            out[n:] = p[:len(p) - n]
-        else:
-            out[:n] = p[-n:]
-        return out
+    # Each sample's shifts (bins), w/ zeros filtered out, as per MATLAB code.                      # (93A-39)
+    all_shifts = np.round(np.outer(np.asarray(h_samps_filt, dtype=float), sig_shifts)).astype(int)
+    max_shifts = np.abs(all_shifts).max(axis=1, initial=0)  # (0 for a sample w/ no nonzero shifts)
+    max_shift = np.cumsum(max_shifts)
+    if len(max_shift) and max_shift[-1] > zero_ix:  # The PMF's support would exceed the `y` grid.
+        bad = max_shift[np.argmax(max_shift > zero_ix)]
+        raise ValueError(
+            f"The samples' combined extent ({bad * ystep:.3g}) exceeds the y grid's ({zero_ix * ystep:.3g}).")
 
-    # PMF calculation proper - a more efficient form of convolution, given our apriori knowledge of the input.
-    rslt = delta
-    max_shift = 0
-    for hn in h_samps_filt:
-        # Filter out zeros, as per MATLAB code:
-        shifts = list(filter(lambda x: x != 0, np.round(sig_shifts * hn).astype(int)))  # (93A-39)
-        if shifts:
-            max_shift += max(abs(shift) for shift in shifts)
-            if max_shift > zero_ix:  # The PMF's support would exceed the `y` grid.
-                raise ValueError(
-                    f"The samples' combined extent ({max_shift * ystep:.3g}) exceeds the y grid's ({zero_ix * ystep:.3g}).")
-            _rslt: NDArray = sum(shifted(rslt, shift) for shift in shifts)  # type: ignore
-            rslt  = _rslt / _rslt.sum()  # Enforce a PMF.
+    # PMF calculation proper - a more efficient form of convolution, given our apriori knowledge of the input:
+    # the sum of the PMF's shifted copies, normalized. The PMF is nonzero only within `[lo, hi)`, which
+    # the check above keeps within the grid; so, each copy is added only over its image of that support.
+    # (Elsewhere, the sum's terms are exact zeros, which change nothing.) The normalizing sum is still taken
+    # over the whole grid, to keep NumPy's pairwise summation, and so the result, bit-identical.
+    # (The support only grows; so, zeroing each new one keeps both buffers zero outside it.)
+    rslt = np.zeros(npts)
+    rslt[zero_ix] = 1.0
+    _rslt: NDArray = np.zeros(npts)
+    lo, hi = zero_ix, zero_ix + 1
+    for row in all_shifts[max_shifts > 0].tolist():
+        shifts = [shift for shift in row if shift]
+        new_lo, new_hi = lo + min(min(shifts), 0), hi + max(max(shifts), 0)
+        _rslt[new_lo:new_hi] = 0.0
+        src = rslt[lo:hi]
+        for shift in shifts:
+            _rslt[lo + shift: hi + shift] += src
+        lo, hi = new_lo, new_hi
+        np.divide(_rslt[lo:hi], _rslt.sum(), out=rslt[lo:hi])  # Enforce a PMF.
 
     return y, rslt
 
