@@ -235,6 +235,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.nRxPreTaps = com_params.dw
         self.rx_ffe_phase_matrix = np.exp(np.outer(np.arange(self.nRxTaps), -1j * TWOPI * ui * f))
         self.null_rx_ffe: Rvec = array([0] * self.nRxPreTaps + [1.0] + [0] * (self.nRxTaps - self.nRxPreTaps - 1))
+        self._Hrx_null: Optional[Cvec] = None  # `Hffe_Rx(self.null_rx_ffe)`, once calculated.
         self.empty_array: Rvec = array([])
 
         # Misc.
@@ -764,6 +765,13 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             assert len(taps) == self.nRxTaps, ValueError(
                 f"If `taps` is given then its length ({len(taps)}) must equal `nRxTaps` ({self.nRxTaps})!")
 
+        # The null Rx FFE (a `dw` UI delay) is applied to every pulse response, for every EQ candidate;
+        # so, it's calculated once (read-only, for safety).
+        if taps is self.null_rx_ffe:
+            if self._Hrx_null is None:
+                self._Hrx_null = taps @ self.rx_ffe_phase_matrix
+                self._Hrx_null.flags.writeable = False
+            return self._Hrx_null
         return taps @ self.rx_ffe_phase_matrix
 
     def H(  # pylint: disable=too-many-arguments,too-many-locals,too-many-positional-arguments
@@ -826,7 +834,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         if nRxTaps:
             Hrx = self.Hffe_Rx(rx_taps)
             if passive_RxFFE:
-                Hrx /= max(np.abs(Hrx))
+                Hrx = Hrx / max(np.abs(Hrx))  # (Not in place: `Hffe_Rx()` may return a cached, read-only array.)
             rslt *= Hrx
 
         return rslt
