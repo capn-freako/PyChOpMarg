@@ -41,7 +41,7 @@ from pychopmarg.noise    import NoiseCalc
 from pychopmarg.optimize import NormMode, mmse, mmse_noise_vars, przf
 from pychopmarg.utility  import (
     import_s32p, sdd_21, sDieLadderSegment, sPkgTline, sCshunt, filt_pr_samps,
-    delta_pmf, mk_combs, calc_Hffe, calc_Hctle, calc_H21, calc_hJ, loc_curs, calc_vtf, interp_vtf)
+    delta_pmf, mk_combs, calc_Hffe, ffe_phase_matrix, calc_Hctle, calc_H21, calc_hJ, loc_curs, calc_vtf, interp_vtf)
 
 
 def _conv_pmfs(p1: Rvec, p2: Rvec) -> Rvec:
@@ -133,6 +133,8 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         self.gDC2: float = 0.0          #: Choices are in `com_params.g_DC2`.
         self.rx_ffe_phase_matrix: Cmat = array([])
         self._Htx_cache: dict[int, Cvec] = {}  # Tx FFE frequency responses, by `tx_taps_ix` (see `Htx()`).
+        self._tx_phase_matrix: Optional[Cmat] = None  # Tx FFE phase matrix, once calculated (see `Htx()`).
+        self._next_pr_cache: tuple[Optional[Cvec], dict[int, tuple[Cvec, Rvec]]] = (None, {})  # (`gen_pulse_resps()`)
 
         # Channel data
         self.chnls: list[COMChnl] = []
@@ -742,7 +744,11 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
             f"tx_taps_ix ({tx_taps_ix}) must be an integer in: [0, {self.num_tx_combs})!")
         # Cached per instance: `functools.cache` on a method would keep every `COM` alive, via its `self` keys.
         if tx_taps_ix not in self._Htx_cache:
-            self._Htx_cache[tx_taps_ix] = calc_Hffe(self.freqs, 1 / self.fb, array(self._tx_combs[tx_taps_ix]), 3)
+            taps = array(self._tx_combs[tx_taps_ix])
+            if self._tx_phase_matrix is None:  # (Same for every combination; cursor tap included.)
+                self._tx_phase_matrix = ffe_phase_matrix(self.freqs, 1 / self.fb, len(taps) + 1)
+            self._Htx_cache[tx_taps_ix] = calc_Hffe(
+                self.freqs, 1 / self.fb, taps, 3, phase_matrix=self._tx_phase_matrix)
         return self._Htx_cache[tx_taps_ix]
 
     def Hffe_Rx(self, taps: Optional[Rvec] = None) -> Cvec:
@@ -914,8 +920,18 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         if Hctf is None:
             Hctf = self.calc_Hctf(self.gDC, self.gDC2)
 
+        # A NEXT aggressor's pre-Rx-FFE pulse response is the same for every Tx EQ; so, it's cached for the
+        # last `Hctf` (by identity: `opt_eq()` passes the same array for each Tx EQ candidate), read-only.
+        cache_next = apply_eq and rx_taps is self.null_rx_ffe
+        if cache_next and self._next_pr_cache[0] is not Hctf:
+            self._next_pr_cache = (Hctf, {})
+        next_prs = self._next_pr_cache[1]
+
         pulse_resps = []
         for (_, ntype), H21 in chnls:
+            if cache_next and ntype == 'NEXT' and id(H21) in next_prs and next_prs[id(H21)][0] is H21:
+                pulse_resps.append(next_prs[id(H21)][1])
+                continue
             if apply_eq:
                 # NEXT aggressors have no Tx EQ. (Only they: `import_s32p()` interleaves NEXT and FEXT aggressors.)
                 ix = 0 if ntype == 'NEXT' else tx_ix
@@ -927,6 +943,9 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
                 pr *= self.com_params.A_v
             elif ntype == 'NEXT':
                 pr *= self.com_params.A_ne
+                if cache_next:
+                    pr.flags.writeable = False
+                    next_prs[id(H21)] = (H21, pr)
             else:
                 pr *= self.com_params.A_fe
 

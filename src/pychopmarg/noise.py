@@ -331,20 +331,23 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         """
 
         t              = self.t
-        ts_ix          = self.ts_ix
         Tb             = self.Tb
         nspui          = self.nspui
         vic_pulse_resp = self.vic_pulse_resp
+        phase          = self.ts_ix % nspui
 
-        # Central difference around each sample, `ts_ix % nspui + n * nspui`, as per (178A-23).
-        # (Zero padding keeps the first sample valid at sampling phase zero, and
-        # a whole number of UIs avoids +/-1 length variation, due to sampling phase.)
-        nUI = len(vic_pulse_resp) // nspui
-        ixs = ts_ix % nspui + nspui * arange(nUI)
-        _vic_pulse_resp = pad(vic_pulse_resp, 1)
-        hJ = (_vic_pulse_resp[ixs + 2] - _vic_pulse_resp[ixs]) / (2 * t[1])
+        def calc() -> Rvec:
+            # Central difference around each sample, `ts_ix % nspui + n * nspui`, as per (178A-23).
+            # (Zero padding keeps the first sample valid at sampling phase zero, and
+            # a whole number of UIs avoids +/-1 length variation, due to sampling phase.)
+            nUI = len(vic_pulse_resp) // nspui
+            ixs = phase + nspui * arange(nUI)
+            _vic_pulse_resp = pad(vic_pulse_resp, 1)
+            hJ = (_vic_pulse_resp[ixs + 2] - _vic_pulse_resp[ixs]) / (2 * t[1])
+            return abs(rfft(hJ) * Tb)**2
 
-        return self.varX * var_jit * abs(rfft(hJ) * Tb)**2 * Tb  # i.e. - / fB
+        # (Its shape depends on the sampling phase alone; so, it's calculated once per phase, for `Sjn` and `Sjn_rj`.)
+        return self.varX * var_jit * self._cached(f"hJ_psd_{phase}", calc) * Tb  # i.e. - / fB
 
     @property
     def Sjn(self) -> Rvec:

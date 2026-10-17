@@ -184,6 +184,16 @@ def test_fext_after_next_keeps_tx_eq():
     assert np.array_equal(in_order[0], next_first[1])  # FEXT
     assert np.array_equal(in_order[1], next_first[0])  # NEXT
 
+    # NEXT pulse responses are cached for the last CTLE (they're the same for every Tx EQ), read-only.
+    assert next_first[0] is in_order[1]
+    with pytest.raises(ValueError):
+        next_first[0][0] = 0
+    kwargs["Hctf"] = com.calc_Hctf(cp.g_DC[-1], cp.g_DC2[-1])
+    other_ctle = com.gen_pulse_resps(chnls=[next_], **kwargs)[0]
+    assert not np.allclose(other_ctle, next_first[0])
+    com._next_pr_cache = (None, {})  # pylint: disable=protected-access
+    assert np.array_equal(com.gen_pulse_resps(chnls=[next_], **kwargs)[0], other_ctle)
+
 
 def test_tx_noise_pulse_has_the_signals_phase(example2_com):
     """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.

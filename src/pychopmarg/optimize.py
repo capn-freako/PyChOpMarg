@@ -571,24 +571,26 @@ def mmse(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
                             w_min=w_min, w_max=w_max, norm_mode=norm_mode, varX=varX, Rlm=Rlm, L=L))
             else:
                 cols = list(range(_n_fix))
-            sol = _mmse_solve(H_all[:, cols], R_all[ix_(cols, cols)], d, Nb, dw,
+            # (`_mmse_solve()` needs only the cursor's and DFE taps' rows.)
+            sol = _mmse_solve(H_all[d: d + 1 + Nb][:, cols], R_all[ix_(cols, cols)], 0, Nb, dw,
                               b_min, b_max, w_min[cols], w_max[cols], norm_mode, varX, Rlm, L)
             fom = sol["fom"]
-            H = H_all[:, cols]
-            w_lim = sol["w_lim"]
-            b_lim = sol["b_lim"]
-            w_full = zeros(Nw)
-            w_full[cols] = w_lim
-
-            # Calculate residual ISI.
-            hISI = concatenate((array([sol["h0"] @ w_lim - 1]), sol["Hb"] @ w_lim, H[d + 1 + Nb:] @ w_lim))
-            varISI = varX * (hISI**2).sum()                                                         # (93A-31)
 
             if ts_window:
                 for side in sides:
                     if side not in side_best or fom > side_best[side][0]:
                         side_best[side] = (fom, ts_ofst)
             if fom > max_fom:
+                H = H_all[:, cols]
+                w_lim = sol["w_lim"]
+                b_lim = sol["b_lim"]
+                w_full = zeros(Nw)
+                w_full[cols] = w_lim
+
+                # Calculate residual ISI.
+                hISI = concatenate((array([sol["h0"] @ w_lim - 1]), sol["Hb"] @ w_lim, H[d + 1 + Nb:] @ w_lim))
+                varISI = varX * (hISI**2).sum()                                                     # (93A-31)
+
                 max_fom = fom
                 rslt["fom"] = fom
                 rslt["mse"] = sol["mse"]
