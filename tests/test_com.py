@@ -13,7 +13,7 @@ import skrf as rf
 from scipy.linalg import toeplitz
 
 import pychopmarg.optimize as optimize
-from pychopmarg.com import COM, default_n_procs
+from pychopmarg.com import COM, default_n_procs, run_com
 from pychopmarg.common import PROCS_ENV_VAR
 from pychopmarg.config.ieee_8023dj import IEEE_8023dj
 from pychopmarg.excel import get_com_params
@@ -614,3 +614,40 @@ def test_default_n_procs_ignores_bad_values(monkeypatch, val):
     monkeypatch.setenv(PROCS_ENV_VAR, val)
     with pytest.warns(UserWarning, match=PROCS_ENV_VAR):
         assert default_n_procs() == 1
+
+
+def test_run_com_parallel_over_channel_sets():
+    """With `n_procs` > 1, `run_com()` runs its channel sets in worker processes, one each at a time, each w/ a serial
+    EQ search (so, w/ the test sheet's local search, too), giving exactly the serial run's results, in order."""
+    cp = get_com_params(CFG)
+    assert cp.local_search  # (This works w/ a local search, unlike the EQ search's own parallelism.)
+    thru = [CHNL / "example2_THRU.s4p"]
+    chnl_sets = [("A", {"THRU": thru, "FEXT": [], "NEXT": []}),
+                 ("B", {"THRU": thru, "FEXT": [CHNL / "example2_FEXT1.s4p"], "NEXT": []}),
+                 ("C", {"THRU": thru, "FEXT": [], "NEXT": [CHNL / "example2_NEXT1.s4p"]})]
+    dbg_dict: dict = {}
+    runs = []
+    for n_procs in (1, 2):
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            runs.append(run_com(chnl_sets, cp, dbg_dict=dbg_dict, n_procs=n_procs))
+        assert out.getvalue().splitlines() == ["A : example2_THRU", "B : example2_THRU", "C : example2_THRU"]
+    serial, parallel = runs
+    assert list(parallel) == ["A", "B", "C"]
+    for grp in serial:
+        s, p = serial[grp]["example2_THRU"], parallel[grp]["example2_THRU"]
+        assert p.dbg_dict is dbg_dict
+        assert (p.gDC, p.gDC2, p.tx_ix, p.n_fom_evals) == (s.gDC, s.gDC2, s.tx_ix, s.n_fom_evals)
+        for rslts in ("com_rslts", "fom_rslts"):
+            sr, pr = getattr(s, rslts), getattr(p, rslts)
+            assert set(sr) == set(pr), (grp, rslts)
+            for k, v in sr.items():
+                assert np.array_equal(pr[k], v) if isinstance(v, (np.ndarray, list)) else pr[k] == v, (grp, rslts, k)
+
+
+def test_run_com_one_channel_set_parallelizes_its_eq_search(monkeypatch):
+    "With one channel set, `run_com()`'s `n_procs` goes to that set's EQ search (its own parallelism), in-process."
+    monkeypatch.setattr(COM, "__call__", lambda self, **_: 0.0)
+    with contextlib.redirect_stdout(io.StringIO()):
+        coms = run_com([("A", {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []})], get_com_params(CFG),
+                       n_procs=3)
+    assert coms["A"]["example2_THRU"].n_procs == 3

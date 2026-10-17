@@ -1600,7 +1600,25 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
     """
 
 
-def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def _run_one_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    com_params: COMParams, ch_set: ChnlSet, opt_mode: OptMode, norm_mode: NormMode, unit_amp: bool,
+    debug: bool, n_procs: int
+) -> COM:
+    "COM for one channel set (see ``run_com()``)."
+    theCOM = COM(com_params, ch_set, debug=debug)
+    theCOM.n_procs = n_procs
+    # Calling the object calculates the COM value, as well as many other intermediate results.
+    theCOM(opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp)
+    return theCOM
+
+
+def _run_one_com_task(task: tuple[COMParams, ChnlSet, OptMode, NormMode, bool, bool]) -> COM:
+    "``_run_one_com()``, in a worker process (see ``run_com()``), w/ a serial EQ search."
+    com_params, ch_set, opt_mode, norm_mode, unit_amp, debug = task
+    return _run_one_com(com_params, ch_set, opt_mode, norm_mode, unit_amp, debug, n_procs=1)
+
+
+def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     chnl_sets: list[tuple[ChnlGrpName, ChnlSet]],
     com_params: COMParams,
     opt_mode: OptMode = OptMode.MMSE,
@@ -1626,32 +1644,45 @@ def run_com(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         dbg_dict: Optional dictionary into which debugging values may be stashed,
             for later analysis.
             Default: None
-        n_procs: Number of processes for each EQ optimization; 0 for one per CPU. (See ``COM.opt_eq()``.)
+        n_procs: Number of processes; 0 for one per CPU. (See Note 1.)
             Default: None (``default_n_procs()``)
 
     Returns:
         2D dictionary indexed by channel group name, then by channel set name,
         containing the completed COM objects.
+
+    Notes:
+        1. With ``n_procs`` > 1 and several channel sets, they're run in that many worker processes, one channel set
+        each at a time, each w/ a serial EQ search (``COM.opt_eq()``): that works w/ a local search, too, and helps
+        however small each search is. With one channel set, its EQ search is parallel instead, when it can be
+        (see ``COM.opt_eq()``). Either way, the results are identical to a serial run's.
+        The workers are spawned; so, a script using this must guard its top level code,
+        w/ ``if __name__ == "__main__":``.
     """
 
+    n_procs = default_n_procs() if n_procs is None else n_procs
+    n_procs = n_procs or os.cpu_count() or 1
+    debug = dbg_dict is not None
+    labels = [(grp, ch_set['THRU'][0].stem) for grp, ch_set in chnl_sets]
+    if n_procs > 1 and len(chnl_sets) > 1:
+        tasks = [(com_params, ch_set, opt_mode, norm_mode, unit_amp, debug) for _, ch_set in chnl_sets]
+        with multiprocessing.get_context("spawn").Pool(min(n_procs, len(tasks))) as pool:
+            coms = pool.imap(_run_one_com_task, tasks)  # (In order; so, reported in order, as each finishes.)
+            results = []
+            for (grp, lbl), theCOM in zip(labels, coms):
+                print(f"{grp} : {lbl}")
+                results.append(theCOM)
+    else:
+        results = []
+        for (grp, lbl), (_, ch_set) in zip(labels, chnl_sets):
+            print(f"{grp} : {lbl}")
+            results.append(_run_one_com(com_params, ch_set, opt_mode, norm_mode, unit_amp, debug, n_procs))
+
     theCOMs: dict[ChnlGrpName, dict[ChnlSetName, COM]] = {}
-    for grp, ch_set in chnl_sets:
-        lbl = ch_set['THRU'][0].stem
-        print(f"{grp} : {lbl}")
-        if dbg_dict is not None:
-            theCOM = COM(com_params, ch_set, debug=True)
-        else:
-            theCOM = COM(com_params, ch_set)
-        if n_procs is not None:
-            theCOM.n_procs = n_procs
-
-        # Calling the object calculates the COM value, as well as many other intermediate results.
-        theCOM(opt_mode=opt_mode, norm_mode=norm_mode, unit_amp=unit_amp, dbg_dict=dbg_dict)
-
-        if grp in theCOMs:
-            theCOMs[grp].update({ch_set['THRU'][0].stem: theCOM})
-        else:
-            theCOMs.update({grp: {ch_set['THRU'][0].stem: theCOM}})
+    for (grp, lbl), theCOM in zip(labels, results):
+        if debug:
+            theCOM.dbg_dict = dbg_dict  # (The caller's own, rather than a worker's copy.)
+        theCOMs.setdefault(grp, {})[lbl] = theCOM
 
     return theCOMs
 
