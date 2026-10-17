@@ -252,10 +252,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         sPkgTx, sPkgNext, sPkgFext, sPkgRx = self._pkg_models(self.freqs)
         self._sPkgTx, self._sPkgNext, self._sPkgFext, self._sPkgRx = [sPkgTx], [sPkgNext], [sPkgFext], [sPkgRx]
         self.chnls = list(map(self.add_pkg, ntwks))
-        if debug:
-            self.chnls_noPkg = [(ntwks[0], calc_H21(f, ntwks[0][0], self.gamma1_Tx, self.gamma2_Rx))]
-            self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=[self.chnls_noPkg[0]], apply_eq=False)
-            self.pulse_resps_noeq  = self.gen_pulse_resps(chnls=[self.chnls[0]],       apply_eq=False)
+        self._calc_uneq_pulse_resps()
 
         # Generate all possible combinations of Tx FFE tap weights, in grid order (first tap varying slowest),
         # along with each one's per-tap grid indices (used by the local search in ``opt_eq()``).
@@ -350,6 +347,7 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
 
     #: Instance state that depends on the package test case (restored to the worst case's, by ``__call__()``).
     _case_state = ("com_params", "chnls", "_sPkgTx", "_sPkgNext", "_sPkgFext", "_sPkgRx", "_pkg_cache",
+                   "chnls_noPkg", "pulse_resps_nopkg", "pulse_resps_noeq",
                    "tx_ix", "gDC", "gDC2", "rx_taps", "dfe_taps", "cursor_ix", "com_rslts", "fom_rslts",
                    "theNoiseCalc", "mmse_rslt", "n_fom_evals")
 
@@ -423,6 +421,18 @@ class COM:  # pylint: disable=too-many-instance-attributes,too-many-public-metho
         sPkgTx, sPkgNext, sPkgFext, sPkgRx = self._pkg_models(self.freqs)
         self._sPkgTx, self._sPkgNext, self._sPkgFext, self._sPkgRx = [sPkgTx], [sPkgNext], [sPkgFext], [sPkgRx]
         self.chnls = list(map(self.add_pkg, self._ntwks))
+        self._calc_uneq_pulse_resps()
+
+    def _calc_uneq_pulse_resps(self) -> None:
+        """
+        The victim's unequalized pulse responses, w/ the Tx and Rx filters, for the current package test case:
+        ``pulse_resps_noeq`` (w/ its packages; MATLAB COM's ``uneq_pulse_response``, whose peak it reports as
+        ``peak_uneq_pulse_mV``), and ``pulse_resps_nopkg`` (w/o them, from ``chnls_noPkg``).
+        """
+        ntwk = self._ntwks[0]
+        self.chnls_noPkg = [(ntwk, calc_H21(self.freqs, ntwk[0], self.gamma1_Tx, self.gamma2_Rx))]
+        self.pulse_resps_nopkg = self.gen_pulse_resps(chnls=self.chnls_noPkg, apply_eq=False)
+        self.pulse_resps_noeq  = self.gen_pulse_resps(chnls=[self.chnls[0]], apply_eq=False)
 
     # Instance Properties
     def _pkg_models(self, freqs: Rvec) -> tuple[rf.Network, rf.Network, rf.Network, rf.Network]:

@@ -447,6 +447,16 @@ def test_quantization_noise_in_fom_and_com(example2_com, example2_com_quant):
     assert rslts["sigma_Q"] == pytest.approx(np.sqrt((com.rx_taps**2).sum() / 12) * rslts["quant_step"])
 
 
+def test_unequalized_pulse_responses_without_debug():
+    """The victim's unequalized pulse responses (w/ and w/o its packages) are calculated w/o ``debug`` too: they're
+    COM results (MATLAB COM reports the first's peak, ``peak_uneq_pulse_mV``). They once needed ``debug=True``."""
+    ch_set = {"THRU": [CHNL / "example2_THRU.s4p"], "FEXT": [], "NEXT": []}
+    plain, dbg = (COM(get_com_params(CFG), ch_set, debug=debug) for debug in (False, True))
+    for attr in ("pulse_resps_noeq", "pulse_resps_nopkg"):
+        assert len(getattr(plain, attr)) == 1 and max(getattr(plain, attr)[0]) > 0, attr
+        assert np.array_equal(getattr(plain, attr)[0], getattr(dbg, attr)[0]), attr
+
+
 def test_com_is_lowest_over_package_test_cases():
     """With several package test cases, COM is the lowest of them, as MATLAB COM, each case evaluated as if alone
     (its own packages and EQ), and the instance keeps the lowest case's results."""
@@ -468,6 +478,8 @@ def test_com_is_lowest_over_package_test_cases():
     assert com.com_params.zp_tx == cases[worst]["zp_tx"]
     assert com.fom_rslts["FOM"] == pytest.approx(
         alone.fom_rslts["FOM"]) if worst == 1 else com.fom_rslts["FOM"] != alone.fom_rslts["FOM"]
+    # The unequalized pulse response (w/ the packages) is the lowest case's too. (It was once the first case's.)
+    assert np.array_equal(com.pulse_resps_noeq[0], alone.pulse_resps_noeq[0]) == (worst == 1)
 
 
 def test_float_tap_cols_greedy_as_matlab():
