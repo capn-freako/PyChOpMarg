@@ -9,9 +9,11 @@ Copyright (c) 2024 David Banas; all rights reserved World wide.
 """
 
 # pylint: disable=redefined-builtin
-from typing                 import Optional
+from collections.abc        import Callable
+from typing                 import Any, Optional
 
-from numpy                  import abs as np_abs, arange, argmax, array, cumsum, diff, exp, full, ones, pad, sinc, sqrt, sum
+from numpy                  import (abs as np_abs, arange, argmax, array, cumsum, diff, exp, full, ndarray, ones, pad,
+                                    sinc, sqrt, sum)
 from numpy.fft              import irfft, rfft
 from scipy.signal           import fftconvolve
 
@@ -20,7 +22,19 @@ from pychopmarg.utility.probability import delta_pmf
 
 
 class NoiseCalc:  # pylint: disable=too-many-instance-attributes
-    "Noise calculator for COM"
+    """
+    Noise calculator for COM
+
+    Notes:
+        1. The noise terms independent of the sampling time (``ts_ix``) are calculated once and cached,
+        since the MMSE timing search (``optimize.mmse()``) calls ``Rn()`` at each of many sampling times.
+        Assigning any other independent variable clears that cache; cached arrays are read-only.
+    """
+
+    # Independent variables whose (re)assignment invalidates the cache. (All but `ts_ix`.)
+    _CACHE_INPUTS = frozenset({
+        "L", "Tb", "t", "vic_pulse_resp", "agg_pulse_resps", "f", "Ht", "H21", "Hr", "Hctf",
+        "eta0", "Av", "snr_tx", "Add", "sigma_Rj", "Nqb", "Pqc"})
 
     # Independent variables, set during instance initialization.
     L               = 4                          # Number of modulation levels.
@@ -161,6 +175,22 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
         self.nspui   = int(Tb // t[1])                  # Samples per unit interval
         self.varX    = (L**2 - 1) / (3 * (L - 1)**2)    # Tx output signal power
 
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name in self._CACHE_INPUTS:
+            self.__dict__.pop("_cache", None)
+        super().__setattr__(name, value)
+
+    def _cached(self, key: str, calc: Callable[[], Any]) -> Any:
+        "``calc()``, calculated once per ``key`` (until an input changes); arrays made read-only."
+        cache = self.__dict__.setdefault("_cache", {})
+        if key not in cache:
+            val = calc()
+            for arr in val if isinstance(val, tuple) else (val,):
+                if isinstance(arr, ndarray):
+                    arr.flags.writeable = False
+            cache[key] = val
+        return cache[key]
+
     def get_aliased_freq(self, f: float) -> float:
         """
         Return alias of f (Hz).
@@ -208,11 +238,12 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
             2. As in [1] and the MATLAB COM code, the two-sided density is ``eta0 / 2``
             (``eta0`` being one-sided), so that ``variance(Srn)`` is the Rx noise variance.
         """
-        rslt: Cvec  = self.eta0 / 2 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
-        # Rx noise is stationary: fold by sampling its autocorrelation at lags of whole UIs,
-        # independent of the cursor sampling phase (unlike `Stn()`/`Sjn`, which are symbol-synchronous).
-        _rslt = abs(rfft(irfft(rslt)[::self.nspui])) * 2 * self.f[-1] * self.Tb
-        return _rslt
+        def calc() -> Rvec:
+            rslt: Cvec  = self.eta0 / 2 * 1e-9 * abs(self.Hr * self.Hctf) ** 2
+            # Rx noise is stationary: fold by sampling its autocorrelation at lags of whole UIs,
+            # independent of the cursor sampling phase (unlike `Stn()`/`Sjn`, which are symbol-synchronous).
+            return abs(rfft(irfft(rslt)[::self.nspui])) * 2 * self.f[-1] * self.Tb
+        return self._cached("Srn", calc)
 
     def Sxn(self, agg_pulse_resp: Rvec) -> Rvec:
         """
@@ -264,16 +295,19 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
 
         f     = self.f
 
-        fom = False
-        if Hrx is None:
-            Hrx = ones(len(f))
-            fom = True
+        def calc(Hrx: Cvec) -> tuple[Cvec, Rvec, Rvec]:
+            Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx * self.Av  # "* Av": consistency w/ MATLAB code
+            htn  = irfft(Htn)                               # impulse response of complete signal path, but Tx FFE
+            # Pulse response (178A-22), formed as the signal's is (`COM.pulse_resp()`): w/ a zero-phase, 1 UI wide
+            # rectangle (`nspui * sinc(f * Tb)`), so that sampling at `ts_ix` takes it at the signal's phase.
+            return Htn, htn, irfft(self.nspui * sinc(f * self.Tb) * Htn)
 
-        Htn  = self.Ht * self.H21 * self.Hr * self.Hctf * Hrx * self.Av  # "* Av" is for consistency w/ MATLAB code.
-        htn  = irfft(Htn)                               # impulse response of complete signal path, except Tx FFE
-        # Pulse response (178A-22), formed as the signal's is (`COM.pulse_resp()`): w/ a zero-phase, 1 UI wide
-        # rectangle (`nspui * sinc(f * Tb)`), so that sampling at `ts_ix` takes it at the signal's phase.
-        htn_ave_xM = irfft(self.nspui * sinc(f * self.Tb) * Htn)
+        fom = Hrx is None
+        if fom:  # (Independent of the sampling time; so, calculated once.)
+            Htn, htn, htn_ave_xM = self._cached("Stn", lambda: calc(ones(len(f))))
+        else:
+            assert Hrx is not None  # (for type checkers)
+            Htn, htn, htn_ave_xM = calc(Hrx)
         _htn = self.baud_rate_sample(htn_ave_xM)        # decimated by `nspui`
         _Htn = rfft(_htn)
 
@@ -399,7 +433,8 @@ class NoiseCalc:  # pylint: disable=too-many-instance-attributes
             The step size is left in ``quant_step_size``.
         """
         Srn = self.Srn
-        Sxn = sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0)
+        # (Each aggressor is sampled at its own phase (`agg_phase()`), independent of `ts_ix`.)
+        Sxn = self._cached("Sxn", lambda: sum(array(list(map(self.Sxn, self.agg_pulse_resps))), axis=0))
         Stn = self.Stn()
         Sjn = self.Sjn
         if self.agg_pulse_resps:

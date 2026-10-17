@@ -154,6 +154,19 @@ def test_opt_eq_noise_vars_are_the_winners(example2_com):
         assert v == np.sqrt(com.fom_rslts['var' + k[6:]]), k
 
 
+def test_noise_calc_cache_follows_its_inputs(example2_com):
+    """`NoiseCalc` caches the noise terms independent of the sampling time; reassigning an input clears that cache,
+    and the cached arrays are read-only (so, can't be changed in place behind its back)."""
+    nc = copy.copy(example2_com.theNoiseCalc)
+    var_rn, var_tn = nc.variance(nc.Srn), nc.variance(nc.Stn())
+    with pytest.raises(ValueError):
+        nc.Srn[0] = 0
+    nc.Hctf = 2 * nc.Hctf
+    assert nc.variance(nc.Srn) == pytest.approx(4 * var_rn)
+    assert nc.variance(nc.Stn()) == pytest.approx(4 * var_tn)
+    assert example2_com.theNoiseCalc.variance(example2_com.theNoiseCalc.Srn) == var_rn  # (The original's intact.)
+
+
 def test_tx_noise_pulse_has_the_signals_phase(example2_com):
     """The Tx noise pulse response (178A-22) is formed as the signal's is, so it's sampled at the signal's phase.
     (It was once formed w/ a causal moving sum, which delayed it ~half a UI.) Here, w/ no Tx FFE, it's the victim's
