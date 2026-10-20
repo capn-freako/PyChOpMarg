@@ -108,7 +108,6 @@ ignore_missing_imports = true
 dev = [
     "jupyter>=1.1.1",
     "jupyterlab-execute-time>=3.3.0",
-    "m2r2>=0.3.4",
     "matlabengine>=25,<26",
     "matplotlib>=3.10.9",
     "mcp>=2.0.0",
